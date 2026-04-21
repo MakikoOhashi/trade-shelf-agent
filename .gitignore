@@ -2,3 +2,30 @@
 
 *.swp
 *.swo
+
+# macOS
+.DS_Store
+
+# Node / JS
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Next.js / Vercel
+.next/
+out/
+.vercel/
+
+# Build outputs
+dist/
+build/
+coverage/
+
+# Turborepo
+.turbo/
+
+# Editors / IDEs
+.vscode/
+.idea/

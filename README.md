@@ -88,3 +88,8 @@ docs/           # 要件、画面設計、シナリオ、アーキメモ
   - INV / SI / qty / status / supplier の抽出と正規化
 - **Issue 3: Incident scenario**
   - 期待値（例: SI 1000）と実績（例: INV 400）の差異検知と承認付き対応ログ
+
+## 技術
+- Frontend: TypeScript, React, Next.js
+- Backend: Node.js, TypeScript
+- Shared: shared package for types and domain logic
