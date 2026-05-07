@@ -97,7 +97,21 @@ function log(text) {
 
 function updateCounts() {
   const inboxCount = document.getElementById("inbox-count");
-  inboxCount.textContent = `${state.inboxItems.length} items`;
+  if (inboxCount) inboxCount.textContent = `${state.inboxItems.length} items`;
+
+  // Ingestion status card counts
+  const synced = state.inboxItems.length;
+  const pending = state.inboxItems.filter((i) => i && i.payload && i.payload.kind === "text").length;
+  const needsReview = state.inboxItems.filter((i) => i && i.payload && i.payload.needsReview).length;
+
+  const elSynced = document.getElementById("synced-count");
+  if (elSynced) elSynced.textContent = String(synced);
+  const elPending = document.getElementById("pending-count");
+  if (elPending) elPending.textContent = String(pending);
+  const elNeeds = document.getElementById("needs-review-count");
+  if (elNeeds) elNeeds.textContent = String(needsReview);
+  const elLast = document.getElementById("last-synced");
+  if (elLast) elLast.textContent = state.lastSynced ? formatLocalTime(state.lastSynced) : "-";
 
   for (const shelfName of shelves) {
     const el = document.querySelector(`.shelf[data-shelf="${shelfName}"] [data-count]`);
@@ -162,6 +176,8 @@ function addItem(payload) {
   const createdAt = nowIso();
   const id = shortId();
   state.inboxItems.push({ id, createdAt, payload });
+  // record last synced time for ingestion status
+  state.lastSynced = createdAt;
 
   const title = guessTitle(payload);
   updateCounts();
@@ -221,134 +237,260 @@ function renderTradeCaseDetail(tradeCase) {
         .join("")
     : "<li class=\"muted\">(none)</li>";
 
-  const incidentsHtml = incidents.length
-    ? incidents
-        .map(
-          (i) =>
-            `<li><span class="pill pill--incident">${escapeHtml(i.severity)}</span> <span class="pill">${escapeHtml(
-              i.type,
-            )}</span> <span class="muted">conf:${typeof i.confidence === "number" ? i.confidence.toFixed(2) : "-"}</span><div class="muted">${escapeHtml(
-              i.summary,
-            )}</div></li>`,
-        )
+  const products = Array.isArray(tradeCase.products) ? tradeCase.products : [];
+  const productsHtml = products.length
+    ? products
+        .map((p) => {
+          const label = [p.sku, p.name, p.id].filter(Boolean).join(" / ");
+          const qty = [
+            typeof p.quantityOrdered === "number" ? `ordered:${p.quantityOrdered}` : null,
+            typeof p.quantityInstructed === "number" ? `SI:${p.quantityInstructed}` : null,
+            typeof p.quantityInvoiced === "number" ? `INV:${p.quantityInvoiced}` : null,
+          ]
+            .filter(Boolean)
+            .join(" / ");
+          return `<li>${escapeHtml(label)} <span class="muted">(${escapeHtml(qty || "-")})</span></li>`;
+        })
         .join("")
     : "<li class=\"muted\">(none)</li>";
 
-  const impacts = incidents
-    .map((i) => ({ incident: i, impact: analyzeImpact(tradeCase, i) }))
-    .filter((x) => x && x.impact);
+  const impactsByIncidentId = new Map();
+  for (const incident of incidents) {
+    const impact = analyzeImpact(tradeCase, incident);
+    if (impact) impactsByIncidentId.set(incident.id, impact);
+  }
 
-  const impactsHtml = impacts.length
-    ? impacts
-        .map(({ incident, impact }) => {
-          const productsHtml = Array.isArray(impact.affectedProducts)
-            ? impact.affectedProducts
-                .map((p) => {
-                  const label = [p.sku, p.name, p.productId].filter(Boolean).join(" / ");
-                  return `<li>${escapeHtml(label)} <span class="muted">(SI:${escapeHtml(
-                    String(p.siQty ?? "-"),
-                  )} / INV:${escapeHtml(String(p.invoiceQty ?? "-"))} / shortage:${escapeHtml(String(p.shortageQty ?? "-"))})</span></li>`;
-                })
-                .join("")
-            : "<li class=\"muted\">(none)</li>";
+  function statusClass(approvalStatus, status) {
+    const s = approvalStatus || status || "";
+    if (s === "approved") return "status-approved";
+    if (s === "rejected") return "status-rejected";
+    if (s === "executed" || s === "done") return "status-executed";
+    if (s === "pendingApproval") return "status-pending";
+    return "status-pending";
+  }
 
-          const optionsHtml = Array.isArray(impact.decisionOptions)
-            ? impact.decisionOptions
-                .map((o) => {
-                  const pros = Array.isArray(o.pros) && o.pros.length ? `<div class="muted">pros: ${escapeHtml(o.pros.join(" / "))}</div>` : "";
-                  const cons = Array.isArray(o.cons) && o.cons.length ? `<div class="muted">cons: ${escapeHtml(o.cons.join(" / "))}</div>` : "";
-                  const req =
-                    Array.isArray(o.requiredActions) && o.requiredActions.length
-                      ? `<div class="muted">required: ${escapeHtml(o.requiredActions.join(" / "))}</div>`
-                      : "";
-                  return `<li class="impact__option">
-                    <div class="impact__option-title">${escapeHtml(o.title)}</div>
-                    <div class="muted">${escapeHtml(o.summary)}</div>
-                    ${pros}${cons}${req}
-                  </li>`;
-                })
-                .join("")
-            : "<li class=\"muted\">(none)</li>";
+  function statusLabel(approvalStatus, status) {
+    const s = approvalStatus || status || "-";
+    if (s === "pendingApproval") return "pending";
+    if (s === "approved") return "approved";
+    if (s === "rejected") return "rejected";
+    if (s === "executed") return "executed";
+    if (s === "done") return "done";
+    return String(s);
+  }
 
-          return `<div class="impact">
-            <div class="impact__head">
-              <span class="pill pill--incident">${escapeHtml(incident.severity)}</span>
-              <span class="pill">${escapeHtml(incident.type)}</span>
-              <span class="pill">${escapeHtml(impact.deliveryRisk)}</span>
+  function scoreDecisionOption(recommendedDecision, option) {
+    const rec = String(recommendedDecision || "").toLowerCase();
+    const title = String(option && option.title ? option.title : "").toLowerCase();
+    const summary = String(option && option.summary ? option.summary : "").toLowerCase();
+    let score = 0;
+    if (title && rec.includes(title)) score += 3;
+    if (summary && rec.includes(summary.slice(0, 16))) score += 1;
+    if (title && /(推奨|recommended|link|紐付)/i.test(title) && /(推奨|recommended|link|紐付)/i.test(rec)) score += 1;
+    return score;
+  }
+
+  function renderDecisionOptions(impact) {
+    const options = Array.isArray(impact && impact.decisionOptions) ? impact.decisionOptions : [];
+    if (!options.length) return `<div class="muted">(none)</div>`;
+
+    const rec = impact && impact.recommendedDecision ? String(impact.recommendedDecision) : "";
+    const sorted = options
+      .map((o, idx) => ({ o, idx, score: scoreDecisionOption(rec, o) }))
+      .sort((a, b) => (b.score !== a.score ? b.score - a.score : a.idx - b.idx))
+      .map((x) => x.o);
+
+    return `<div class="decision-options">
+      ${sorted
+        .map((o) => {
+          const pros = Array.isArray(o.pros) ? o.pros : [];
+          const cons = Array.isArray(o.cons) ? o.cons : [];
+          const checks = Array.isArray(o.requiredActions) ? o.requiredActions : [];
+          return `<div class="decision-option">
+            <div class="decision-option-title">${escapeHtml(o.title)}</div>
+            <div class="decision-option-meta muted">${escapeHtml(o.summary)}</div>
+            <div class="decision-option-list">
+              <div class="decision-option-kv"><span class="muted">pros</span><ul class="mini-list">${pros.length ? pros.map((x) => `<li>${escapeHtml(x)}</li>`).join("") : `<li class="muted">(none)</li>`}</ul></div>
+              <div class="decision-option-kv"><span class="muted">cons</span><ul class="mini-list">${cons.length ? cons.map((x) => `<li>${escapeHtml(x)}</li>`).join("") : `<li class="muted">(none)</li>`}</ul></div>
+              <div class="decision-option-kv"><span class="muted">requiredChecks</span><ul class="mini-list">${checks.length ? checks.map((x) => `<li>${escapeHtml(x)}</li>`).join("") : `<li class="muted">(none)</li>`}</ul></div>
             </div>
-
-            <div class="impact__kv">
-              <div><span class="muted">shortageQty:</span> ${escapeHtml(String(impact.shortageQty))}</div>
-              <div><span class="muted">currentStock:</span> ${escapeHtml(String(impact.currentStock))}</div>
-              <div><span class="muted">allocatedQty:</span> ${escapeHtml(String(impact.allocatedQty))}</div>
-              <div><span class="muted">availableQty:</span> ${escapeHtml(String(impact.availableQty))}</div>
-              <div><span class="muted">nextShipment:</span> ${escapeHtml(String(impact.nextShipmentQty))} @ ${escapeHtml(
-            impact.nextShipmentEta || "-",
-          )}</div>
-              <div><span class="muted">canCoverByNextShipment:</span> ${escapeHtml(String(impact.canCoverByNextShipment))}</div>
-            </div>
-
-            <div class="impact__block"><span class="muted">affectedProducts</span><ul class="list">${productsHtml}</ul></div>
-            <div class="impact__block"><span class="muted">customerImpact</span><div>${escapeHtml(impact.customerImpact)}</div></div>
-            <div class="impact__block"><span class="muted">recommendedDecision</span><div class="impact__recommend">${escapeHtml(
-              impact.recommendedDecision,
-            )}</div></div>
-
-            <div class="impact__block"><span class="muted">decisionOptions</span><ul class="list impact__options">${optionsHtml}</ul></div>
           </div>`;
         })
-        .join("")
-    : "<div class=\"muted\">(none)</div>";
+        .join("")}
+    </div>`;
+  }
 
-  const actionsHtml = nextActions.length
-    ? nextActions
+  function renderImpactBlock(impact) {
+    if (!impact) return `<div class="muted">(none)</div>`;
+
+    const affected = Array.isArray(impact.affectedProducts) ? impact.affectedProducts : [];
+    const affectedHtml = affected.length
+      ? affected
+          .map((p) => {
+            const label = [p.sku, p.name, p.productId].filter(Boolean).join(" / ");
+            return `<li>${escapeHtml(label)} <span class="muted">(SI:${escapeHtml(
+              String(p.siQty ?? "-"),
+            )} / INV:${escapeHtml(String(p.invoiceQty ?? "-"))} / shortage:${escapeHtml(String(p.shortageQty ?? "-"))})</span></li>`;
+          })
+          .join("")
+      : "<li class=\"muted\">(none)</li>";
+
+    return `<div class="impact">
+      <div class="impact__kv">
+        <div><span class="muted">deliveryRisk:</span> ${escapeHtml(impact.deliveryRisk || "-")}</div>
+        <div><span class="muted">shortageQty:</span> ${escapeHtml(String(impact.shortageQty))}</div>
+        <div><span class="muted">nextShipment:</span> ${escapeHtml(String(impact.nextShipmentQty))} @ ${escapeHtml(impact.nextShipmentEta || "-")}</div>
+        <div><span class="muted">canCoverByNextShipment:</span> ${escapeHtml(String(impact.canCoverByNextShipment))}</div>
+      </div>
+      <div class="impact__block"><span class="muted">affectedProducts</span><ul class="list">${affectedHtml}</ul></div>
+      <div class="impact__block"><span class="muted">customerImpact</span><div>${escapeHtml(impact.customerImpact || "-")}</div></div>
+      <div class="impact__block"><span class="muted">recommendedDecision</span><div class="impact__recommend">${escapeHtml(
+        impact.recommendedDecision || "-",
+      )}</div></div>
+      <div class="impact__block"><span class="muted">decisionOptions</span>${renderDecisionOptions(impact)}</div>
+    </div>`;
+  }
+
+  function renderProposals(proposals) {
+    if (!Array.isArray(proposals) || proposals.length === 0) return `<div class="muted">(none)</div>`;
+
+    return `<ul class="list proposals">
+      ${proposals
         .map((a) => {
+          const cls = statusClass(a.approvalStatus, a.status);
+          const label = statusLabel(a.approvalStatus, a.status);
           const approveBtn =
-            a.approvalStatus !== "approved"
+            a.approvalStatus === "pendingApproval"
               ? `<button class="btn btn--small" type="button" data-approve-proposal="${escapeHtml(a.id)}">承認</button>`
-              : `<span class="pill pill--ok">approved</span>`;
+              : `<span class="muted">承認済み</span>`;
           return `<li class="proposal">
             <div class="proposal__row">
               <div class="proposal__title">${escapeHtml(a.title)}</div>
               <div class="proposal__meta">
                 <span class="pill">${escapeHtml(a.type)}</span>
                 <span class="pill">${escapeHtml(a.priority)}</span>
-                <span class="pill">${escapeHtml(a.approvalStatus || "-")}</span>
+                <span class="status-badge ${cls}">${escapeHtml(label)}</span>
                 ${approveBtn}
               </div>
             </div>
             <div class="muted">${escapeHtml(a.description)}</div>
           </li>`;
         })
+        .join("")}
+    </ul>`;
+  }
+
+  const incidentAccordionHtml = incidents.length
+    ? `<div class="accordion" data-accordion-root>
+        ${incidents
+          .map((incident) => {
+            const impact = impactsByIncidentId.get(incident.id) || null;
+            const relatedProposals = proposeActions(tradeCase, [incident]).map((p) => {
+              const approvalStatus = state.proposalApprovalStatusById[p.id] || p.approvalStatus || "pendingApproval";
+              const status = approvalStatus === "approved" ? "approved" : p.status;
+              return { ...p, approvalStatus, status };
+            });
+            const isOpen = incident.severity === "high" || incident.severity === "critical";
+            const confidence = typeof incident.confidence === "number" ? incident.confidence.toFixed(2) : "-";
+            const detailsHtml =
+              incident.details && typeof incident.details === "object"
+                ? `<ul class="mini-list">${Object.entries(incident.details)
+                    .map(([k, v]) => `<li><span class="muted">${escapeHtml(k)}:</span> ${escapeHtml(String(v))}</li>`)
+                    .join("")}</ul>`
+                : `<div class="muted">(none)</div>`;
+
+            return `<div class="accordion__item ${isOpen ? "is-open" : ""}">
+              <button class="accordion__trigger" type="button" data-accordion-trigger aria-expanded="${isOpen ? "true" : "false"}">
+                <span class="pill pill--incident">${escapeHtml(incident.severity)}</span>
+                <span class="pill">${escapeHtml(incident.type)}</span>
+                <span class="accordion__meta muted">conf:${escapeHtml(confidence)}</span>
+                <span class="accordion__summary">${escapeHtml(incident.summary)}</span>
+              </button>
+              <div class="accordion__panel" ${isOpen ? "" : "hidden"}>
+                <div class="detail-subhead">Incident Details</div>
+                <div class="detail-block">${detailsHtml}</div>
+                <div class="detail-subhead">Impact Analysis</div>
+                <div class="detail-block">${renderImpactBlock(impact)}</div>
+                <div class="detail-subhead">Action Proposals</div>
+                <div class="detail-block">${renderProposals(relatedProposals)}</div>
+              </div>
+            </div>`;
+          })
+          .join("")}
+      </div>`
+    : `<div class="muted">(none)</div>`;
+
+  const affectedProductsAggregate = [];
+  for (const impact of impactsByIncidentId.values()) {
+    const list = Array.isArray(impact.affectedProducts) ? impact.affectedProducts : [];
+    for (const p of list) affectedProductsAggregate.push(p);
+  }
+  const affectedProductsHtml = affectedProductsAggregate.length
+    ? affectedProductsAggregate
+        .map((p) => {
+          const label = [p.sku, p.name, p.productId].filter(Boolean).join(" / ");
+          return `<li>${escapeHtml(label)} <span class="muted">(shortage:${escapeHtml(String(p.shortageQty ?? "-"))})</span></li>`;
+        })
         .join("")
     : "<li class=\"muted\">(none)</li>";
+
+  const nextShipmentCandidates = Array.from(impactsByIncidentId.values())
+    .map((impact) => ({
+      qty: typeof impact.nextShipmentQty === "number" ? impact.nextShipmentQty : 0,
+      eta: impact.nextShipmentEta || "",
+    }))
+    .filter((x) => x.qty > 0 && x.eta);
+  const nextShipment = nextShipmentCandidates.length
+    ? nextShipmentCandidates.slice().sort((a, b) => String(a.eta).localeCompare(String(b.eta)))[0]
+    : null;
+  const nextShipmentHtml = nextShipment
+    ? `<div class="kv"><span class="muted">qty</span> ${escapeHtml(String(nextShipment.qty))} <span class="muted">eta</span> ${escapeHtml(
+        String(nextShipment.eta),
+      )}</div>`
+    : `<div class="muted">(none)</div>`;
 
   openModal({
     title: `案件詳細: ${tradeCase.id}`,
     bodyHtml: `
       <div class="detail">
-        <div class="detail__meta">
-          <div><span class="muted">title:</span> ${escapeHtml(tradeCase.title)}</div>
-          <div><span class="muted">supplier:</span> ${escapeHtml(supplierName)}</div>
-          <div><span class="muted">tradeType:</span> ${escapeHtml(tradeCase.tradeType)}</div>
-          <div><span class="muted">shipmentState:</span> ${escapeHtml(tradeCase.shipmentState)}</div>
-          <div><span class="muted">updatedAt:</span> ${escapeHtml(updated)}</div>
-        </div>
+        <section class="detail-section">
+          <h3 class="detail-section__title">Source Data / 元データ</h3>
+          <div class="detail__meta">
+            <div><span class="muted">case id:</span> ${escapeHtml(tradeCase.id)}</div>
+            <div><span class="muted">title:</span> ${escapeHtml(tradeCase.title)}</div>
+            <div><span class="muted">supplier:</span> ${escapeHtml(supplierName)}</div>
+            <div><span class="muted">tradeType:</span> ${escapeHtml(tradeCase.tradeType)}</div>
+            <div><span class="muted">shipmentState:</span> ${escapeHtml(tradeCase.shipmentState)}</div>
+            <div><span class="muted">updatedAt:</span> ${escapeHtml(updated)}</div>
+          </div>
 
-        <h3 class="detail__head">Detected Incidents</h3>
-        <ul class="list">${incidentsHtml}</ul>
+          <div class="detail-subhead">Products</div>
+          <ul class="list">${productsHtml}</ul>
 
-        <h3 class="detail__head">Impact Analysis</h3>
-        ${impactsHtml}
+          <div class="detail-subhead">Documents</div>
+          <ul class="list">${docsHtml}</ul>
 
-        <h3 class="detail__head">Action Proposals</h3>
-        <ul class="list">${actionsHtml}</ul>
+          <div class="detail-subhead">Affected Products (if any)</div>
+          <ul class="list">${affectedProductsHtml}</ul>
 
-        <h3 class="detail__head">Documents</h3>
-        <ul class="list">${docsHtml}</ul>
+          <div class="detail-subhead">Next Shipment (if any)</div>
+          ${nextShipmentHtml}
+        </section>
 
-        <h3 class="detail__head">Timeline</h3>
-        <ul class="list">${timelineHtml}</ul>
+        <section class="detail-section">
+          <h3 class="detail-section__title">Agent Analysis / AI分析</h3>
+          <div class="detail-subhead">Detected Incidents</div>
+          ${incidentAccordionHtml}
+        </section>
+
+        <section class="detail-section">
+          <h3 class="detail-section__title">Human Decision / 人間の判断</h3>
+          <div class="detail-subhead">Approval</div>
+          ${renderProposals(nextActions)}
+
+          <div class="detail-subhead">Timeline / Decision History</div>
+          <ul class="list">${timelineHtml}</ul>
+        </section>
       </div>
     `,
   });
@@ -426,6 +568,17 @@ function setupModal() {
     if (!target) return;
     if (target.matches("[data-close]")) closeModal();
 
+    const accordionTrigger = target.closest && target.closest("[data-accordion-trigger]");
+    if (accordionTrigger) {
+      const item = accordionTrigger.closest(".accordion__item");
+      if (!item) return;
+      const panel = item.querySelector(".accordion__panel");
+      const isOpen = item.classList.toggle("is-open");
+      accordionTrigger.setAttribute("aria-expanded", isOpen ? "true" : "false");
+      if (panel) panel.hidden = !isOpen;
+      return;
+    }
+
     if (target.matches("[data-approve-proposal]")) {
       const proposalId = target.getAttribute("data-approve-proposal");
       if (!proposalId) return;
@@ -439,6 +592,38 @@ function setupModal() {
 
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape") closeModal();
+  });
+}
+
+// Manual upload modal (separate from trade case detail modal)
+function setupManualModal() {
+  const manual = document.getElementById("manual-modal");
+  if (!manual) return;
+
+  const btn = document.getElementById("btn-manual-add");
+  if (btn) btn.addEventListener("click", () => {
+    manual.classList.add("is-open");
+    manual.setAttribute("aria-hidden", "false");
+    // render inbox items inside the modal
+    renderInbox();
+  });
+
+  manual.addEventListener("click", (e) => {
+    const target = e.target;
+    if (!target) return;
+    if (target.matches("[data-close]")) {
+      manual.classList.remove("is-open");
+      manual.setAttribute("aria-hidden", "true");
+    }
+  });
+
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      if (manual.classList.contains("is-open")) {
+        manual.classList.remove("is-open");
+        manual.setAttribute("aria-hidden", "true");
+      }
+    }
   });
 }
 
@@ -481,6 +666,7 @@ function main() {
   setupDropzone();
   setupTextAdd();
   setupModal();
+  setupManualModal();
   setupTopActions();
   seed();
   updateCounts();

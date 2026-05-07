@@ -24,40 +24,65 @@
     </header>
 
     <main class="layout">
-      <section class="pane pane--inbox" aria-label="Inbox">
+      <section class="pane pane--inbox pane--ingestion" aria-label="Ingestion">
         <div class="pane__header">
-          <h2 class="pane__title">Inbox（ぶち込み箱）</h2>
+          <h2 class="pane__title">Auto Ingestion</h2>
           <div class="pane__meta">
             <span id="inbox-count" class="badge">0 items</span>
           </div>
         </div>
 
-        <div id="dropzone" class="dropzone" tabindex="0" role="button" aria-label="Drag and drop files here">
-          <div class="dropzone__title">ドラッグ＆ドロップ</div>
-          <div class="dropzone__hint">ファイルでも、テキストでも、とにかく放り込む</div>
-          <input id="file-input" class="dropzone__file" type="file" multiple />
-          <button id="btn-pick" class="btn" type="button">ファイルを選ぶ</button>
-        </div>
-
-        <div class="inbox-compose">
-          <label class="label" for="text-input">テキスト投入（メール本文 / メモ / OCR など）</label>
-          <textarea
-            id="text-input"
-            class="textarea"
-            placeholder="例: SI 1000 / INV 400 の差異が発生。仕入先へ確認したい。"
-            rows="6"
-          ></textarea>
-          <div class="row">
-            <button id="btn-add-text" class="btn" type="button">追加</button>
-            <div class="muted">※ ここはただの箱。分類は右側で「棚っぽく」やります。</div>
+        <div class="ingestion-card" style="padding:14px;">
+          <div class="kv">
+            <div><strong>Synced</strong><div id="synced-count" class="muted">0</div></div>
+            <div><strong>Pending / Unstructured</strong><div id="pending-count" class="muted">0</div></div>
+            <div><strong>Needs review</strong><div id="needs-review-count" class="muted">0</div></div>
           </div>
-        </div>
-
-        <div class="inbox-list">
-          <div class="label">投入済み</div>
-          <div id="inbox-items" class="items"></div>
+          <div class="row" style="margin-top:12px;">
+            <div class="muted">通常はメール・ドライブ連携から自動で取り込みます。追加情報がある場合のみ手動で投入してください。</div>
+            <button id="btn-manual-add" class="btn btn--primary" type="button">+ 手動で追加</button>
+          </div>
+          <div class="muted" style="margin-top:8px">Last synced: <span id="last-synced">-</span></div>
         </div>
       </section>
+
+      <!-- Manual input modal for Inbox (manual upload / exception intake) -->
+      <div id="manual-modal" class="modal" aria-hidden="true">
+        <div class="modal__backdrop" data-close></div>
+        <div class="modal__dialog" role="dialog" aria-modal="true" aria-label="Manual Upload">
+          <div class="modal__title">Manual Upload / 手動投入</div>
+          <div id="manual-modal-body" class="modal__body">
+            <div id="dropzone" class="dropzone" tabindex="0" role="button" aria-label="Drag and drop files here">
+              <div class="dropzone__title">ドラッグ＆ドロップ</div>
+              <div class="dropzone__hint">ファイルでも、テキストでも、とにかく放り込む</div>
+              <input id="file-input" class="dropzone__file" type="file" multiple />
+              <button id="btn-pick" class="btn" type="button">ファイルを選ぶ</button>
+            </div>
+
+            <div class="inbox-compose">
+              <label class="label" for="text-input">テキスト投入（メール本文 / メモ / OCR など）</label>
+              <textarea
+                id="text-input"
+                class="textarea"
+                placeholder="例: SI 1000 / INV 400 の差異が発生。仕入先へ確認したい。"
+                rows="6"
+              ></textarea>
+              <div class="row">
+                <button id="btn-add-text" class="btn" type="button">追加</button>
+                <div class="muted">※ 手動投入は例外的な導線です。通常は自動取り込みを使用してください。</div>
+              </div>
+            </div>
+
+            <div class="inbox-list">
+              <div class="label">投入済み</div>
+              <div id="inbox-items" class="items"></div>
+            </div>
+          </div>
+          <div class="modal__actions">
+            <button id="btn-manual-close" class="btn btn--primary" type="button" data-close>閉じる</button>
+          </div>
+        </div>
+      </div>
 
       <section class="pane pane--shelf" aria-label="Shelves">
         <div class="pane__header">

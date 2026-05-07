@@ -80,6 +80,12 @@ body {
   min-height: 520px;
 }
 
+.pane--ingestion { min-height: auto; }
+.ingestion-card { padding: 12px; }
+.ingestion-card .kv { display: flex; gap: 12px; align-items: flex-start; }
+.ingestion-card .kv > div { min-width: 120px; }
+
+
 .pane__header {
   padding: 14px 14px 10px;
   border-bottom: 1px solid var(--border);
@@ -462,6 +468,42 @@ body {
   margin-bottom: 12px;
 }
 
+.detail-section {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.16);
+  padding: 10px;
+  margin-bottom: 12px;
+}
+
+.detail-section__title {
+  margin: 0 0 10px;
+  font-size: 13px;
+  font-weight: 900;
+  color: var(--text);
+}
+
+.detail-subhead {
+  margin: 12px 0 6px;
+  font-size: 12px;
+  font-weight: 850;
+  color: var(--text);
+}
+
+.detail-block {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  padding: 10px;
+  background: rgba(0, 0, 0, 0.2);
+}
+
+.kv {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
 .detail__head {
   margin: 12px 0 6px;
   font-size: 13px;
@@ -474,6 +516,118 @@ body {
   padding-left: 18px;
   display: grid;
   gap: 8px;
+}
+
+.mini-list {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 6px;
+}
+
+.accordion {
+  display: grid;
+  gap: 8px;
+}
+
+.accordion__item {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.18);
+  overflow: hidden;
+}
+
+.accordion__trigger {
+  width: 100%;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  padding: 10px;
+  display: grid;
+  gap: 6px;
+  cursor: pointer;
+}
+
+.accordion__trigger:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.accordion__meta {
+  font-size: 12px;
+}
+
+.accordion__summary {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.accordion__panel {
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  padding: 10px;
+  display: grid;
+  gap: 10px;
+}
+
+.decision-options {
+  display: grid;
+  gap: 10px;
+}
+
+.decision-option {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  padding: 10px;
+  background: rgba(0, 0, 0, 0.18);
+}
+
+.decision-option-title {
+  color: var(--text);
+  font-weight: 850;
+}
+
+.decision-option-meta {
+  margin-top: 4px;
+}
+
+.decision-option-list {
+  margin-top: 10px;
+  display: grid;
+  gap: 10px;
+}
+
+.decision-option-kv {
+  display: grid;
+  gap: 6px;
+}
+
+.status-badge {
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.status-pending {
+  border-color: rgba(251, 191, 36, 0.6);
+  background: rgba(251, 191, 36, 0.12);
+}
+
+.status-approved {
+  border-color: rgba(52, 211, 153, 0.75);
+  background: rgba(52, 211, 153, 0.14);
+}
+
+.status-rejected {
+  border-color: rgba(251, 113, 133, 0.75);
+  background: rgba(251, 113, 133, 0.14);
+}
+
+.status-executed {
+  border-color: rgba(52, 211, 153, 0.75);
+  background: rgba(52, 211, 153, 0.12);
 }
 
 .proposal {
