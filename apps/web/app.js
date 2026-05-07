@@ -1,9 +1,10 @@
+import { mockTradeCases } from "@trade-shelf/shared";
+
 const shelves = ["出荷待ち", "書類不足", "返信待ち", "通関中", "完了"];
 
 const state = {
   inboxItems: [],
-  shelfItems: [],
-  pendingProposal: null,
+  tradeCases: [],
 };
 
 function nowIso() {
@@ -32,6 +33,22 @@ function classifyToShelf(text) {
   if (/(customs|通関)/i.test(text)) return "通関中";
   if (/(si\b|shipping instruction|shipment|出荷)/i.test(text)) return "出荷待ち";
   if (/(inv\b|invoice)/i.test(text)) return "通関中";
+  return "出荷待ち";
+}
+
+function classifyTradeCaseToShelf(tradeCase) {
+  const incidents = Array.isArray(tradeCase.incidents) ? tradeCase.incidents : [];
+  const hasMissingDoc = incidents.some((i) => i && i.type === "missingDocument" && i.status !== "resolved");
+  if (hasMissingDoc) return "書類不足";
+
+  const hasNoResponse = incidents.some((i) => i && i.type === "supplierNoResponse" && i.status !== "resolved");
+  if (hasNoResponse) return "返信待ち";
+
+  const s = tradeCase.shipmentState;
+  if (s === "completed") return "完了";
+  if (s === "customsCleared" || s === "delivered") return "完了";
+  if (s === "inTransit" || s === "arrived" || s === "shipped") return "通関中";
+  if (s === "bookingRequested" || s === "notArranged" || s === "shippingPending") return "出荷待ち";
   return "出荷待ち";
 }
 
@@ -74,7 +91,7 @@ function updateCounts() {
   for (const shelfName of shelves) {
     const el = document.querySelector(`.shelf[data-shelf="${shelfName}"] [data-count]`);
     if (!el) continue;
-    const count = state.shelfItems.filter((i) => i.shelf === shelfName).length;
+    const count = state.tradeCases.filter((c) => classifyTradeCaseToShelf(c) === shelfName).length;
     el.textContent = String(count);
   }
 }
@@ -106,15 +123,25 @@ function renderShelves() {
     const body = document.querySelector(`.shelf[data-shelf="${shelfName}"] [data-body]`);
     if (!body) continue;
     body.innerHTML = "";
-    const items = state.shelfItems.filter((i) => i.shelf === shelfName).slice().reverse();
-    for (const item of items) {
+    const items = state.tradeCases.filter((c) => classifyTradeCaseToShelf(c) === shelfName).slice().reverse();
+    for (const tradeCase of items) {
       const card = document.createElement("div");
       card.className = "card";
-      card.dataset.id = item.id;
+      const incidentCount = Array.isArray(tradeCase.incidents) ? tradeCase.incidents.length : 0;
+      if (incidentCount > 0) card.classList.add("card--incident");
+      card.dataset.id = tradeCase.id;
       card.innerHTML = `<div class="card__title"></div><div class="card__body"></div>`;
-      card.querySelector(".card__title").textContent = item.title;
-      card.querySelector(".card__body").textContent = item.summary;
-      card.addEventListener("click", () => openProposal(item));
+      card.querySelector(".card__title").textContent = tradeCase.title;
+      const supplierName = tradeCase.supplier && tradeCase.supplier.name ? tradeCase.supplier.name : "-";
+      const updated = tradeCase.updatedAt ? formatLocalTime(tradeCase.updatedAt) : "-";
+      card.querySelector(".card__body").textContent = [
+        `supplier: ${supplierName}`,
+        `tradeType: ${tradeCase.tradeType}`,
+        `shipmentState: ${tradeCase.shipmentState}`,
+        `updatedAt: ${updated}`,
+        `incidents: ${incidentCount > 0 ? `あり(${incidentCount})` : "なし"}`,
+      ].join(" / ");
+      card.addEventListener("click", () => openTradeCaseDetail(tradeCase));
       body.appendChild(card);
     }
   }
@@ -126,28 +153,17 @@ function addItem(payload) {
   state.inboxItems.push({ id, createdAt, payload });
 
   const title = guessTitle(payload);
-  const shelf = classifyToShelf(payload.kind === "text" ? payload.text : payload.name);
-  const summary = summarize(payload);
-
-  state.shelfItems.push({
-    id,
-    createdAt,
-    shelf,
-    title,
-    summary,
-    payload,
-  });
-
   updateCounts();
   renderInbox();
-  renderShelves();
 
-  log(`投入: 「${title}」→ 棚「${shelf}」へ格納（ダミー分類）`);
+  log(`投入: 「${title}」→ Inbox に格納`);
 }
 
-function openModal(bodyText) {
+function openModal({ title, bodyText }) {
   const modal = document.getElementById("modal");
+  const modalTitle = modal.querySelector(".modal__title");
   const modalBody = document.getElementById("modal-body");
+  if (modalTitle) modalTitle.textContent = title || "案件詳細";
   modalBody.textContent = bodyText;
   modal.classList.add("is-open");
   modal.setAttribute("aria-hidden", "false");
@@ -157,39 +173,55 @@ function closeModal() {
   const modal = document.getElementById("modal");
   modal.classList.remove("is-open");
   modal.setAttribute("aria-hidden", "true");
-  state.pendingProposal = null;
 }
 
-function openProposal(item) {
-  const base = item.payload.kind === "text" ? item.payload.text : item.payload.name;
-  const proposal = proposeActionFromText(base);
-  state.pendingProposal = { itemId: item.id, proposal };
-  openModal(
-    [
-      `対象: ${item.title}`,
-      `棚: ${item.shelf}`,
-      "",
-      "提案（ダミー）:",
-      proposal,
-      "",
-      "※ 承認すると「実行したことにして」ログへ残します。",
-    ].join("\n")
-  );
-}
+function openTradeCaseDetail(tradeCase) {
+  const documents = Array.isArray(tradeCase.documents) ? tradeCase.documents : [];
+  const timeline = Array.isArray(tradeCase.timeline) ? tradeCase.timeline : [];
+  const incidents = Array.isArray(tradeCase.incidents) ? tradeCase.incidents : [];
+  const nextActions = Array.isArray(tradeCase.nextActions) ? tradeCase.nextActions : [];
 
-function proposeActionFromText(text) {
-  const t = String(text || "");
-  const hasMismatch = /(expected|期待|si)\s*1000/i.test(t) && /(inv|invoice|実績)\s*400/i.test(t);
-  if (hasMismatch) {
-    return [
-      "1) 仕入先へ確認（INV 数量が 400 の理由と、残数量の見込み）",
-      "2) 社内に影響（納期・通関）を共有し、出荷計画を更新",
-      "3) 追加 INV / 修正 INV の提出依頼",
-    ].join("\n");
-  }
-  if (/(不足|missing)/i.test(t)) return "必要書類のリストアップ → 仕入先へ依頼メール草案を作成";
-  if (/(reply|返信|re:)/i.test(t)) return "未返信相手にリマインド（丁寧/急ぎ の2パターン）";
-  return "状況要約 → 次アクション案を3つ提示（ダミー）";
+  const docLines = documents.length
+    ? documents.map((d) => `- [${d.type}] ${d.title} (${d.source}) ${d.receivedAt ? `received:${d.receivedAt}` : ""}`.trim())
+    : ["- (none)"];
+
+  const incidentLines = incidents.length
+    ? incidents.map((i) => `- [${i.severity}/${i.status}] ${i.type}: ${i.summary}`)
+    : ["- (none)"];
+
+  const timelineLines = timeline.length
+    ? timeline.map((e) => `- ${formatLocalTime(e.at)} ${e.type}: ${e.message}`)
+    : ["- (none)"];
+
+  const actionLines = nextActions.length
+    ? nextActions.map((a) => `- [${a.priority}/${a.status}] ${a.title}`)
+    : ["- (none)"];
+
+  const supplierName = tradeCase.supplier && tradeCase.supplier.name ? tradeCase.supplier.name : "-";
+  const updated = tradeCase.updatedAt ? formatLocalTime(tradeCase.updatedAt) : "-";
+
+  openModal({
+    title: `案件詳細: ${tradeCase.id}`,
+    bodyText: [
+      `title: ${tradeCase.title}`,
+      `supplier: ${supplierName}`,
+      `tradeType: ${tradeCase.tradeType}`,
+      `shipmentState: ${tradeCase.shipmentState}`,
+      `updatedAt: ${updated}`,
+      "",
+      "Documents:",
+      ...docLines,
+      "",
+      "Timeline:",
+      ...timelineLines,
+      "",
+      "Incidents:",
+      ...incidentLines,
+      "",
+      "NextActions:",
+      ...actionLines,
+    ].join("\n"),
+  });
 }
 
 function setupDropzone() {
@@ -253,20 +285,11 @@ function setupTextAdd() {
 
 function setupModal() {
   const modal = document.getElementById("modal");
-  const approve = document.getElementById("btn-approve");
 
   modal.addEventListener("click", (e) => {
     const target = e.target;
     if (!target) return;
     if (target.matches("[data-close]")) closeModal();
-  });
-
-  approve.addEventListener("click", () => {
-    if (!state.pendingProposal) return;
-    const { itemId, proposal } = state.pendingProposal;
-    const item = state.shelfItems.find((i) => i.id === itemId);
-    log(`承認: 「${item ? item.title : itemId}」提案を実行（ダミー）\n${proposal}`);
-    closeModal();
   });
 
   document.addEventListener("keydown", (e) => {
@@ -275,22 +298,15 @@ function setupModal() {
 }
 
 function seed() {
-  addItem({
-    kind: "text",
-    text: "件名: SI 1000 / INV 400 差異\n状況: 期待 1000 に対して INV 400。\n対応: 仕入先へ確認したい。",
-  });
-  addItem({
-    kind: "text",
-    text: "Re: 通関書類の確認依頼\n不足書類があるので提出お願いします（Packing List / COO）。",
-  });
-  addItem({ kind: "file", name: "INV_2026-04-21.pdf", type: "application/pdf", size: 193402 });
-  addItem({ kind: "file", name: "SI_Shanghai_2026-04-20.xlsx", type: "application/vnd.ms-excel", size: 55443 });
+  state.tradeCases = mockTradeCases.slice();
+  updateCounts();
+  renderShelves();
+  log(`サンプル: mockTradeCases ${state.tradeCases.length} 件を棚に表示`);
 }
 
 function clearAll() {
   state.inboxItems = [];
-  state.shelfItems = [];
-  state.pendingProposal = null;
+  state.tradeCases = [];
   document.getElementById("inbox-items").innerHTML = "";
   for (const shelfName of shelves) {
     const body = document.querySelector(`.shelf[data-shelf="${shelfName}"] [data-body]`);
@@ -317,6 +333,7 @@ function main() {
   setupTextAdd();
   setupModal();
   setupTopActions();
+  seed();
   updateCounts();
   log("起動: UI mock を開始");
 }

@@ -315,6 +315,15 @@ body {
   border-color: rgba(125, 211, 252, 0.55);
 }
 
+.card--incident {
+  border-color: rgba(248, 113, 113, 0.75);
+  box-shadow: 0 0 0 1px rgba(248, 113, 113, 0.2);
+}
+
+.card--incident:hover {
+  border-color: rgba(248, 113, 113, 0.95);
+}
+
 .card__title {
   font-weight: 800;
   font-size: 13px;
