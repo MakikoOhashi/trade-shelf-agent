@@ -209,3 +209,56 @@ AI提案を人間が承認する。
 
 ### POST /actions/propose
 仕入先・Forwarder・社内向けの対応案を生成する。
+
+### DeliveryRisk
+
+Trade Shelf Agent は、案件の納期遅延リスクを推定する。
+
+以下を総合して「間に合う可能性」を算出する。
+
+- 顧客希望納期
+- ETA
+- Shipment 状態
+- 通関平均日数
+- 倉庫搬入平均日数
+- 書類不足
+- Supplier の遅延傾向
+- Forwarder の応答速度
+- 過去の Incident 履歴
+- 分納傾向
+
+例:
+- deliveryConfidence: 0.91
+- deliveryRisk: medium
+- estimatedWarehouseArrival: 2026-05-28
+
+Customer Requested Date
+↓
+Current Shipment State
+↓
+ETA
+↓
+Customs Average
+↓
+Warehouse Arrival Estimate
+↓
+Supplier Reliability
+↓
+Document Completeness
+↓
+Historical Delay Patterns
+↓
+Delivery Risk Score
+
+* 船積
+* ETA
+* 通関
+* 倉庫着
+* Supplier返信速度
+* Forwarderの癖
+* 分納傾向
+* 過去遅延
+* 祝日
+* 書類不足
+の情報を全て統合し、
+「これ多分やばいな」を検出。常にすぐに見える位置におく。

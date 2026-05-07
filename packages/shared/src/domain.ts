@@ -52,13 +52,18 @@ export type IncidentType =
   | "duplicateCase"
   | "staleCase";
 
+export type IncidentSeverity = "low" | "medium" | "high" | "critical";
+
+export type IncidentConfidence = number; // 0.0 - 1.0
+
 export type Incident = {
   id: string;
   type: IncidentType;
-  severity: "low" | "medium" | "high";
+  severity: IncidentSeverity;
   status: "open" | "inProgress" | "resolved";
   summary: string;
   detectedAt: string;
+  confidence?: IncidentConfidence;
   relatedDocumentIds?: string[];
   details?: Record<string, string | number | boolean | null>;
 };
@@ -107,8 +112,13 @@ export type ActionProposal = {
     | "other";
   priority: "low" | "medium" | "high";
   status: "proposed" | "approved" | "done" | "dismissed";
+  approvalStatus?: ActionProposalStatus;
   title: string;
   description: string;
+  target?: "supplier" | "forwarder" | "customer" | "internal" | "unknown";
+  message?: string;
+  rationale?: string;
+  confidence?: IncidentConfidence;
   dueBy?: string;
   suggestedMessage?: string;
 };
@@ -167,4 +177,21 @@ export type HumanIntervention = {
   note: string;
   createdBy: "user";
   createdAt: string;
+};
+
+export type ActionProposalStatus =
+  | "draft"
+  | "pendingApproval"
+  | "approved"
+  | "rejected"
+  | "executed";
+
+export type IncidentLog = {
+  id: string;
+  caseId: string;
+  incidentId: string;
+  at: string;
+  message: string;
+  proposalId?: string;
+  interventionId?: string;
 };

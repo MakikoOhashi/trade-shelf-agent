@@ -1,10 +1,12 @@
-import { mockTradeCases } from "@trade-shelf/shared";
+import { detectIncidents, mockTradeCases, proposeActions } from "@trade-shelf/shared";
 
 const shelves = ["出荷待ち", "書類不足", "返信待ち", "通関中", "完了"];
 
 const state = {
   inboxItems: [],
   tradeCases: [],
+  proposalApprovalStatusById: {},
+  modalTradeCaseId: null,
 };
 
 function nowIso() {
@@ -23,6 +25,15 @@ function formatLocalTime(iso) {
 
 function shortId() {
   return Math.random().toString(16).slice(2, 10);
+}
+
+function escapeHtml(s) {
+  return String(s || "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
 }
 
 function classifyToShelf(text) {
@@ -159,12 +170,16 @@ function addItem(payload) {
   log(`投入: 「${title}」→ Inbox に格納`);
 }
 
-function openModal({ title, bodyText }) {
+function openModal({ title, bodyText, bodyHtml }) {
   const modal = document.getElementById("modal");
   const modalTitle = modal.querySelector(".modal__title");
   const modalBody = document.getElementById("modal-body");
   if (modalTitle) modalTitle.textContent = title || "案件詳細";
-  modalBody.textContent = bodyText;
+  if (typeof bodyHtml === "string") {
+    modalBody.innerHTML = bodyHtml;
+  } else {
+    modalBody.textContent = bodyText;
+  }
   modal.classList.add("is-open");
   modal.setAttribute("aria-hidden", "false");
 }
@@ -173,55 +188,106 @@ function closeModal() {
   const modal = document.getElementById("modal");
   modal.classList.remove("is-open");
   modal.setAttribute("aria-hidden", "true");
+  state.modalTradeCaseId = null;
 }
 
-function openTradeCaseDetail(tradeCase) {
+function renderTradeCaseDetail(tradeCase) {
   const documents = Array.isArray(tradeCase.documents) ? tradeCase.documents : [];
   const timeline = Array.isArray(tradeCase.timeline) ? tradeCase.timeline : [];
-  const incidents = Array.isArray(tradeCase.incidents) ? tradeCase.incidents : [];
-  const nextActions = Array.isArray(tradeCase.nextActions) ? tradeCase.nextActions : [];
-
-  const docLines = documents.length
-    ? documents.map((d) => `- [${d.type}] ${d.title} (${d.source}) ${d.receivedAt ? `received:${d.receivedAt}` : ""}`.trim())
-    : ["- (none)"];
-
-  const incidentLines = incidents.length
-    ? incidents.map((i) => `- [${i.severity}/${i.status}] ${i.type}: ${i.summary}`)
-    : ["- (none)"];
-
-  const timelineLines = timeline.length
-    ? timeline.map((e) => `- ${formatLocalTime(e.at)} ${e.type}: ${e.message}`)
-    : ["- (none)"];
-
-  const actionLines = nextActions.length
-    ? nextActions.map((a) => `- [${a.priority}/${a.status}] ${a.title}`)
-    : ["- (none)"];
+  const incidents = detectIncidents(tradeCase);
+  const nextActions = proposeActions(tradeCase, incidents).map((p) => {
+    const approvalStatus = state.proposalApprovalStatusById[p.id] || p.approvalStatus || "pendingApproval";
+    const status = approvalStatus === "approved" ? "approved" : p.status;
+    return { ...p, approvalStatus, status };
+  });
 
   const supplierName = tradeCase.supplier && tradeCase.supplier.name ? tradeCase.supplier.name : "-";
   const updated = tradeCase.updatedAt ? formatLocalTime(tradeCase.updatedAt) : "-";
 
+  const docsHtml = documents.length
+    ? documents
+        .map(
+          (d) =>
+            `<li><span class="pill pill--muted">${escapeHtml(d.type)}</span> ${escapeHtml(d.title)} <span class="muted">(${escapeHtml(
+              d.source,
+            )})</span> ${d.receivedAt ? `<span class="muted">received:${escapeHtml(d.receivedAt)}</span>` : ""}</li>`,
+        )
+        .join("")
+    : "<li class=\"muted\">(none)</li>";
+
+  const timelineHtml = timeline.length
+    ? timeline
+        .map((e) => `<li><span class="muted">${escapeHtml(formatLocalTime(e.at))}</span> ${escapeHtml(e.type)}: ${escapeHtml(e.message)}</li>`)
+        .join("")
+    : "<li class=\"muted\">(none)</li>";
+
+  const incidentsHtml = incidents.length
+    ? incidents
+        .map(
+          (i) =>
+            `<li><span class="pill pill--incident">${escapeHtml(i.severity)}</span> <span class="pill">${escapeHtml(
+              i.type,
+            )}</span> <span class="muted">conf:${typeof i.confidence === "number" ? i.confidence.toFixed(2) : "-"}</span><div class="muted">${escapeHtml(
+              i.summary,
+            )}</div></li>`,
+        )
+        .join("")
+    : "<li class=\"muted\">(none)</li>";
+
+  const actionsHtml = nextActions.length
+    ? nextActions
+        .map((a) => {
+          const approveBtn =
+            a.approvalStatus !== "approved"
+              ? `<button class="btn btn--small" type="button" data-approve-proposal="${escapeHtml(a.id)}">承認</button>`
+              : `<span class="pill pill--ok">approved</span>`;
+          return `<li class="proposal">
+            <div class="proposal__row">
+              <div class="proposal__title">${escapeHtml(a.title)}</div>
+              <div class="proposal__meta">
+                <span class="pill">${escapeHtml(a.type)}</span>
+                <span class="pill">${escapeHtml(a.priority)}</span>
+                <span class="pill">${escapeHtml(a.approvalStatus || "-")}</span>
+                ${approveBtn}
+              </div>
+            </div>
+            <div class="muted">${escapeHtml(a.description)}</div>
+          </li>`;
+        })
+        .join("")
+    : "<li class=\"muted\">(none)</li>";
+
   openModal({
     title: `案件詳細: ${tradeCase.id}`,
-    bodyText: [
-      `title: ${tradeCase.title}`,
-      `supplier: ${supplierName}`,
-      `tradeType: ${tradeCase.tradeType}`,
-      `shipmentState: ${tradeCase.shipmentState}`,
-      `updatedAt: ${updated}`,
-      "",
-      "Documents:",
-      ...docLines,
-      "",
-      "Timeline:",
-      ...timelineLines,
-      "",
-      "Incidents:",
-      ...incidentLines,
-      "",
-      "NextActions:",
-      ...actionLines,
-    ].join("\n"),
+    bodyHtml: `
+      <div class="detail">
+        <div class="detail__meta">
+          <div><span class="muted">title:</span> ${escapeHtml(tradeCase.title)}</div>
+          <div><span class="muted">supplier:</span> ${escapeHtml(supplierName)}</div>
+          <div><span class="muted">tradeType:</span> ${escapeHtml(tradeCase.tradeType)}</div>
+          <div><span class="muted">shipmentState:</span> ${escapeHtml(tradeCase.shipmentState)}</div>
+          <div><span class="muted">updatedAt:</span> ${escapeHtml(updated)}</div>
+        </div>
+
+        <h3 class="detail__head">Detected Incidents</h3>
+        <ul class="list">${incidentsHtml}</ul>
+
+        <h3 class="detail__head">Action Proposals</h3>
+        <ul class="list">${actionsHtml}</ul>
+
+        <h3 class="detail__head">Documents</h3>
+        <ul class="list">${docsHtml}</ul>
+
+        <h3 class="detail__head">Timeline</h3>
+        <ul class="list">${timelineHtml}</ul>
+      </div>
+    `,
   });
+}
+
+function openTradeCaseDetail(tradeCase) {
+  state.modalTradeCaseId = tradeCase.id;
+  renderTradeCaseDetail(tradeCase);
 }
 
 function setupDropzone() {
@@ -290,6 +356,16 @@ function setupModal() {
     const target = e.target;
     if (!target) return;
     if (target.matches("[data-close]")) closeModal();
+
+    if (target.matches("[data-approve-proposal]")) {
+      const proposalId = target.getAttribute("data-approve-proposal");
+      if (!proposalId) return;
+      state.proposalApprovalStatusById[proposalId] = "approved";
+
+      const tc = state.tradeCases.find((c) => c && c.id === state.modalTradeCaseId);
+      if (tc) renderTradeCaseDetail(tc);
+      log(`承認: proposal ${proposalId}`);
+    }
   });
 
   document.addEventListener("keydown", (e) => {
@@ -298,7 +374,11 @@ function setupModal() {
 }
 
 function seed() {
-  state.tradeCases = mockTradeCases.slice();
+  state.tradeCases = mockTradeCases.map((c) => {
+    const incidents = detectIncidents(c);
+    const proposals = proposeActions(c, incidents);
+    return { ...c, incidents, nextActions: proposals };
+  });
   updateCounts();
   renderShelves();
   log(`サンプル: mockTradeCases ${state.tradeCases.length} 件を棚に表示`);

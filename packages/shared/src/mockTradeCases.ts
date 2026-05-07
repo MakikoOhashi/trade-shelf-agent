@@ -155,6 +155,23 @@ export const mockTradeCases: TradeCase[] = [
     ],
     documents: [
       {
+        id: "DOC-0100-INV",
+        type: "Invoice",
+        title: "Commercial Invoice (2000 pcs)",
+        source: "supplier",
+        issuedAt: "2026-04-22T03:00:00.000Z",
+        receivedAt: "2026-04-22T04:00:00.000Z",
+        extracted: { invoiceQuantity: 2000 },
+      },
+      {
+        id: "DOC-0100-PL",
+        type: "PackingList",
+        title: "Packing List (2000 pcs)",
+        source: "supplier",
+        issuedAt: "2026-04-22T03:00:00.000Z",
+        receivedAt: "2026-04-22T04:00:00.000Z",
+      },
+      {
         id: "DOC-0101-BL",
         type: "BL",
         title: "B/L (Original) - BL#VN12345678",
@@ -185,6 +202,13 @@ export const mockTradeCases: TradeCase[] = [
       },
     ],
     timeline: [
+      {
+        id: "TL-0101-INVPL",
+        at: "2026-04-22T04:00:00.000Z",
+        type: "documentReceived",
+        message: "INV/PL 受領（書類完備）",
+        relatedDocumentId: "DOC-0100-INV",
+      },
       {
         id: "TL-0101",
         at: "2026-04-27T06:00:00.000Z",
