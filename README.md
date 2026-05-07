@@ -16,6 +16,24 @@
 - 商社の営業事務・貿易事務
 - SI / INV / PL / ETA / Forwarder mail / 商品紐付け / 状態遷移 / 差異検知
 
+
+## Domain Extension Strategy
+
+Trade Shelf Agent の中核は、輸入・三国間取引の業務状態を構造化する Trade Ops Layer である。
+
+初期デモでは、実務解像度を高めるために Textile Intelligence を第一弾ドメイン拡張として扱う。
+
+- mtr 管理
+- 反数管理
+- 数量許容差
+- 分納判断
+- 染め直し履歴
+- 不良履歴
+- 仕入先ごとの癖
+
+ただし、これらは Core ではなく Domain Module として扱う。  
+将来的には Shopify App / ERP / Outlook などから Core API を利用できる構造を維持する。
+
 ## Hackathon
 
 - 応募先: Microsoft Agent Hackathon 2026（Zenn）
@@ -262,3 +280,22 @@ Delivery Risk Score
 * 書類不足
 の情報を全て統合し、
 「これ多分やばいな」を検出。常にすぐに見える位置におく。
+
+## Textile Trade Intelligence
+
+Trade Shelf Agent は、将来的に繊維・生地取引特有の業務知識も扱う。
+
+例:
+- mtr / 反数管理
+- 数量許容差（±3%）
+- 分納判断
+- 染め直し履歴
+- 日本加工対応
+- 不良反履歴
+- Supplierごとの癖
+- ロット差・縮率
+- 工賃参考
+- 過去Incidentとの比較
+
+単なる書類管理ではなく、
+繊維商社業務の暗黙知を AI が扱える構造へ変換する。

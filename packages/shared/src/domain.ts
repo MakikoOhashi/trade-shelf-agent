@@ -68,6 +68,51 @@ export type Incident = {
   details?: Record<string, string | number | boolean | null>;
 };
 
+export type DeliveryRisk = "low" | "medium" | "high";
+
+export type ProductAllocation = {
+  productId: string;
+  sku?: string;
+  name?: string;
+  siQty?: number;
+  invoiceQty?: number;
+  shortageQty?: number;
+  currentStock?: number;
+  allocatedQty?: number;
+  availableQty?: number;
+};
+
+export type NextShipmentPlan = {
+  qty: number;
+  eta: string; // ISO date (YYYY-MM-DD) or ISO datetime
+  note?: string;
+};
+
+export type DecisionOption = {
+  id: string;
+  title: string;
+  summary: string;
+  pros?: string[];
+  cons?: string[];
+  requiredActions?: string[];
+};
+
+export type ImpactAnalysis = {
+  incidentId: string;
+  affectedProducts: ProductAllocation[];
+  shortageQty: number;
+  currentStock: number;
+  allocatedQty: number;
+  availableQty: number;
+  nextShipmentQty: number;
+  nextShipmentEta: string;
+  canCoverByNextShipment: boolean;
+  customerImpact: string;
+  deliveryRisk: DeliveryRisk;
+  recommendedDecision: string;
+  decisionOptions: DecisionOption[];
+};
+
 export type SupplierBehavior =
   | "frequentDelay"
   | "frequentPartialInvoice"

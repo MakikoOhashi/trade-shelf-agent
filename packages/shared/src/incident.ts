@@ -1,4 +1,4 @@
-import type { ActionProposal, Incident, TradeCase, TradeDocument } from "./domain";
+import type { ActionProposal, ImpactAnalysis, Incident, TradeCase, TradeDocument } from "./domain";
 
 function nowIso() {
   return new Date().toISOString();
@@ -162,6 +162,106 @@ export function proposeActions(tradeCase: TradeCase, incidents: Incident[]): Act
   return actions;
 }
 
+export function analyzeImpact(tradeCase: TradeCase, incident: Incident): ImpactAnalysis | null {
+  if (!tradeCase || !incident) return null;
+
+  if (incident.type !== "invoiceQuantityMismatch") return null;
+
+  const siQuantity = typeof incident.details?.siQuantity === "number" ? incident.details.siQuantity : tradeCase.products?.[0]?.quantityInstructed;
+  const invoiceQuantity =
+    typeof incident.details?.invoiceQuantity === "number" ? incident.details.invoiceQuantity : tradeCase.products?.[0]?.quantityInvoiced;
+
+  const product = tradeCase.products?.[0];
+  const affectedProducts = [
+    {
+      productId: product?.id || "unknown",
+      sku: product?.sku,
+      name: product?.name,
+      siQty: typeof siQuantity === "number" ? siQuantity : undefined,
+      invoiceQty: typeof invoiceQuantity === "number" ? invoiceQuantity : undefined,
+      shortageQty:
+        typeof siQuantity === "number" && typeof invoiceQuantity === "number" ? Math.max(0, siQuantity - invoiceQuantity) : undefined,
+    },
+  ];
+
+  // Case1 (TC-2026-0001): mock impact analysis with fixed numbers for the demo.
+  const isCase1 = tradeCase.id === "TC-2026-0001" || (siQuantity === 1000 && invoiceQuantity === 400);
+  if (isCase1) {
+    return {
+      incidentId: incident.id,
+      affectedProducts: [
+        {
+          ...affectedProducts[0],
+          currentStock: 200,
+          allocatedQty: 150,
+          availableQty: 50,
+          shortageQty: 600,
+        },
+      ],
+      shortageQty: 600,
+      currentStock: 200,
+      allocatedQty: 150,
+      availableQty: 50,
+      nextShipmentQty: 600,
+      nextShipmentEta: "2026-05-12",
+      canCoverByNextShipment: true,
+      customerImpact: "残数量(600pcs)が現状在庫では賄えない。次便(2026-05-12)でカバー可能だが、顧客納期の影響有無を確認する必要がある。",
+      deliveryRisk: "medium",
+      recommendedDecision: "分納として記録し、残600pcsを次便に紐付ける。顧客納期への影響を確認する。",
+      decisionOptions: [
+        {
+          id: "recordPartialAndLinkNextShipment",
+          title: "分納として記録し次便に紐付け",
+          summary: "不足600pcsを次便(600pcs, ETA 2026-05-12)へ割当て、顧客納期への影響を確認する。",
+          pros: ["見通しを即時に可視化できる", "次便で数量が揃う前提なら追加手配が不要"],
+          cons: ["顧客納期に影響する可能性がある", "次便遅延時に影響が顕在化する"],
+          requiredActions: ["仕入先へ分納/次便の確定を確認", "顧客納期影響の確認（必要なら連絡）"],
+        },
+        {
+          id: "requestAdditionalInvoice",
+          title: "追加INV/PLの発行を依頼",
+          summary: "残600pcsの追加INV/PL発行と出荷スケジュールを仕入先に確認する。",
+          pros: ["書類起点で数量の整合が取りやすい"],
+          cons: ["発行・送付待ちでタイムラグが出る可能性"],
+          requiredActions: ["追加INV/PL発行可否の確認", "発行予定日の確定"],
+        },
+        {
+          id: "escalateDeliveryRisk",
+          title: "納期リスクとして社内エスカレーション",
+          summary: "顧客納期がタイトな場合、優先対応や代替案（在庫融通等）の検討を開始する。",
+          pros: ["遅延前に社内合意形成ができる"],
+          cons: ["検討コストが増える可能性"],
+          requiredActions: ["顧客要求納期の再確認", "代替在庫/優先出荷の可否検討"],
+        },
+      ],
+    };
+  }
+
+  const shortageQty =
+    typeof siQuantity === "number" && typeof invoiceQuantity === "number" ? Math.max(0, siQuantity - invoiceQuantity) : 0;
+  return {
+    incidentId: incident.id,
+    affectedProducts,
+    shortageQty,
+    currentStock: 0,
+    allocatedQty: 0,
+    availableQty: 0,
+    nextShipmentQty: 0,
+    nextShipmentEta: "",
+    canCoverByNextShipment: false,
+    customerImpact: "数量差異を検知。在庫/次便情報が未連携のため、影響は未算出（mock）。",
+    deliveryRisk: "medium",
+    recommendedDecision: "分納/次便の見込みを確認し、顧客納期影響を評価する。",
+    decisionOptions: [
+      {
+        id: "confirmFacts",
+        title: "事実確認（数量・出荷予定）",
+        summary: "SI/INV差異の原因（分納・誤記・追加書類）を確認し、次便/納期へ反映する。",
+      },
+    ],
+  };
+}
+
 export function approveProposal(proposalId: string): ActionProposal {
   return {
     id: proposalId,
@@ -173,4 +273,3 @@ export function approveProposal(proposalId: string): ActionProposal {
     description: "Approved (mock)",
   };
 }
-

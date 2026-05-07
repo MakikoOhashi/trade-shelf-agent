@@ -1,4 +1,4 @@
-import { detectIncidents, mockTradeCases, proposeActions } from "@trade-shelf/shared";
+import { analyzeImpact, detectIncidents, mockTradeCases, proposeActions } from "@trade-shelf/shared";
 
 const shelves = ["出荷待ち", "書類不足", "返信待ち", "通関中", "完了"];
 
@@ -234,6 +234,72 @@ function renderTradeCaseDetail(tradeCase) {
         .join("")
     : "<li class=\"muted\">(none)</li>";
 
+  const impacts = incidents
+    .map((i) => ({ incident: i, impact: analyzeImpact(tradeCase, i) }))
+    .filter((x) => x && x.impact);
+
+  const impactsHtml = impacts.length
+    ? impacts
+        .map(({ incident, impact }) => {
+          const productsHtml = Array.isArray(impact.affectedProducts)
+            ? impact.affectedProducts
+                .map((p) => {
+                  const label = [p.sku, p.name, p.productId].filter(Boolean).join(" / ");
+                  return `<li>${escapeHtml(label)} <span class="muted">(SI:${escapeHtml(
+                    String(p.siQty ?? "-"),
+                  )} / INV:${escapeHtml(String(p.invoiceQty ?? "-"))} / shortage:${escapeHtml(String(p.shortageQty ?? "-"))})</span></li>`;
+                })
+                .join("")
+            : "<li class=\"muted\">(none)</li>";
+
+          const optionsHtml = Array.isArray(impact.decisionOptions)
+            ? impact.decisionOptions
+                .map((o) => {
+                  const pros = Array.isArray(o.pros) && o.pros.length ? `<div class="muted">pros: ${escapeHtml(o.pros.join(" / "))}</div>` : "";
+                  const cons = Array.isArray(o.cons) && o.cons.length ? `<div class="muted">cons: ${escapeHtml(o.cons.join(" / "))}</div>` : "";
+                  const req =
+                    Array.isArray(o.requiredActions) && o.requiredActions.length
+                      ? `<div class="muted">required: ${escapeHtml(o.requiredActions.join(" / "))}</div>`
+                      : "";
+                  return `<li class="impact__option">
+                    <div class="impact__option-title">${escapeHtml(o.title)}</div>
+                    <div class="muted">${escapeHtml(o.summary)}</div>
+                    ${pros}${cons}${req}
+                  </li>`;
+                })
+                .join("")
+            : "<li class=\"muted\">(none)</li>";
+
+          return `<div class="impact">
+            <div class="impact__head">
+              <span class="pill pill--incident">${escapeHtml(incident.severity)}</span>
+              <span class="pill">${escapeHtml(incident.type)}</span>
+              <span class="pill">${escapeHtml(impact.deliveryRisk)}</span>
+            </div>
+
+            <div class="impact__kv">
+              <div><span class="muted">shortageQty:</span> ${escapeHtml(String(impact.shortageQty))}</div>
+              <div><span class="muted">currentStock:</span> ${escapeHtml(String(impact.currentStock))}</div>
+              <div><span class="muted">allocatedQty:</span> ${escapeHtml(String(impact.allocatedQty))}</div>
+              <div><span class="muted">availableQty:</span> ${escapeHtml(String(impact.availableQty))}</div>
+              <div><span class="muted">nextShipment:</span> ${escapeHtml(String(impact.nextShipmentQty))} @ ${escapeHtml(
+            impact.nextShipmentEta || "-",
+          )}</div>
+              <div><span class="muted">canCoverByNextShipment:</span> ${escapeHtml(String(impact.canCoverByNextShipment))}</div>
+            </div>
+
+            <div class="impact__block"><span class="muted">affectedProducts</span><ul class="list">${productsHtml}</ul></div>
+            <div class="impact__block"><span class="muted">customerImpact</span><div>${escapeHtml(impact.customerImpact)}</div></div>
+            <div class="impact__block"><span class="muted">recommendedDecision</span><div class="impact__recommend">${escapeHtml(
+              impact.recommendedDecision,
+            )}</div></div>
+
+            <div class="impact__block"><span class="muted">decisionOptions</span><ul class="list impact__options">${optionsHtml}</ul></div>
+          </div>`;
+        })
+        .join("")
+    : "<div class=\"muted\">(none)</div>";
+
   const actionsHtml = nextActions.length
     ? nextActions
         .map((a) => {
@@ -271,6 +337,9 @@ function renderTradeCaseDetail(tradeCase) {
 
         <h3 class="detail__head">Detected Incidents</h3>
         <ul class="list">${incidentsHtml}</ul>
+
+        <h3 class="detail__head">Impact Analysis</h3>
+        ${impactsHtml}
 
         <h3 class="detail__head">Action Proposals</h3>
         <ul class="list">${actionsHtml}</ul>

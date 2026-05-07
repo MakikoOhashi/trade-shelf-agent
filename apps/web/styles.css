@@ -504,3 +504,54 @@ body {
   flex-wrap: wrap;
   justify-content: flex-end;
 }
+
+.impact {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  padding: 10px;
+  background: rgba(0, 0, 0, 0.2);
+  display: grid;
+  gap: 10px;
+}
+
+.impact__head {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.impact__kv {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.impact__block {
+  display: grid;
+  gap: 6px;
+}
+
+.impact__recommend {
+  color: var(--text);
+  font-weight: 750;
+}
+
+.impact__options {
+  padding-left: 18px;
+}
+
+.impact__option {
+  padding: 8px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.impact__option:last-child {
+  border-bottom: none;
+}
+
+.impact__option-title {
+  color: var(--text);
+  font-weight: 800;
+}
