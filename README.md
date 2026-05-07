@@ -124,6 +124,30 @@ docs/           # 要件、画面設計、シナリオ、アーキメモ
   - 期待値（例: SI 1000）と実績（例: INV 400）の差異検知と承認付き対応ログ
 
 
+## Human Intervention Points
+
+Trade Shelf Agent は、AIの検知結果をそのまま実行するのではなく、人間が業務判断を差し込める設計にする。
+
+人間の介入は「承認」だけではない。
+
+### 介入パターン
+
+- Approve: AIの対応案を承認する
+- Correct: AIの抽出・判断を修正する
+- Replace Document: 誤ったINV / PL / SIを差し替える
+- Mark as Partial Shipment: 分納として扱う
+- Link to Next Shipment: 次回Shipmentに紐付ける
+- Mark as No Issue: 問題なしとして記録する
+- Escalate: 社内・上長・営業へエスカレーションする
+- Request Confirmation: 仕入先 / Forwarder へ確認する
+- Hold: 保留にして監視継続する
+
+### 例
+
+- INVの数量差異をAIが検知したが、実際は仕入先のINV記載ミスだったため、正しいINVに差し替える。
+- SI 1000個に対してINV 400個のみだったが、残り600個は次回Shipmentに乗るため、分納として記録する。
+- ETA変更はあったが、納期影響がないため No Issue として処理する。
+
 ## Azure Architecture
 
 ### Azure Container Apps

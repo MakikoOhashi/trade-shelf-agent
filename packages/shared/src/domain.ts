@@ -148,3 +148,23 @@ export type TradeCase = {
   supplierBehaviorHints?: SupplierBehavior[];
   marginRiskHints?: MarginRisk[];
 };
+
+export type HumanInterventionType =
+  | "approve"
+  | "correct"
+  | "replaceDocument"
+  | "markAsPartialShipment"
+  | "linkToNextShipment"
+  | "markAsNoIssue"
+  | "escalate"
+  | "requestConfirmation"
+  | "hold";
+
+export type HumanIntervention = {
+  id: string;
+  type: HumanInterventionType;
+  incidentId: string;
+  note: string;
+  createdBy: "user";
+  createdAt: string;
+};
