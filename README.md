@@ -4,11 +4,31 @@
 
 > Drop messy emails and documents into an inbox. AI organizes them into operational shelves, detects incidents, and helps teams take action with approval workflows.
 
+## 目的
+
+このプロジェクトは単なる管理画面ではなく、人間の頭の中にある貿易業務の状態を構造化し、AI が理解・検知・提案・支援できる業務レイヤを作ることを目的とします。
+
+
+## 対象業務
+
+- 輸入業務
+- 三国間取引
+- 商社の営業事務・貿易事務
+- SI / INV / PL / ETA / Forwarder mail / 商品紐付け / 状態遷移 / 差異検知
+
 ## Hackathon
 
 - 応募先: Microsoft Agent Hackathon 2026（Zenn）
   - https://zenn.dev/hackathons/microsoft-agent-hackathon-2026
 - テーマ: 商社向け「輸入・三国間貿易の管理棚エージェント」
+
+## コア体験
+
+1. 左の「ぶち込み箱」にメール・書類・メモを投入
+2. AI が案件・書類・数量・日付・状態を抽出
+3. ユーザーが確認モーダルで承認
+4. 右の本棚 UI に案件が状態別に整理される
+5. 異常があれば AI が検知し、対応案を提示する
 
 ## UI イメージ（左 Inbox / 右 Shelf）
 
@@ -39,6 +59,17 @@
 - 乖離を検知 → 影響を要約 → 対応案（例: 仕入先へ確認メール案 / 追加 INV 依頼 / 社内エスカレーション）を提示
 - ユーザー承認後に実行し、対応ログ（何を・いつ・誰が承認したか）を保存
 
+## Agentic Workflow
+
+- 情報投入
+- 業務構造化
+- 案件紐付け
+- 状態再構成
+- 差異・不足検知
+- 対応案生成
+- Human-in-the-loop 承認
+- インシデントログ保存
+
 ## リポジトリ構成（想定）
 
 ```txt
@@ -52,7 +83,8 @@ docs/           # 要件、画面設計、シナリオ、アーキメモ
 
 ## 技術方針（たたき台）
 
-- フロントエンド: Next.js / TypeScript / Tailwind CSS
+- 構成: Monorepo
+- フロントエンド: Next.js / React / TypeScript / Tailwind CSS
 - バックエンド: Node.js / TypeScript（REST API または Route Handlers を想定）
 - 共有レイヤ: `packages/shared` で型とドメイン知識を共通化
 - AI/推論: LLM は adapter 経由で呼び出し（モデル差し替え可能）
@@ -64,6 +96,12 @@ docs/           # 要件、画面設計、シナリオ、アーキメモ
 
 - `apps/web` → Azure Container Apps
 - `apps/api` → Azure Container Apps
+
+## 将来構想
+
+最終的には Shopify App として、商品・在庫・入荷予定・貿易書類・仕入先対応をつなぐ業務レイヤへ発展させます。
+
+ただし初期 MVP では Shopify 連携は実装せず、まずは貿易業務の状態を AI が読める形に構造化することを優先します。
 
 ## MVP スコープ
 
@@ -88,8 +126,3 @@ docs/           # 要件、画面設計、シナリオ、アーキメモ
   - INV / SI / qty / status / supplier の抽出と正規化
 - **Issue 3: Incident scenario**
   - 期待値（例: SI 1000）と実績（例: INV 400）の差異検知と承認付き対応ログ
-
-## 技術
-- Frontend: TypeScript, React, Next.js
-- Backend: Node.js, TypeScript
-- Shared: shared package for types and domain logic
