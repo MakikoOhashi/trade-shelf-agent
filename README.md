@@ -122,3 +122,66 @@ docs/           # 要件、画面設計、シナリオ、アーキメモ
   - INV / SI / qty / status / supplier の抽出と正規化
 - **Issue 3: Incident scenario**
   - 期待値（例: SI 1000）と実績（例: INV 400）の差異検知と承認付き対応ログ
+
+
+## Azure Architecture
+
+### Azure Container Apps
+- `apps/web`
+  - 本棚UI
+  - ぶち込み箱
+  - 案件詳細
+  - 承認UI
+
+- `apps/api`
+  - ingestion
+  - trade structuring
+  - incident detection
+  - action proposal
+
+### Microsoft AI
+- Azure OpenAI / Microsoft Foundry
+- 業務テキストから TradeCase / Incident / ActionProposal を構造化
+- 対応案生成
+
+### Azure Cosmos DB
+- TradeCase
+- IncidentLog
+- SupplierBehavior
+- TimelineEvent
+- ActionProposal
+
+## API-first Design
+
+Trade Shelf Agent は UI に閉じたアプリではなく、
+AI や外部システムが利用可能な Trade Operations API として設計する。
+
+将来的には以下との接続を想定する。
+
+- Shopify App
+- Outlook / Gmail
+- ERP
+- Teams / Slack
+- 社内ワークフロー
+- AI Agents
+
+## Planned API
+
+### POST /ingest
+雑多なメール・書類・メモを投入し、
+TradeCase 候補に構造化する。
+
+### GET /cases
+本棚に並べる案件一覧を取得する。
+
+### GET /cases/:id
+案件詳細、書類、timeline、incident を取得する。
+
+### POST /cases/:id/approve
+AI提案を人間が承認する。
+
+### POST /incidents/detect
+数量差異・書類不足・ETA変更などを検知する。
+
+### POST /actions/propose
+仕入先・Forwarder・社内向けの対応案を生成する。
