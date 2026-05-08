@@ -86,7 +86,31 @@
 
       <section class="pane pane--shelf" aria-label="Shelves">
         <div class="pane__header">
-          <h2 class="pane__title">Shelf（状態別の棚）</h2>
+          <div class="pane__header-left">
+            <h2 id="shelf-title" class="pane__title">Shelf（案件別）</h2>
+            <div id="view-lens" class="view-lens" role="tablist" aria-label="View Lens">
+              <button class="view-lens__btn is-active" type="button" data-view-lens="case" role="tab" aria-selected="true">
+                <div class="view-lens__en">Case view</div>
+                <div class="view-lens__ja">案件別</div>
+              </button>
+              <button class="view-lens__btn" type="button" data-view-lens="si" role="tab" aria-selected="false">
+                <div class="view-lens__en">SI view</div>
+                <div class="view-lens__ja">SI別</div>
+              </button>
+              <button class="view-lens__btn" type="button" data-view-lens="invoice" role="tab" aria-selected="false">
+                <div class="view-lens__en">Invoice view</div>
+                <div class="view-lens__ja">INV別</div>
+              </button>
+              <button class="view-lens__btn" type="button" data-view-lens="supplier" role="tab" aria-selected="false">
+                <div class="view-lens__en">Supplier view</div>
+                <div class="view-lens__ja">仕入先別</div>
+              </button>
+              <button class="view-lens__btn" type="button" data-view-lens="incident" role="tab" aria-selected="false">
+                <div class="view-lens__en">Incident view</div>
+                <div class="view-lens__ja">インシデント別</div>
+              </button>
+            </div>
+          </div>
           <div class="pane__meta">
             <span class="muted">クリックで案件詳細（mockTradeCases）</span>
           </div>
@@ -140,14 +164,19 @@
       </section>
     </main>
 
-    <div id="modal" class="modal" aria-hidden="true">
+    <div id="modal" class="modal modal--tradecase" aria-hidden="true">
       <div class="modal__backdrop" data-close></div>
-      <div class="modal__dialog" role="dialog" aria-modal="true" aria-label="Approval">
-        <div class="modal__title">案件詳細</div>
-        <div id="modal-body" class="modal__body"></div>
-        <div class="modal__actions">
-          <button id="btn-close" class="btn btn--primary" type="button" data-close>閉じる</button>
+      <div class="modal__dialog" role="dialog" aria-modal="true" aria-label="Trade case detail">
+        <div class="modal__top">
+          <button id="btn-back" class="btn btn--ghost btn--back" type="button" data-close aria-label="Back to Shelf">
+            <span class="btn--back__arrow">←</span>
+            <span class="btn--back__ja">棚へ戻る</span>
+            <span class="btn--back__en">Back to Shelf</span>
+          </button>
+          <div class="modal__title">案件詳細</div>
+          <button id="btn-close" class="btn btn--ghost" type="button" data-close aria-label="Close">閉じる</button>
         </div>
+        <div id="modal-body" class="modal__body"></div>
       </div>
     </div>
 

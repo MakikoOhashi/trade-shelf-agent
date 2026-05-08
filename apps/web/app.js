@@ -7,6 +7,14 @@ const state = {
   tradeCases: [],
   proposalApprovalStatusById: {},
   modalTradeCaseId: null,
+  /**
+   * TradeCase は単一の固定ファイル単位ではなく、
+   * SI / Invoice / Supplier / Incident / Shipment など複数の View Lens から再構成される operations graph として扱う。
+   * UI はその graph をどの切り口で見るかを切り替える。
+   *
+   * @type {"case" | "si" | "invoice" | "supplier" | "incident"}
+   */
+  currentViewLens: "case",
 };
 
 function getTradeCaseById(id) {
@@ -87,6 +95,59 @@ function classifyTradeCaseToShelf(tradeCase) {
   if (s === "inTransit" || s === "arrived" || s === "shipped") return "通関中";
   if (s === "bookingRequested" || s === "notArranged" || s === "shippingPending") return "出荷待ち";
   return "出荷待ち";
+}
+
+function tradeTypeLabelJa(tradeType) {
+  const t = String(tradeType || "");
+  const map = {
+    import: "輸入",
+    export: "輸出",
+    domestic: "国内",
+  };
+  return map[t] || t || "-";
+}
+
+function shipmentStateLabelJa(shipmentState) {
+  const s = String(shipmentState || "");
+  const map = {
+    notArranged: "未手配",
+    bookingRequested: "ブッキング依頼中",
+    shippingPending: "出荷前確認中",
+    shipped: "出荷済み",
+    inTransit: "輸送中",
+    arrived: "到着",
+    customsCleared: "通関済み",
+    delivered: "納品済み",
+    completed: "完了",
+  };
+  return map[s] || s || "-";
+}
+
+function shelfTitleForViewLens(viewLens) {
+  const v = String(viewLens || "case");
+  const map = {
+    case: "Shelf（案件別）",
+    si: "Shelf（SI別）",
+    invoice: "Shelf（INV別）",
+    supplier: "Shelf（仕入先別）",
+    incident: "Shelf（インシデント別）",
+  };
+  return map[v] || map.case;
+}
+
+function renderShelfHeader() {
+  const titleEl = document.getElementById("shelf-title");
+  if (titleEl) titleEl.textContent = shelfTitleForViewLens(state.currentViewLens);
+
+  const root = document.getElementById("view-lens");
+  if (!root) return;
+  const btns = root.querySelectorAll("[data-view-lens]");
+  for (const btn of btns) {
+    const lens = btn.getAttribute("data-view-lens");
+    const isActive = lens === state.currentViewLens;
+    btn.classList.toggle("is-active", isActive);
+    btn.setAttribute("aria-selected", isActive ? "true" : "false");
+  }
 }
 
 function guessTitle(payload) {
@@ -185,13 +246,11 @@ function renderShelves() {
       card.querySelector(".card__title").textContent = tradeCase.title;
       const supplierName = tradeCase.supplier && tradeCase.supplier.name ? tradeCase.supplier.name : "-";
       const updated = tradeCase.updatedAt ? formatLocalTime(tradeCase.updatedAt) : "-";
-      card.querySelector(".card__body").textContent = [
-        `supplier: ${supplierName}`,
-        `tradeType: ${tradeCase.tradeType}`,
-        `shipmentState: ${tradeCase.shipmentState}`,
-        `updatedAt: ${updated}`,
-        `incidents: ${incidentCount > 0 ? `あり(${incidentCount})` : "なし"}`,
-      ].join(" / ");
+      const tradeTypeJa = tradeTypeLabelJa(tradeCase.tradeType);
+      const shipmentStateJa = shipmentStateLabelJa(tradeCase.shipmentState);
+      card.querySelector(".card__body").textContent = `${supplierName} ・ ${tradeTypeJa} ・ ${shipmentStateJa} ・ Updated ${updated} / incidents: ${
+        incidentCount > 0 ? `あり(${incidentCount})` : "なし"
+      }`;
       card.addEventListener("click", () => openTradeCaseDetail(tradeCase));
       body.appendChild(card);
     }
@@ -245,6 +304,40 @@ function renderTradeCaseDetail(tradeCase) {
 
   const supplierName = tradeCase.supplier && tradeCase.supplier.name ? tradeCase.supplier.name : "-";
   const updated = tradeCase.updatedAt ? formatLocalTime(tradeCase.updatedAt) : "-";
+  const tradeTypeJa = tradeTypeLabelJa(tradeCase.tradeType);
+  const shipmentStateJa = shipmentStateLabelJa(tradeCase.shipmentState);
+
+  const products = Array.isArray(tradeCase.products) ? tradeCase.products : [];
+  const primaryProduct = products[0] || null;
+  const mismatchIncident = incidents.find((i) => i && i.type === "invoiceQuantityMismatch") || null;
+  const mismatchDetails = mismatchIncident && mismatchIncident.details && typeof mismatchIncident.details === "object" ? mismatchIncident.details : null;
+  const siQuantity =
+    typeof mismatchDetails?.siQuantity === "number"
+      ? mismatchDetails.siQuantity
+      : typeof primaryProduct?.quantityInstructed === "number"
+        ? primaryProduct.quantityInstructed
+        : null;
+  const invoiceQuantity =
+    typeof mismatchDetails?.invoiceQuantity === "number"
+      ? mismatchDetails.invoiceQuantity
+      : typeof primaryProduct?.quantityInvoiced === "number"
+        ? primaryProduct.quantityInvoiced
+        : null;
+  const shortageQuantity =
+    typeof siQuantity === "number" && typeof invoiceQuantity === "number" ? Math.max(0, siQuantity - invoiceQuantity) : null;
+
+  const titleText =
+    typeof siQuantity === "number" && typeof invoiceQuantity === "number"
+      ? `数量差異: SI ${siQuantity}pcs / INV ${invoiceQuantity}pcs`
+      : tradeCase.title || `Case ${tradeCase.id}`;
+  const subtitleText = `${supplierName} ・ ${tradeTypeJa} ・ ${shipmentStateJa}`;
+  const chips = [
+    `Case ${tradeCase.id}`,
+    typeof siQuantity === "number" ? `SI ${siQuantity}pcs` : null,
+    typeof invoiceQuantity === "number" ? `INV ${invoiceQuantity}pcs` : null,
+    typeof shortageQuantity === "number" ? `Shortage ${shortageQuantity}pcs` : null,
+    updated !== "-" ? `Updated ${updated}` : null,
+  ].filter(Boolean);
 
   const docsHtml = documents.length
     ? documents
@@ -297,7 +390,6 @@ function renderTradeCaseDetail(tradeCase) {
         .join("")
     : "<li class=\"muted\">(none)</li>";
 
-  const products = Array.isArray(tradeCase.products) ? tradeCase.products : [];
   const productsHtml = products.length
     ? products
         .map((p) => {
@@ -571,9 +663,28 @@ function renderTradeCaseDetail(tradeCase) {
     : `<div class="muted">(none)</div>`;
 
   openModal({
-    title: `案件詳細: ${tradeCase.id}`,
+    title: `案件詳細`,
     bodyHtml: `
       <div class="detail">
+        <div class="case-cover">
+          <div class="case-cover__left">
+            <div class="case-cover__block">
+              <div class="case-cover__label muted">Title</div>
+              <div class="case-cover__title">${escapeHtml(titleText)}</div>
+            </div>
+            <div class="case-cover__block">
+              <div class="case-cover__label muted">Subtitle</div>
+              <div class="case-cover__subtitle">${escapeHtml(subtitleText)}</div>
+            </div>
+            <div class="case-cover__block">
+              <div class="case-cover__label muted">Metadata chips</div>
+              <div class="case-cover__meta">
+                ${chips.map((c) => `<span class="pill pill--mini">${escapeHtml(c)}</span>`).join("")}
+              </div>
+            </div>
+          </div>
+        </div>
+
         <section class="detail-section detail-section--summary">
           <h3 class="detail-section__title">Decision Summary</h3>
           <div class="decision-summary">
@@ -856,12 +967,31 @@ function setupTopActions() {
   });
 }
 
+function setupViewLens() {
+  const root = document.getElementById("view-lens");
+  if (!root) return;
+
+  root.addEventListener("click", (e) => {
+    const target = e.target;
+    if (!target) return;
+    const btn = target.closest && target.closest("[data-view-lens]");
+    if (!btn) return;
+    const lens = btn.getAttribute("data-view-lens");
+    if (!lens) return;
+    state.currentViewLens = lens;
+    renderShelfHeader();
+  });
+
+  renderShelfHeader();
+}
+
 function main() {
   setupDropzone();
   setupTextAdd();
   setupModal();
   setupManualModal();
   setupTopActions();
+  setupViewLens();
   seed();
   updateCounts();
   log("起動: UI mock を開始");
