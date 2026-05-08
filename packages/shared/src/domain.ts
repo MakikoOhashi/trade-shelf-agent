@@ -197,6 +197,15 @@ export type TradeCase = {
   tradeType: TradeType;
   supplier: Party;
   customer: Party;
+  /**
+   * Operations graph refs (View Lens 用)
+   * - SI / Invoice / BL / Shipment / Supplier などの識別子で同じ業務データを再構成する。
+   */
+  siNumbers?: string[];
+  invoiceNumbers?: InvoiceRef[];
+  blNumbers?: string[];
+  shipmentRefs?: string[];
+  supplierIds?: string[];
   products: TradeProduct[];
   documents: TradeDocument[];
   shipmentState: ShipmentState;
@@ -208,6 +217,25 @@ export type TradeCase = {
   supplierBehaviorHints?: SupplierBehavior[];
   marginRiskHints?: MarginRisk[];
 };
+
+export type InvoiceRefType = "supplierInvoice" | "switchInvoice";
+
+export type InvoiceRef =
+  | {
+      invoiceNo: string;
+      type: "supplierInvoice";
+      supplier: string;
+      qty?: number;
+      relatedSiNo?: string;
+    }
+  | {
+      invoiceNo: string;
+      type: "switchInvoice";
+      issuer: string;
+      customer: string;
+      qty?: number;
+      relatedSiNo?: string;
+    };
 
 export type HumanInterventionType =
   | "approve"
