@@ -257,18 +257,42 @@ function renderTradeCaseDetail(tradeCase) {
         .join("")
     : "<li class=\"muted\">(none)</li>";
 
+  function incidentTypeLabel(type) {
+    const t = String(type || "");
+    const map = {
+      invoiceQuantityMismatch: "数量差異（INVとSI）",
+      missingDocument: "書類不足",
+      confirmQuantity: "数量確認が必要",
+      shippingPending: "出荷手配待ち",
+      supplierNoResponse: "サプライヤー未返信",
+    };
+    return map[t] || t;
+  }
+
+  function riskFromIncidents(list) {
+    const severities = (Array.isArray(list) ? list : []).map((i) => String(i && i.severity ? i.severity : "").toLowerCase());
+    if (severities.includes("critical")) return "CRITICAL";
+    if (severities.includes("high")) return "HIGH";
+    if (severities.includes("medium")) return "MEDIUM";
+    if (severities.includes("low")) return "LOW";
+    return "LOW";
+  }
+
+  function severityClass(risk) {
+    const r = String(risk || "").toUpperCase();
+    if (r === "CRITICAL") return "pill--critical";
+    if (r === "HIGH") return "pill--high";
+    if (r === "MEDIUM") return "pill--medium";
+    return "pill--low";
+  }
+
   const timelineHtml = timeline.length
     ? timeline
         .map((e) => {
-          const extras = [
-            e && e.actor ? `actor:${e.actor}` : null,
-            e && e.actionType ? `action:${e.actionType}` : null,
-            e && e.note ? `note:${e.note}` : null,
-          ]
-            .filter(Boolean)
-            .join(" · ");
-          const extraHtml = extras ? ` <span class="muted">(${escapeHtml(extras)})</span>` : "";
-          return `<li><span class="muted">${escapeHtml(formatLocalTime(e.at))}</span> ${escapeHtml(e.type)}: ${escapeHtml(e.message)}${extraHtml}</li>`;
+          const at = e && e.at ? formatLocalTime(e.at) : "-";
+          const actionLabel = e && e.label ? e.label : e && e.actionType ? e.actionType : "";
+          const badge = actionLabel ? ` <span class="pill pill--mini">${escapeHtml(actionLabel)}</span>` : "";
+          return `<li><span class="muted">${escapeHtml(at)}</span> ${escapeHtml(e.message || "-")}${badge}</li>`;
         })
         .join("")
     : "<li class=\"muted\">(none)</li>";
@@ -295,6 +319,37 @@ function renderTradeCaseDetail(tradeCase) {
     const impact = analyzeImpact(tradeCase, incident);
     if (impact) impactsByIncidentId.set(incident.id, impact);
   }
+
+  const riskLevel = riskFromIncidents(incidents);
+  const topIncident =
+    incidents
+      .slice()
+      .sort((a, b) => {
+        const order = { critical: 4, high: 3, medium: 2, low: 1 };
+        const sa = order[String(a && a.severity ? a.severity : "").toLowerCase()] || 0;
+        const sb = order[String(b && b.severity ? b.severity : "").toLowerCase()] || 0;
+        if (sb !== sa) return sb - sa;
+        const ca = typeof a.confidence === "number" ? a.confidence : -1;
+        const cb = typeof b.confidence === "number" ? b.confidence : -1;
+        return cb - ca;
+      })[0] || null;
+
+  const topImpact = topIncident ? impactsByIncidentId.get(topIncident.id) : null;
+  const etaCandidates = Array.from(impactsByIncidentId.values())
+    .map((i) => (i && i.nextShipmentEta ? String(i.nextShipmentEta) : ""))
+    .filter(Boolean)
+    .slice()
+    .sort((a, b) => a.localeCompare(b));
+  const earliestEta = etaCandidates[0] || "";
+  const decisionSummary = {
+    riskLevel,
+    mainIssue: topIncident ? topIncident.summary : "問題なし（検知なし）",
+    recommendedAction: topImpact && topImpact.recommendedDecision ? String(topImpact.recommendedDecision) : "—",
+    requiredDecision:
+      topImpact && Array.isArray(topImpact.decisionOptions) && topImpact.decisionOptions.length ? "対応方針の選択" : "—",
+    eta: topImpact && topImpact.nextShipmentEta ? String(topImpact.nextShipmentEta) : earliestEta || "—",
+    confidence: topIncident && typeof topIncident.confidence === "number" ? `${Math.round(topIncident.confidence * 100)}%` : "—",
+  };
 
   function statusClass(approvalStatus, status) {
     const s = approvalStatus || status || "";
@@ -336,19 +391,28 @@ function renderTradeCaseDetail(tradeCase) {
       .sort((a, b) => (b.score !== a.score ? b.score - a.score : a.idx - b.idx))
       .map((x) => x.o);
 
-    return `<div class="decision-options">
+    return `<div class="decision-options decision-options--compact">
       ${sorted
         .map((o) => {
           const pros = Array.isArray(o.pros) ? o.pros : [];
           const cons = Array.isArray(o.cons) ? o.cons : [];
           const checks = Array.isArray(o.requiredActions) ? o.requiredActions : [];
+          const topPros = pros.slice(0, 2);
+          const topCons = cons.slice(0, 2);
+          const topChecks = checks.slice(0, 2);
+          const badge = scoreDecisionOption(rec, o) > 0 ? `<span class="pill pill--recommended">推奨</span>` : "";
           return `<div class="decision-option">
-            <div class="decision-option-title">${escapeHtml(o.title)}</div>
+            <div class="decision-option-title">${badge}${escapeHtml(o.title)}</div>
             <div class="decision-option-meta muted">${escapeHtml(o.summary)}</div>
-            <div class="decision-option-list">
-              <div class="decision-option-kv"><span class="muted">pros</span><ul class="mini-list">${pros.length ? pros.map((x) => `<li>${escapeHtml(x)}</li>`).join("") : `<li class="muted">(none)</li>`}</ul></div>
-              <div class="decision-option-kv"><span class="muted">cons</span><ul class="mini-list">${cons.length ? cons.map((x) => `<li>${escapeHtml(x)}</li>`).join("") : `<li class="muted">(none)</li>`}</ul></div>
-              <div class="decision-option-kv"><span class="muted">requiredChecks</span><ul class="mini-list">${checks.length ? checks.map((x) => `<li>${escapeHtml(x)}</li>`).join("") : `<li class="muted">(none)</li>`}</ul></div>
+            <div class="decision-option-badges">
+              <span class="badge"><span class="muted">pros</span> ${pros.length}</span>
+              <span class="badge"><span class="muted">cons</span> ${cons.length}</span>
+              <span class="badge"><span class="muted">checks</span> ${checks.length}</span>
+            </div>
+            <div class="decision-option-mini">
+              ${topPros.length ? `<div><span class="muted">+ </span>${topPros.map((x) => escapeHtml(x)).join(" / ")}</div>` : ""}
+              ${topCons.length ? `<div><span class="muted">- </span>${topCons.map((x) => escapeHtml(x)).join(" / ")}</div>` : ""}
+              ${topChecks.length ? `<div><span class="muted">✓ </span>${topChecks.map((x) => escapeHtml(x)).join(" / ")}</div>` : ""}
             </div>
           </div>`;
         })
@@ -371,19 +435,38 @@ function renderTradeCaseDetail(tradeCase) {
           .join("")
       : "<li class=\"muted\">(none)</li>";
 
+    const summary = impact.summary || impact.customerImpact || "-";
+    const rec = impact.recommendedDecision ? String(impact.recommendedDecision) : "-";
+    const qty = impact.nextShipmentQty ?? "-";
+    const eta = impact.nextShipmentEta ?? "-";
+    const risk = impact.deliveryRisk ? String(impact.deliveryRisk) : "-";
+
     return `<div class="impact">
-      <div class="impact__kv">
-        <div><span class="muted">deliveryRisk:</span> ${escapeHtml(impact.deliveryRisk || "-")}</div>
-        <div><span class="muted">shortageQty:</span> ${escapeHtml(String(impact.shortageQty))}</div>
-        <div><span class="muted">nextShipment:</span> ${escapeHtml(String(impact.nextShipmentQty))} @ ${escapeHtml(impact.nextShipmentEta || "-")}</div>
-        <div><span class="muted">canCoverByNextShipment:</span> ${escapeHtml(String(impact.canCoverByNextShipment))}</div>
+      <div class="impact__head">
+        <span class="pill pill--mini">影響</span>
+        <span class="impact__summary">${escapeHtml(summary)}</span>
       </div>
-      <div class="impact__block"><span class="muted">affectedProducts</span><ul class="list">${affectedHtml}</ul></div>
-      <div class="impact__block"><span class="muted">customerImpact</span><div>${escapeHtml(impact.customerImpact || "-")}</div></div>
-      <div class="impact__block"><span class="muted">recommendedDecision</span><div class="impact__recommend">${escapeHtml(
-        impact.recommendedDecision || "-",
-      )}</div></div>
-      <div class="impact__block"><span class="muted">decisionOptions</span>${renderDecisionOptions(impact)}</div>
+      <div class="impact__rec">
+        <div class="kv">
+          <span class="muted">Risk</span> ${escapeHtml(risk)}
+          <span class="muted">推奨</span> ${escapeHtml(rec)}
+          <span class="muted">次便</span> qty:${escapeHtml(String(qty))} / eta:${escapeHtml(String(eta))}
+        </div>
+      </div>
+      <div class="accordion impact__details" data-accordion-root>
+        <div class="accordion__item">
+          <button class="accordion__trigger" type="button" data-accordion-trigger aria-expanded="false">
+            <span class="pill pill--mini">詳細</span>
+            <span class="accordion__summary">Affected products / Decision options</span>
+          </button>
+          <div class="accordion__panel" hidden>
+            <div class="detail-subhead">Affected Products</div>
+            <ul class="mini-list">${affectedHtml}</ul>
+            <div class="detail-subhead">Decision Options（比較）</div>
+            ${renderDecisionOptions(impact)}
+          </div>
+        </div>
+      </div>
     </div>`;
   }
 
@@ -437,8 +520,10 @@ function renderTradeCaseDetail(tradeCase) {
 
             return `<div class="accordion__item ${isOpen ? "is-open" : ""}">
               <button class="accordion__trigger" type="button" data-accordion-trigger aria-expanded="${isOpen ? "true" : "false"}">
-                <span class="pill pill--incident">${escapeHtml(incident.severity)}</span>
-                <span class="pill">${escapeHtml(incident.type)}</span>
+                <span class="pill pill--incident ${severityClass(incident.severity)}">${escapeHtml(
+                  String(incident.severity || "-").toUpperCase(),
+                )}</span>
+                <span class="pill pill--type">${escapeHtml(incidentTypeLabel(incident.type))}</span>
                 <span class="accordion__meta muted">conf:${escapeHtml(confidence)}</span>
                 <span class="accordion__summary">${escapeHtml(incident.summary)}</span>
               </button>
@@ -489,28 +574,51 @@ function renderTradeCaseDetail(tradeCase) {
     title: `案件詳細: ${tradeCase.id}`,
     bodyHtml: `
       <div class="detail">
-        <section class="detail-section">
-          <h3 class="detail-section__title">Source Data / 元データ</h3>
-          <div class="detail__meta">
-            <div><span class="muted">case id:</span> ${escapeHtml(tradeCase.id)}</div>
-            <div><span class="muted">title:</span> ${escapeHtml(tradeCase.title)}</div>
-            <div><span class="muted">supplier:</span> ${escapeHtml(supplierName)}</div>
-            <div><span class="muted">tradeType:</span> ${escapeHtml(tradeCase.tradeType)}</div>
-            <div><span class="muted">shipmentState:</span> ${escapeHtml(tradeCase.shipmentState)}</div>
-            <div><span class="muted">updatedAt:</span> ${escapeHtml(updated)}</div>
+        <section class="detail-section detail-section--summary">
+          <h3 class="detail-section__title">Decision Summary</h3>
+          <div class="decision-summary">
+            <div class="decision-summary__row">
+              <span class="muted">Risk level</span>
+              <span class="pill ${severityClass(decisionSummary.riskLevel)}">${escapeHtml(decisionSummary.riskLevel)}</span>
+            </div>
+            <div class="decision-summary__row"><span class="muted">Main issue</span><span class="decision-summary__value">${escapeHtml(decisionSummary.mainIssue)}</span></div>
+            <div class="decision-summary__row"><span class="muted">Recommended action</span><span class="decision-summary__value">${escapeHtml(decisionSummary.recommendedAction)}</span></div>
+            <div class="decision-summary__row"><span class="muted">Required decision</span><span class="decision-summary__value">${escapeHtml(decisionSummary.requiredDecision)}</span></div>
+            <div class="decision-summary__row"><span class="muted">Deadline / ETA</span><span class="decision-summary__value">${escapeHtml(decisionSummary.eta)}</span></div>
+            <div class="decision-summary__row"><span class="muted">Confidence</span><span class="decision-summary__value">${escapeHtml(decisionSummary.confidence)}</span></div>
+          </div>
+        </section>
+
+        <section class="detail-section detail-section--decision">
+          <h3 class="detail-section__title">Human Decision / 人間の判断</h3>
+          <div class="detail-subhead">Human Intervention</div>
+          <div class="action-groups">
+            <div class="action-group">
+              <div class="action-group__title muted">Primary actions</div>
+              <div class="action-row">
+                <button class="btn btn--primary" type="button" data-human-action="markAsPartialShipment" data-human-label="分納として処理">分納として処理</button>
+                <button class="btn btn--primary" type="button" data-human-action="linkToNextShipment" data-human-label="次便に紐づけ">次便に紐づけ</button>
+              </div>
+            </div>
+            <div class="action-group">
+              <div class="action-group__title muted">Secondary actions</div>
+              <div class="action-row">
+                <button class="btn" type="button" data-human-action="requestConfirmation" data-human-label="確認依頼">確認依頼</button>
+                <button class="btn" type="button" data-human-action="hold" data-human-label="保留">保留</button>
+                <button class="btn" type="button" data-human-action="escalate" data-human-label="エスカレーション">エスカレーション</button>
+              </div>
+            </div>
+            <div class="action-group">
+              <div class="action-group__title muted">Exception actions</div>
+              <div class="action-row">
+                <button class="btn" type="button" data-human-action="markAsNoIssue" data-human-label="問題なしとして記録">問題なしとして記録</button>
+                <button class="btn btn--danger" type="button" data-human-action="reject" data-human-label="却下">却下</button>
+              </div>
+            </div>
           </div>
 
-          <div class="detail-subhead">Products</div>
-          <ul class="list">${productsHtml}</ul>
-
-          <div class="detail-subhead">Documents</div>
-          <ul class="list">${docsHtml}</ul>
-
-          <div class="detail-subhead">Affected Products (if any)</div>
-          <ul class="list">${affectedProductsHtml}</ul>
-
-          <div class="detail-subhead">Next Shipment (if any)</div>
-          ${nextShipmentHtml}
+          <div class="detail-subhead">Approval（提案の承認）</div>
+          ${renderProposals(nextActions)}
         </section>
 
         <section class="detail-section">
@@ -520,22 +628,43 @@ function renderTradeCaseDetail(tradeCase) {
         </section>
 
         <section class="detail-section">
-          <h3 class="detail-section__title">Human Decision / 人間の判断</h3>
-          <div class="detail-subhead">Approval</div>
-          ${renderProposals(nextActions)}
+          <h3 class="detail-section__title">Source Data / 元データ</h3>
+          <div class="accordion" data-accordion-root>
+            <div class="accordion__item">
+              <button class="accordion__trigger" type="button" data-accordion-trigger aria-expanded="false">
+                <span class="pill pill--mini">元データを見る</span>
+                <span class="accordion__summary">case:${escapeHtml(tradeCase.id)} / supplier:${escapeHtml(supplierName)} / updated:${escapeHtml(
+                   updated,
+                 )}</span>
+              </button>
+              <div class="accordion__panel" hidden>
+                <div class="detail__meta">
+                  <div><span class="muted">case id:</span> ${escapeHtml(tradeCase.id)}</div>
+                  <div><span class="muted">title:</span> ${escapeHtml(tradeCase.title)}</div>
+                  <div><span class="muted">supplier:</span> ${escapeHtml(supplierName)}</div>
+                  <div><span class="muted">tradeType:</span> ${escapeHtml(tradeCase.tradeType)}</div>
+                  <div><span class="muted">shipmentState:</span> ${escapeHtml(tradeCase.shipmentState)}</div>
+                  <div><span class="muted">updatedAt:</span> ${escapeHtml(updated)}</div>
+                </div>
 
-          <div class="detail-subhead">Human Intervention</div>
-          <div class="action-row">
-            <button class="btn" type="button" data-human-action="markAsPartialShipment" data-human-label="分納として処理">分納として処理</button>
-            <button class="btn" type="button" data-human-action="linkToNextShipment" data-human-label="次便に紐づけ">次便に紐づけ</button>
-            <button class="btn" type="button" data-human-action="markAsNoIssue" data-human-label="問題なしとして記録">問題なしとして記録</button>
-            <button class="btn" type="button" data-human-action="escalate" data-human-label="エスカレーション">エスカレーション</button>
-            <button class="btn" type="button" data-human-action="requestConfirmation" data-human-label="確認依頼">確認依頼</button>
-            <button class="btn" type="button" data-human-action="hold" data-human-label="保留">保留</button>
-            <button class="btn btn--danger" type="button" data-human-action="reject" data-human-label="却下">却下</button>
+                <div class="detail-subhead">Products</div>
+                <ul class="list">${productsHtml}</ul>
+
+                <div class="detail-subhead">Documents</div>
+                <ul class="list">${docsHtml}</ul>
+
+                <div class="detail-subhead">Affected Products (if any)</div>
+                <ul class="list">${affectedProductsHtml}</ul>
+
+                <div class="detail-subhead">Next Shipment (if any)</div>
+                ${nextShipmentHtml}
+              </div>
+            </div>
           </div>
+        </section>
 
-          <div class="detail-subhead">Timeline / Decision History</div>
+        <section class="detail-section">
+          <h3 class="detail-section__title">Decision History</h3>
           <ul class="list">${timelineHtml}</ul>
         </section>
       </div>

@@ -285,6 +285,53 @@ body {
   opacity: 0.85;
 }
 
+.pill--mini {
+  font-size: 11px;
+  padding: 1px 8px;
+  opacity: 0.95;
+}
+
+.pill--recommended {
+  margin-right: 6px;
+  border-color: rgba(125, 211, 252, 0.65);
+  background: rgba(125, 211, 252, 0.14);
+}
+
+.pill--critical {
+  border-color: rgba(248, 113, 113, 0.85);
+  background: rgba(248, 113, 113, 0.16);
+}
+
+.pill--high {
+  border-color: rgba(251, 146, 60, 0.85);
+  background: rgba(251, 146, 60, 0.16);
+}
+
+.pill--medium {
+  border-color: rgba(251, 191, 36, 0.8);
+  background: rgba(251, 191, 36, 0.14);
+}
+
+.pill--low {
+  border-color: rgba(52, 211, 153, 0.65);
+  background: rgba(52, 211, 153, 0.12);
+}
+
+.pill--type {
+  opacity: 0.92;
+}
+
+.badge {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(0, 0, 0, 0.2);
+  font-size: 12px;
+}
+
 .shelves {
   padding: 14px;
   display: grid;
@@ -482,6 +529,45 @@ body {
   margin-bottom: 12px;
 }
 
+.detail-section--summary {
+  background: rgba(125, 211, 252, 0.06);
+  border-color: rgba(125, 211, 252, 0.18);
+}
+
+.decision-summary {
+  display: grid;
+  gap: 8px;
+}
+
+.decision-summary__row {
+  display: grid;
+  grid-template-columns: 140px 1fr;
+  gap: 10px;
+  align-items: start;
+}
+
+.decision-summary__value {
+  color: var(--text);
+}
+
+.action-groups {
+  display: grid;
+  gap: 10px;
+}
+
+.action-group {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.18);
+  padding: 10px;
+}
+
+.action-group__title {
+  font-weight: 850;
+  font-size: 12px;
+  margin-bottom: 8px;
+}
+
 .detail-section__title {
   margin: 0 0 10px;
   font-size: 13px;
@@ -581,6 +667,10 @@ body {
   gap: 10px;
 }
 
+.decision-options--compact {
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
 .decision-option {
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 12px;
@@ -595,6 +685,20 @@ body {
 
 .decision-option-meta {
   margin-top: 4px;
+}
+
+.decision-option-badges {
+  margin-top: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.decision-option-mini {
+  margin-top: 8px;
+  display: grid;
+  gap: 6px;
+  font-size: 12px;
 }
 
 .decision-option-list {
@@ -679,6 +783,20 @@ body {
   gap: 8px;
   align-items: center;
   flex-wrap: wrap;
+}
+
+.impact__summary {
+  color: var(--text);
+  font-weight: 700;
+}
+
+.impact__rec {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.impact__details .accordion__trigger {
+  padding: 8px 10px;
 }
 
 .impact__kv {
