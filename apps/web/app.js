@@ -9,6 +9,32 @@ const state = {
   modalTradeCaseId: null,
 };
 
+function getTradeCaseById(id) {
+  return state.tradeCases.find((c) => c && c.id === id) || null;
+}
+
+function recordTimelineEvent(tradeCaseId, event) {
+  const tc = getTradeCaseById(tradeCaseId);
+  if (!tc) return;
+  if (!Array.isArray(tc.timeline)) tc.timeline = [];
+  tc.timeline.unshift(event);
+}
+
+function recordHumanIntervention(tradeCaseId, { actionType, label, note }) {
+  const actor = "ops-user";
+  const at = nowIso();
+  recordTimelineEvent(tradeCaseId, {
+    id: shortId(),
+    at,
+    type: "humanIntervention",
+    message: `${actor} が ${label} を記録しました`,
+    actor,
+    actionType,
+    label,
+    note: note || "",
+  });
+}
+
 function nowIso() {
   return new Date().toISOString();
 }
@@ -233,7 +259,17 @@ function renderTradeCaseDetail(tradeCase) {
 
   const timelineHtml = timeline.length
     ? timeline
-        .map((e) => `<li><span class="muted">${escapeHtml(formatLocalTime(e.at))}</span> ${escapeHtml(e.type)}: ${escapeHtml(e.message)}</li>`)
+        .map((e) => {
+          const extras = [
+            e && e.actor ? `actor:${e.actor}` : null,
+            e && e.actionType ? `action:${e.actionType}` : null,
+            e && e.note ? `note:${e.note}` : null,
+          ]
+            .filter(Boolean)
+            .join(" · ");
+          const extraHtml = extras ? ` <span class="muted">(${escapeHtml(extras)})</span>` : "";
+          return `<li><span class="muted">${escapeHtml(formatLocalTime(e.at))}</span> ${escapeHtml(e.type)}: ${escapeHtml(e.message)}${extraHtml}</li>`;
+        })
         .join("")
     : "<li class=\"muted\">(none)</li>";
 
@@ -488,6 +524,17 @@ function renderTradeCaseDetail(tradeCase) {
           <div class="detail-subhead">Approval</div>
           ${renderProposals(nextActions)}
 
+          <div class="detail-subhead">Human Intervention</div>
+          <div class="action-row">
+            <button class="btn" type="button" data-human-action="markAsPartialShipment" data-human-label="分納として処理">分納として処理</button>
+            <button class="btn" type="button" data-human-action="linkToNextShipment" data-human-label="次便に紐づけ">次便に紐づけ</button>
+            <button class="btn" type="button" data-human-action="markAsNoIssue" data-human-label="問題なしとして記録">問題なしとして記録</button>
+            <button class="btn" type="button" data-human-action="escalate" data-human-label="エスカレーション">エスカレーション</button>
+            <button class="btn" type="button" data-human-action="requestConfirmation" data-human-label="確認依頼">確認依頼</button>
+            <button class="btn" type="button" data-human-action="hold" data-human-label="保留">保留</button>
+            <button class="btn btn--danger" type="button" data-human-action="reject" data-human-label="却下">却下</button>
+          </div>
+
           <div class="detail-subhead">Timeline / Decision History</div>
           <ul class="list">${timelineHtml}</ul>
         </section>
@@ -579,12 +626,30 @@ function setupModal() {
       return;
     }
 
-    if (target.matches("[data-approve-proposal]")) {
-      const proposalId = target.getAttribute("data-approve-proposal");
+    const humanActionEl = target.closest && target.closest("[data-human-action]");
+    if (humanActionEl) {
+      const actionType = humanActionEl.getAttribute("data-human-action");
+      const label = humanActionEl.getAttribute("data-human-label") || actionType;
+      if (!actionType || !state.modalTradeCaseId) return;
+      recordHumanIntervention(state.modalTradeCaseId, { actionType, label, note: "" });
+
+      const tc = getTradeCaseById(state.modalTradeCaseId);
+      if (tc) renderTradeCaseDetail(tc);
+      log(`記録: ${actionType}`);
+      return;
+    }
+
+    const approveEl = target.closest && target.closest("[data-approve-proposal]");
+    if (approveEl) {
+      const proposalId = approveEl.getAttribute("data-approve-proposal");
       if (!proposalId) return;
       state.proposalApprovalStatusById[proposalId] = "approved";
 
-      const tc = state.tradeCases.find((c) => c && c.id === state.modalTradeCaseId);
+      if (state.modalTradeCaseId) {
+        recordHumanIntervention(state.modalTradeCaseId, { actionType: "approveProposal", label: "承認", note: `proposal:${proposalId}` });
+      }
+
+      const tc = getTradeCaseById(state.modalTradeCaseId);
       if (tc) renderTradeCaseDetail(tc);
       log(`承認: proposal ${proposalId}`);
     }

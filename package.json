@@ -1,0 +1,9 @@
+{
+  "name": "trade-shelf-agent",
+  "private": true,
+  "scripts": {
+    "build": "npm --prefix packages/shared run typecheck && npm --prefix packages/shared run build:web-vendor",
+    "lint": "npm --prefix packages/shared run typecheck"
+  }
+}
+

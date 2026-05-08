@@ -138,11 +138,16 @@ export type TimelineEvent = {
     | "documentReceived"
     | "incidentDetected"
     | "emailReceived"
-    | "note";
+    | "note"
+    | "humanIntervention";
   message: string;
   shipmentState?: ShipmentState;
   relatedDocumentId?: string;
   relatedIncidentId?: string;
+  actor?: string;
+  actionType?: string;
+  label?: string;
+  note?: string;
 };
 
 export type ActionProposal = {
@@ -206,6 +211,7 @@ export type TradeCase = {
 
 export type HumanInterventionType =
   | "approve"
+  | "reject"
   | "correct"
   | "replaceDocument"
   | "markAsPartialShipment"

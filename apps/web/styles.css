@@ -57,7 +57,7 @@ body {
 
 .layout {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 360px 1fr;
   gap: 12px;
   padding: 12px;
   min-height: calc(100vh - 60px);
@@ -84,6 +84,12 @@ body {
 .ingestion-card { padding: 12px; }
 .ingestion-card .kv { display: flex; gap: 12px; align-items: flex-start; }
 .ingestion-card .kv > div { min-width: 120px; }
+
+.action-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
 
 
 .pane__header {
