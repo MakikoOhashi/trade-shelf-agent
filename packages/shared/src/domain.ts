@@ -11,6 +11,17 @@ export type ShipmentState =
   | "delivered"
   | "completed";
 
+export type MovementStage =
+  | "notArranged"
+  | "preparingShipment"
+  | "readyToShip"
+  | "exportCustoms"
+  | "inTransit"
+  | "importCustoms"
+  | "waitingWarehouseReceipt"
+  | "warehouseReceived"
+  | "completed";
+
 export type TradeDocumentType =
   | "SI"
   | "Invoice"
@@ -209,6 +220,7 @@ export type TradeCase = {
   products: TradeProduct[];
   documents: TradeDocument[];
   shipmentState: ShipmentState;
+  movementStage?: MovementStage;
   incidents: Incident[];
   timeline: TimelineEvent[];
   nextActions: ActionProposal[];

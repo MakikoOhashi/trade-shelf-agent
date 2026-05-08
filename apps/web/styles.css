@@ -404,7 +404,7 @@ body {
 .shelves {
   padding: 14px;
   display: grid;
-  grid-template-columns: repeat(5, minmax(220px, 1fr));
+  grid-template-columns: repeat(9, minmax(220px, 1fr));
   gap: 10px;
   overflow: auto;
   border-bottom: 1px solid var(--border);
@@ -457,6 +457,13 @@ body {
   padding: 10px;
   background: rgba(0, 0, 0, 0.22);
   cursor: pointer;
+}
+
+.card__badges {
+  margin-top: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 
 .card:hover {

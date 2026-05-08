@@ -1,6 +1,22 @@
 import { analyzeImpact, detectIncidents, mockTradeCases, proposeActions } from "@trade-shelf/shared";
 
-const shelves = ["出荷待ち", "書類不足", "返信待ち", "通関中", "完了"];
+const movementShelfDefs = [
+  { key: "notArranged", label: "未手配" },
+  { key: "preparingShipment", label: "出荷準備中" },
+  { key: "readyToShip", label: "出荷待ち" },
+  { key: "exportCustoms", label: "輸出通関中" },
+  { key: "inTransit", label: "海上/航空輸送中" },
+  { key: "importCustoms", label: "輸入通関中" },
+  { key: "waitingWarehouseReceipt", label: "倉庫入荷待ち" },
+  { key: "warehouseReceived", label: "倉庫入荷済み" },
+  { key: "completed", label: "完了" },
+];
+
+const shelves = movementShelfDefs.map((d) => d.key);
+const shelfLabelByKey = Object.fromEntries(movementShelfDefs.map((d) => [d.key, d.label]));
+
+const movementStageOrder = movementShelfDefs.map((d) => d.key);
+const movementStageRank = Object.fromEntries(movementStageOrder.map((k, i) => [k, i]));
 
 const state = {
   inboxItems: [],
@@ -17,6 +33,30 @@ const state = {
    */
   currentViewLens: "case",
 };
+
+function ensureShelvesDom() {
+  const root = document.getElementById("shelves");
+  if (!root) return;
+  const current = Array.from(root.querySelectorAll(".shelf")).map((el) => el.getAttribute("data-shelf")).filter(Boolean);
+  const needsRebuild = current.length !== shelves.length || shelves.some((k, i) => current[i] !== k);
+  if (!needsRebuild) return;
+
+  root.innerHTML = "";
+  for (const def of movementShelfDefs) {
+    const el = document.createElement("div");
+    el.className = "shelf";
+    el.setAttribute("data-shelf", def.key);
+    el.innerHTML = `
+      <div class="shelf__head">
+        <div class="shelf__title"></div>
+        <div class="shelf__count" data-count>0</div>
+      </div>
+      <div class="shelf__body" data-body></div>
+    `;
+    el.querySelector(".shelf__title").textContent = def.label;
+    root.appendChild(el);
+  }
+}
 
 function getTradeCaseById(id) {
   return state.tradeCases.find((c) => c && c.id === id) || null;
@@ -83,19 +123,8 @@ function classifyToShelf(text) {
 }
 
 function classifyTradeCaseToShelf(tradeCase) {
-  const incidents = Array.isArray(tradeCase.incidents) ? tradeCase.incidents : [];
-  const hasMissingDoc = incidents.some((i) => i && i.type === "missingDocument" && i.status !== "resolved");
-  if (hasMissingDoc) return "書類不足";
-
-  const hasNoResponse = incidents.some((i) => i && i.type === "supplierNoResponse" && i.status !== "resolved");
-  if (hasNoResponse) return "返信待ち";
-
-  const s = tradeCase.shipmentState;
-  if (s === "completed") return "完了";
-  if (s === "customsCleared" || s === "delivered") return "完了";
-  if (s === "inTransit" || s === "arrived" || s === "shipped") return "通関中";
-  if (s === "bookingRequested" || s === "notArranged" || s === "shippingPending") return "出荷待ち";
-  return "出荷待ち";
+  const stage = deriveMovementStageFromShipmentState(tradeCase && tradeCase.shipmentState);
+  return stage || "notArranged";
 }
 
 function tradeTypeLabelJa(tradeType) {
@@ -122,6 +151,43 @@ function shipmentStateLabelJa(shipmentState) {
     completed: "完了",
   };
   return map[s] || s || "-";
+}
+
+function deriveMovementStageFromShipmentState(shipmentState) {
+  const s = String(shipmentState || "");
+  const map = {
+    notArranged: "notArranged",
+    bookingRequested: "preparingShipment",
+    shippingPending: "readyToShip",
+    shipped: "exportCustoms",
+    inTransit: "inTransit",
+    arrived: "importCustoms",
+    customsCleared: "waitingWarehouseReceipt",
+    delivered: "warehouseReceived",
+    completed: "completed",
+  };
+  return map[s] || "notArranged";
+}
+
+function pickMostAdvancedMovementStage(stages) {
+  const list = Array.isArray(stages) ? stages : [];
+  let best = "notArranged";
+  let bestRank = movementStageRank[best] ?? 0;
+  for (const x of list) {
+    const k = String(x || "");
+    const r = movementStageRank[k];
+    if (typeof r === "number" && r > bestRank) {
+      best = k;
+      bestRank = r;
+    }
+  }
+  return best;
+}
+
+function isStageAtLeast(stage, minStage) {
+  const a = movementStageRank[String(stage || "")] ?? 0;
+  const b = movementStageRank[String(minStage || "")] ?? 0;
+  return a >= b;
 }
 
 function shelfTitleForViewLens(viewLens) {
@@ -186,22 +252,64 @@ function computeShortageFromIncidents(incidents) {
 }
 
 function classifyShelfItemToBucket(shelfItem) {
-  const incidents = Array.isArray(shelfItem && shelfItem.incidents) ? shelfItem.incidents : [];
-  const hasMissingDoc = incidents.some((i) => i && i.type === "missingDocument" && i.status !== "resolved");
-  if (hasMissingDoc) return "書類不足";
-  const hasNoResponse = incidents.some((i) => i && i.type === "supplierNoResponse" && i.status !== "resolved");
-  if (hasNoResponse) return "返信待ち";
-
   const sourceCases = Array.isArray(shelfItem && shelfItem.sourceCases) ? shelfItem.sourceCases : [];
-  const states = sourceCases.map((c) => (c ? c.shipmentState : "")).filter(Boolean);
-  const allDone =
-    states.length > 0 && states.every((s) => s === "completed" || s === "customsCleared" || s === "delivered");
-  if (allDone) return "完了";
-  if (states.some((s) => s === "inTransit" || s === "arrived" || s === "shipped")) return "通関中";
-  if (states.some((s) => s === "bookingRequested" || s === "notArranged" || s === "shippingPending")) return "出荷待ち";
+  const stages = sourceCases.map((c) => deriveMovementStageFromShipmentState(c ? c.shipmentState : "")).filter(Boolean);
+  return pickMostAdvancedMovementStage(stages);
+}
 
-  if (String(shelfItem && shelfItem.lens ? shelfItem.lens : "") === "incident") return "書類不足";
-  return "出荷待ち";
+function deriveAlerts(incidents, movementStage) {
+  const list = Array.isArray(incidents) ? incidents : [];
+  const stage = String(movementStage || "notArranged");
+
+  /** @type {Array<{type:string,label:string,severity:"low"|"medium"|"high"|"critical"}>} */
+  const out = [];
+  const pushOnce = (a) => {
+    if (!a || !a.type) return;
+    if (out.some((x) => x && x.type === a.type && x.label === a.label)) return;
+    out.push(a);
+  };
+
+  for (const inc of list) {
+    if (!inc || inc.status === "resolved") continue;
+    const t = String(inc.type || "");
+
+    if (t === "missingDocument") {
+      if (stage === "importCustoms") {
+        pushOnce({ type: "documentMissing", label: "通関リスク: 書類未着", severity: "critical" });
+      } else if (isStageAtLeast(stage, "inTransit")) {
+        pushOnce({ type: "documentMissing", label: "貨物進行中: 書類不足", severity: "critical" });
+      } else {
+        pushOnce({ type: "documentMissing", label: "書類不足", severity: isStageAtLeast(stage, "exportCustoms") ? "high" : "high" });
+      }
+      continue;
+    }
+
+    if (t === "supplierNoResponse") {
+      pushOnce({ type: "waitingReply", label: "返信待ち", severity: "medium" });
+      continue;
+    }
+
+    if (t === "invoiceQuantityMismatch") {
+      if (isStageAtLeast(stage, "warehouseReceived")) {
+        pushOnce({ type: "quantityMismatch", label: "入荷差異リスク", severity: "critical" });
+      } else {
+        pushOnce({ type: "quantityMismatch", label: "数量差異", severity: "high" });
+      }
+      continue;
+    }
+
+    if (t === "etaChanged") {
+      pushOnce({ type: "etaChanged", label: "ETA変更", severity: "medium" });
+      continue;
+    }
+
+    if (t === "partialShipment") {
+      pushOnce({ type: "partialShipment", label: "分納確認", severity: "medium" });
+      continue;
+    }
+  }
+
+  return out;
 }
 
 function deriveShelfItemsByLens(cases, viewLens) {
@@ -214,6 +322,8 @@ function deriveShelfItemsByLens(cases, viewLens) {
    *  title: string,
    *  subtitle: string,
    *  statusBucket: string,
+   *  movementStage: string,
+   *  alerts: any[],
    *  sourceCaseIds: string[],
    *  sourceCases: any[],
    *  relatedRefs: Record<string, any>,
@@ -229,6 +339,7 @@ function deriveShelfItemsByLens(cases, viewLens) {
       const tradeTypeJa = tradeTypeLabelJa(c.tradeType);
       const shipmentStateJa = shipmentStateLabelJa(c.shipmentState);
       const incidents = Array.isArray(c && c.incidents) ? c.incidents : [];
+      const movementStage = classifyTradeCaseToShelf(c);
       items.push({
         id: `case:${c.id}`,
         lens,
@@ -236,7 +347,9 @@ function deriveShelfItemsByLens(cases, viewLens) {
         subtitle: `${supplierName} ・ ${tradeTypeJa} ・ ${shipmentStateJa} ・ Updated ${updated} / incidents: ${
           incidents.length ? `あり(${incidents.length})` : "なし"
         }`,
-        statusBucket: classifyTradeCaseToShelf(c),
+        statusBucket: movementStage,
+        movementStage,
+        alerts: deriveAlerts(incidents, movementStage),
         sourceCaseIds: [c.id],
         sourceCases: [c],
         relatedRefs: { caseId: c.id },
@@ -284,14 +397,16 @@ function deriveShelfItemsByLens(cases, viewLens) {
         lens,
         title: siNo,
         subtitle: subtitleBits.join(" ・ "),
-        statusBucket: "出荷待ち",
+        statusBucket: "notArranged",
         sourceCaseIds,
         sourceCases,
         relatedRefs: { siNo, invoiceNos, blNumbers: uniqStrings(entry.bls) },
         incidents: entry.incidents,
         updatedAt,
       };
-      shelfItem.statusBucket = classifyShelfItemToBucket(shelfItem);
+      shelfItem.movementStage = classifyShelfItemToBucket(shelfItem);
+      shelfItem.statusBucket = shelfItem.movementStage;
+      shelfItem.alerts = deriveAlerts(shelfItem.incidents, shelfItem.movementStage);
       items.push(shelfItem);
     }
     return items;
@@ -323,14 +438,16 @@ function deriveShelfItemsByLens(cases, viewLens) {
           lens,
           title: invoiceNo,
           subtitle: subtitleBits.join(" ・ "),
-          statusBucket: "出荷待ち",
+          statusBucket: "notArranged",
           sourceCaseIds: [c.id],
           sourceCases: [c],
           relatedRefs: { invoiceNo, type: inv.type, relatedSiNo },
           incidents: Array.isArray(c.incidents) ? c.incidents : [],
           updatedAt: c.updatedAt || "",
         };
-        shelfItem.statusBucket = classifyShelfItemToBucket(shelfItem);
+        shelfItem.movementStage = classifyShelfItemToBucket(shelfItem);
+        shelfItem.statusBucket = shelfItem.movementStage;
+        shelfItem.alerts = deriveAlerts(shelfItem.incidents, shelfItem.movementStage);
         items.push(shelfItem);
       }
     }
@@ -371,14 +488,16 @@ function deriveShelfItemsByLens(cases, viewLens) {
         lens,
         title: blNo,
         subtitle: subtitleBits.join(" ・ "),
-        statusBucket: "出荷待ち",
+        statusBucket: "notArranged",
         sourceCaseIds: sourceCases.map((c) => c.id),
         sourceCases,
         relatedRefs: { blNo, siNos, invoiceNos },
         incidents: entry.incidents,
         updatedAt,
       };
-      shelfItem.statusBucket = classifyShelfItemToBucket(shelfItem);
+      shelfItem.movementStage = classifyShelfItemToBucket(shelfItem);
+      shelfItem.statusBucket = shelfItem.movementStage;
+      shelfItem.alerts = deriveAlerts(shelfItem.incidents, shelfItem.movementStage);
       items.push(shelfItem);
     }
     return items;
@@ -412,14 +531,16 @@ function deriveShelfItemsByLens(cases, viewLens) {
         lens,
         title: name,
         subtitle: subtitleBits.join(" ・ "),
-        statusBucket: "出荷待ち",
+        statusBucket: "notArranged",
         sourceCaseIds: sourceCases.map((c) => c.id),
         sourceCases,
         relatedRefs: { supplierName: name, caseIds: sourceCases.map((c) => c.id) },
         incidents: entry.incidents,
         updatedAt,
       };
-      shelfItem.statusBucket = classifyShelfItemToBucket(shelfItem);
+      shelfItem.movementStage = classifyShelfItemToBucket(shelfItem);
+      shelfItem.statusBucket = shelfItem.movementStage;
+      shelfItem.alerts = deriveAlerts(shelfItem.incidents, shelfItem.movementStage);
       items.push(shelfItem);
     }
     return items;
@@ -441,24 +562,26 @@ function deriveShelfItemsByLens(cases, viewLens) {
           typeof shortage === "number" ? `shortage ${shortage}pcs` : null,
         ].filter(Boolean);
 
-        const shelfItem = {
-          id: `incident:${inc.id}`,
-          lens,
-          title,
-          subtitle: subtitleBits.join(" ・ "),
-          statusBucket: "書類不足",
-          sourceCaseIds: [c.id],
-          sourceCases: [c],
-          relatedRefs: { incidentId: inc.id, incidentType: inc.type, siNos, invoiceNos },
-          incidents: [inc],
-          updatedAt: c.updatedAt || "",
-        };
-        shelfItem.statusBucket = classifyShelfItemToBucket(shelfItem);
-        items.push(shelfItem);
-      }
+      const shelfItem = {
+        id: `incident:${inc.id}`,
+        lens,
+        title,
+        subtitle: subtitleBits.join(" ・ "),
+        statusBucket: "notArranged",
+        sourceCaseIds: [c.id],
+        sourceCases: [c],
+        relatedRefs: { incidentId: inc.id, incidentType: inc.type, siNos, invoiceNos },
+        incidents: [inc],
+        updatedAt: c.updatedAt || "",
+      };
+      shelfItem.movementStage = classifyShelfItemToBucket(shelfItem);
+      shelfItem.statusBucket = shelfItem.movementStage;
+      shelfItem.alerts = deriveAlerts(shelfItem.incidents, shelfItem.movementStage);
+      items.push(shelfItem);
     }
-    return items;
   }
+  return items;
+}
 
   return items;
 }
@@ -533,6 +656,7 @@ function updateCounts() {
   if (elLast) elLast.textContent = state.lastSynced ? formatLocalTime(state.lastSynced) : "-";
 
   recomputeShelfItems();
+  ensureShelvesDom();
   for (const shelfName of shelves) {
     const el = document.querySelector(`.shelf[data-shelf="${shelfName}"] [data-count]`);
     if (!el) continue;
@@ -565,6 +689,7 @@ function renderInbox() {
 
 function renderShelves() {
   recomputeShelfItems();
+  ensureShelvesDom();
   for (const shelfName of shelves) {
     const body = document.querySelector(`.shelf[data-shelf="${shelfName}"] [data-body]`);
     if (!body) continue;
@@ -573,12 +698,23 @@ function renderShelves() {
     for (const shelfItem of items) {
       const card = document.createElement("div");
       card.className = "card";
-      const incidentCount = Array.isArray(shelfItem.incidents) ? shelfItem.incidents.length : 0;
-      if (incidentCount > 0) card.classList.add("card--incident");
+      const alerts = Array.isArray(shelfItem.alerts) ? shelfItem.alerts : [];
+      const hasSevereAlert = alerts.some((a) => a && (a.severity === "high" || a.severity === "critical"));
+      if (hasSevereAlert) card.classList.add("card--incident");
       card.dataset.id = shelfItem.id;
-      card.innerHTML = `<div class="card__title"></div><div class="card__body"></div>`;
+      card.innerHTML = `<div class="card__title"></div><div class="card__body"></div><div class="card__badges"></div>`;
       card.querySelector(".card__title").textContent = shelfItem.title;
       card.querySelector(".card__body").textContent = shelfItem.subtitle || "";
+      const badgesEl = card.querySelector(".card__badges");
+      if (badgesEl && alerts.length) {
+        for (const a of alerts) {
+          if (!a || !a.label) continue;
+          const pill = document.createElement("span");
+          pill.className = `pill pill--mini ${a.severity ? `pill--${a.severity}` : ""}`.trim();
+          pill.textContent = a.label;
+          badgesEl.appendChild(pill);
+        }
+      }
       card.addEventListener("click", () => {
         const caseId = Array.isArray(shelfItem.sourceCaseIds) ? shelfItem.sourceCaseIds[0] : "";
         const tc = caseId ? getTradeCaseById(caseId) : null;
@@ -1282,6 +1418,7 @@ function clearAll() {
   state.inboxItems = [];
   state.tradeCases = [];
   document.getElementById("inbox-items").innerHTML = "";
+  ensureShelvesDom();
   for (const shelfName of shelves) {
     const body = document.querySelector(`.shelf[data-shelf="${shelfName}"] [data-body]`);
     if (body) body.innerHTML = "";
