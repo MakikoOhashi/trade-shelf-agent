@@ -99,6 +99,70 @@ export type NextShipmentPlan = {
   note?: string;
 };
 
+export type InventorySnapshot = {
+  sku: string;
+  productName: string;
+  onHandQty: number;
+  allocatedQty: number;
+  availableQty: number;
+  warehouse?: string;
+  updatedAt: string;
+};
+
+export type SalesCommitment = {
+  id: string;
+  customerName: string;
+  sku: string;
+  committedQty: number;
+  requestedDeliveryDate: string;
+  priority: "low" | "medium" | "high";
+};
+
+export type InboundPlan = {
+  id: string;
+  sku: string;
+  qty: number;
+  eta: string;
+  status: "planned" | "booked" | "shipped" | "customs" | "warehousePending";
+  relatedSiNo?: string;
+  relatedInvoiceNo?: string;
+  relatedBlNo?: string;
+};
+
+export type SimilarPastCase = {
+  id: string;
+  title: string;
+  similarity: number;
+  issue: string;
+  decisionTaken: string;
+  outcome: string;
+};
+
+export type DecisionContext = {
+  caseId: string;
+  inventory: InventorySnapshot[];
+  salesCommitments: SalesCommitment[];
+  inboundPlans: InboundPlan[];
+  similarPastCases: SimilarPastCase[];
+  supplierReliability?: {
+    supplierName: string;
+    onTimeRate: number;
+    documentDelayRate: number;
+    commonIssues: string[];
+  };
+  agentRecommendation: {
+    summary: string;
+    reasoning: string[];
+    suggestedActionType:
+      | "markAsPartialShipment"
+      | "linkToNextShipment"
+      | "requestConfirmation"
+      | "escalate"
+      | "hold";
+    confidence: number;
+  };
+};
+
 export type DecisionOption = {
   id: string;
   title: string;
@@ -208,6 +272,7 @@ export type TradeCase = {
   tradeType: TradeType;
   supplier: Party;
   customer: Party;
+  decisionContext?: DecisionContext;
   /**
    * Operations graph refs (View Lens 用)
    * - SI / Invoice / BL / Shipment / Supplier などの識別子で同じ業務データを再構成する。

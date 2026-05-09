@@ -38,6 +38,67 @@ export const mockTradeCases = [
             country: "JP",
             contactEmail: "procurement@kansai-trading.example",
         },
+        decisionContext: {
+            caseId: "TC-2026-0001",
+            inventory: [
+                {
+                    sku: "UC-1M-BK",
+                    productName: "USB-C Cable 1m (Black)",
+                    onHandQty: 200,
+                    allocatedQty: 150,
+                    availableQty: 50,
+                    warehouse: "JP-Tokyo-01",
+                    updatedAt: "2026-05-08T01:00:00.000Z",
+                },
+            ],
+            salesCommitments: [
+                {
+                    id: "SC-2026-0001",
+                    customerName: "Customer A",
+                    sku: "UC-1M-BK",
+                    committedQty: 700,
+                    requestedDeliveryDate: "2026-05-15",
+                    priority: "high",
+                },
+            ],
+            inboundPlans: [
+                {
+                    id: "INB-2026-0001",
+                    sku: "UC-1M-BK",
+                    qty: 600,
+                    eta: "2026-05-12",
+                    status: "booked",
+                    relatedSiNo: "SI-2026-001",
+                },
+            ],
+            similarPastCases: [
+                {
+                    id: "HIS-2025-0412",
+                    title: "同一仕入先で INV 分納 → 次便で吸収し納期影響なし",
+                    similarity: 0.86,
+                    issue: "SI 数量に対し INV が分納（部分数量）のみ先行発行",
+                    decisionTaken: "分納として記録し、残数量を次便の出荷に紐づけ",
+                    outcome: "次便到着後に不足を吸収し、顧客納期は維持できた",
+                },
+            ],
+            supplierReliability: {
+                supplierName: "ACME Components (Shenzhen)",
+                onTimeRate: 0.82,
+                documentDelayRate: 0.28,
+                commonIssues: ["分納INV", "Packing List遅延"],
+            },
+            agentRecommendation: {
+                summary: "現有効在庫50pcsでは不足するが、次便600pcsが2026-05-12に予定されているため、分納として記録し、残数量を次便に紐づけるのが妥当",
+                reasoning: [
+                    "有効在庫（available）50pcsでは売約700pcsに不足",
+                    "次便600pcsが2026-05-12（booked）で到着見込み",
+                    "過去に同一仕入先で INV 分納があり、次便で吸収して問題なく完了した事例がある",
+                    "仕入先は onTimeRate 0.82 だが documentDelayRate 0.28 とやや高く、PL 遅延が起きやすい",
+                ],
+                suggestedActionType: "linkToNextShipment",
+                confidence: 0.74,
+            },
+        },
         products: [
             {
                 id: "P-USB-CABLE-01",

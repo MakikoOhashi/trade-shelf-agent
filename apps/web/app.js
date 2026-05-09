@@ -849,6 +849,205 @@ function renderTradeCaseDetail(tradeCase) {
     return "pill--low";
   }
 
+  function renderDecisionContext(decisionContext) {
+    if (!decisionContext) return `<div class="muted">(no decision context)</div>`;
+
+    const inventory = Array.isArray(decisionContext.inventory) ? decisionContext.inventory : [];
+    const salesCommitments = Array.isArray(decisionContext.salesCommitments) ? decisionContext.salesCommitments : [];
+    const inboundPlans = Array.isArray(decisionContext.inboundPlans) ? decisionContext.inboundPlans : [];
+    const similarPastCases = Array.isArray(decisionContext.similarPastCases) ? decisionContext.similarPastCases : [];
+    const supplierReliability = decisionContext.supplierReliability || null;
+    const agentRecommendation = decisionContext.agentRecommendation || null;
+
+    const availableBySku = Object.create(null);
+    for (const inv of inventory) {
+      const sku = String(inv && inv.sku ? inv.sku : "");
+      if (!sku) continue;
+      const available = typeof inv.availableQty === "number" ? inv.availableQty : 0;
+      availableBySku[sku] = (availableBySku[sku] || 0) + available;
+    }
+
+    const committedBySku = Object.create(null);
+    for (const sc of salesCommitments) {
+      const sku = String(sc && sc.sku ? sc.sku : "");
+      if (!sku) continue;
+      const qty = typeof sc.committedQty === "number" ? sc.committedQty : 0;
+      committedBySku[sku] = (committedBySku[sku] || 0) + qty;
+    }
+
+    const skuInsights = uniqStrings([...Object.keys(availableBySku), ...Object.keys(committedBySku)]).map((sku) => {
+      const available = availableBySku[sku] || 0;
+      const committed = committedBySku[sku] || 0;
+      const shortage = Math.max(0, committed - available);
+      return { sku, available, committed, shortage };
+    });
+
+    const skuInsightHtml = skuInsights.length
+      ? `<div class="decision-context__insights">
+          ${skuInsights
+            .map((x) => {
+              const ok = x.shortage <= 0;
+              const badge = ok
+                ? `<span class="pill pill--mini pill--ok">OK</span>`
+                : `<span class="pill pill--mini pill--warn">不足</span>`;
+              const msg = ok
+                ? `available ${x.available} / committed ${x.committed}`
+                : `available ${x.available} / committed ${x.committed} / shortage ${x.shortage}`;
+              return `<div class="decision-context__insight">${badge}<span class="mono">${escapeHtml(x.sku)}</span><span class="muted">${escapeHtml(
+                msg,
+              )}</span></div>`;
+            })
+            .join("")}
+        </div>`
+      : "";
+
+    const inventoryHtml = inventory.length
+      ? `<div class="evidence-table">
+          ${inventory
+            .map((x) => {
+              const updatedAt = x.updatedAt ? formatLocalTime(x.updatedAt) : "-";
+              return `<div class="evidence-row">
+                <div class="evidence-row__main"><span class="mono">${escapeHtml(x.sku)}</span> <span class="muted">${escapeHtml(
+                x.productName || "",
+              )}</span></div>
+                <div class="evidence-row__meta muted">onHand ${escapeHtml(String(x.onHandQty))} / allocated ${escapeHtml(
+                String(x.allocatedQty),
+              )} / available <strong>${escapeHtml(String(x.availableQty))}</strong></div>
+                <div class="evidence-row__meta muted">${escapeHtml(x.warehouse || "-")} ・ ${escapeHtml(updatedAt)}</div>
+              </div>`;
+            })
+            .join("")}
+        </div>`
+      : `<div class="muted">(none)</div>`;
+
+    const salesHtml = salesCommitments.length
+      ? `<div class="evidence-table">
+          ${salesCommitments
+            .map((x) => {
+              const pr = String(x.priority || "medium");
+              const prBadge =
+                pr === "high"
+                  ? `<span class="pill pill--mini pill--critical">HIGH</span>`
+                  : pr === "low"
+                    ? `<span class="pill pill--mini pill--muted">LOW</span>`
+                    : `<span class="pill pill--mini pill--medium">MED</span>`;
+              return `<div class="evidence-row">
+                <div class="evidence-row__main">${prBadge} <span class="mono">${escapeHtml(x.sku)}</span> <strong>${escapeHtml(
+                String(x.committedQty),
+              )}</strong> pcs</div>
+                <div class="evidence-row__meta muted">${escapeHtml(x.customerName)} ・ requested ${escapeHtml(
+                x.requestedDeliveryDate,
+              )}</div>
+              </div>`;
+            })
+            .join("")}
+        </div>`
+      : `<div class="muted">(none)</div>`;
+
+    const inboundHtml = inboundPlans.length
+      ? `<div class="evidence-table">
+          ${inboundPlans
+            .slice()
+            .sort((a, b) => String(a.eta || "").localeCompare(String(b.eta || "")))
+            .map((x) => {
+              const status = String(x.status || "");
+              const statusBadge = status
+                ? `<span class="pill pill--mini pill--muted">${escapeHtml(status)}</span>`
+                : "";
+              const refs = [x.relatedSiNo, x.relatedInvoiceNo, x.relatedBlNo].filter(Boolean).join(" / ");
+              return `<div class="evidence-row">
+                <div class="evidence-row__main">${statusBadge} <span class="mono">${escapeHtml(x.sku)}</span> <strong>${escapeHtml(
+                String(x.qty),
+              )}</strong> pcs</div>
+                <div class="evidence-row__meta muted">ETA ${escapeHtml(x.eta)}${refs ? ` ・ ${escapeHtml(refs)}` : ""}</div>
+              </div>`;
+            })
+            .join("")}
+        </div>`
+      : `<div class="muted">(none)</div>`;
+
+    const pastCasesHtml = similarPastCases.length
+      ? `<ul class="mini-list">
+          ${similarPastCases
+            .slice()
+            .sort((a, b) => (b.similarity || 0) - (a.similarity || 0))
+            .map((x) => {
+              const sim = typeof x.similarity === "number" ? `${Math.round(x.similarity * 100)}%` : "-";
+              return `<li><span class="pill pill--mini">${escapeHtml(sim)}</span> ${escapeHtml(x.title)}<div class="muted">${escapeHtml(
+                x.issue,
+              )}</div><div class="muted">Decision: ${escapeHtml(x.decisionTaken)} / Outcome: ${escapeHtml(x.outcome)}</div></li>`;
+            })
+            .join("")}
+        </ul>`
+      : `<div class="muted">(none)</div>`;
+
+    const supplierHtml = supplierReliability
+      ? `<div class="detail-block decision-context__supplier">
+          <div class="kv">
+            <div><span class="muted">supplier</span> ${escapeHtml(supplierReliability.supplierName)}</div>
+            <div><span class="muted">onTimeRate</span> ${escapeHtml(String(Math.round(supplierReliability.onTimeRate * 100)))}%</div>
+            <div><span class="muted">documentDelayRate</span> ${escapeHtml(
+              String(Math.round(supplierReliability.documentDelayRate * 100)),
+            )}%</div>
+          </div>
+          <div class="muted" style="margin-top:8px;">common issues: ${escapeHtml(
+            (supplierReliability.commonIssues || []).join(" / ") || "-",
+          )}</div>
+        </div>`
+      : `<div class="muted">(none)</div>`;
+
+    const agentHtml = agentRecommendation
+      ? `<div class="detail-block decision-context__agent">
+          <div class="decision-context__agent-top">
+            <div class="decision-context__agent-summary">${escapeHtml(agentRecommendation.summary || "-")}</div>
+            <div class="kv muted" style="margin-top:6px;">
+              <div><span class="muted">action</span> ${escapeHtml(agentRecommendation.suggestedActionType || "-")}</div>
+              <div><span class="muted">confidence</span> ${escapeHtml(
+                String(Math.round((agentRecommendation.confidence || 0) * 100)),
+              )}%</div>
+            </div>
+          </div>
+          ${
+            Array.isArray(agentRecommendation.reasoning) && agentRecommendation.reasoning.length
+              ? `<div class="detail-subhead" style="margin-top:10px;">Reasoning</div><ul class="mini-list">${agentRecommendation.reasoning
+                  .map((r) => `<li>${escapeHtml(r)}</li>`)
+                  .join("")}</ul>`
+              : ""
+          }
+        </div>`
+      : `<div class="muted">(none)</div>`;
+
+    return `
+      ${skuInsightHtml}
+      <div class="decision-context__grid">
+        <div class="decision-context__cell">
+          <div class="detail-subhead">Inventory / 在庫</div>
+          ${inventoryHtml}
+        </div>
+        <div class="decision-context__cell">
+          <div class="detail-subhead">Sales Commitments / 売約</div>
+          ${salesHtml}
+        </div>
+        <div class="decision-context__cell">
+          <div class="detail-subhead">Next Inbound / 次便予定</div>
+          ${inboundHtml}
+        </div>
+        <div class="decision-context__cell">
+          <div class="detail-subhead">Similar Past Cases / 類似過去案件</div>
+          ${pastCasesHtml}
+        </div>
+        <div class="decision-context__cell">
+          <div class="detail-subhead">Supplier Reliability / 仕入先傾向</div>
+          ${supplierHtml}
+        </div>
+        <div class="decision-context__cell">
+          <div class="detail-subhead">Agent Recommendation / AI判断案</div>
+          ${agentHtml}
+        </div>
+      </div>
+    `;
+  }
+
   const timelineHtml = timeline.length
     ? timeline
         .map((e) => {
@@ -1168,6 +1367,12 @@ function renderTradeCaseDetail(tradeCase) {
             <div class="decision-summary__row"><span class="muted">Deadline / ETA</span><span class="decision-summary__value">${escapeHtml(decisionSummary.eta)}</span></div>
             <div class="decision-summary__row"><span class="muted">Confidence</span><span class="decision-summary__value">${escapeHtml(decisionSummary.confidence)}</span></div>
           </div>
+        </section>
+
+        <section class="detail-section detail-section--context">
+          <h3 class="detail-section__title">Decision Context Panel</h3>
+          <div class="decision-context__note muted">AIが在庫・売約・次便・過去判断を照合し、担当者の判断材料を整理します。</div>
+          ${renderDecisionContext(tradeCase.decisionContext)}
         </section>
 
         <section class="detail-section detail-section--decision">
