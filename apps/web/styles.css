@@ -654,6 +654,299 @@ body {
   z-index: 1200;
 }
 
+/* Workspace modals: "Trade Desk" look (paper first, AI as helper) */
+.modal--workspace .modal__dialog {
+  background: radial-gradient(1200px 600px at 30% 10%, rgba(255, 250, 236, 0.96), rgba(238, 229, 205, 0.96));
+}
+
+.modal--workspace .modal__top {
+  background: linear-gradient(180deg, rgba(74, 52, 28, 0.92), rgba(56, 40, 20, 0.92));
+  border-bottom: 1px solid rgba(0, 0, 0, 0.28);
+}
+
+.modal--workspace .modal__title {
+  color: rgba(255, 248, 231, 0.92);
+}
+
+.modal--workspace .modal__body {
+  background: transparent;
+  border: 0;
+  color: rgba(40, 28, 18, 0.92);
+  padding: 16px;
+  margin: 12px 16px 16px;
+}
+
+.workspace-desk {
+  background: radial-gradient(800px 360px at 30% 15%, rgba(255, 252, 244, 0.55), rgba(255, 252, 244, 0)),
+    linear-gradient(180deg, rgba(236, 226, 201, 0.6), rgba(220, 205, 175, 0.6));
+  border: 1px solid rgba(72, 55, 30, 0.14);
+  border-radius: 18px;
+  padding: 14px;
+}
+
+.workspace-layout {
+  display: grid;
+  grid-template-columns: 320px 1fr 280px;
+  gap: 14px;
+  align-items: start;
+}
+
+.workspace-pane {
+  min-width: 0;
+}
+
+.workspace-pane--left,
+.workspace-pane--right {
+  display: grid;
+  gap: 10px;
+}
+
+.workspace-section {
+  border: 1px solid rgba(72, 55, 30, 0.14);
+  border-radius: 14px;
+  background: rgba(255, 252, 244, 0.58);
+  box-shadow: 0 10px 30px rgba(40, 28, 18, 0.06);
+  padding: 10px;
+}
+
+.workspace-section__title {
+  font-weight: 900;
+  color: rgba(40, 28, 18, 0.92);
+  font-size: 12px;
+  letter-spacing: 0.18px;
+  margin-bottom: 8px;
+}
+
+.workspace-kv {
+  display: grid;
+  gap: 6px;
+  font-size: 12px;
+  line-height: 1.35;
+  color: rgba(40, 28, 18, 0.9);
+}
+
+.workspace-role-note {
+  margin-top: 12px;
+  font-size: 12px;
+  color: rgba(40, 28, 18, 0.74);
+}
+
+.accordion {
+  border: 1px dashed rgba(72, 55, 30, 0.18);
+  border-radius: 12px;
+  background: rgba(255, 252, 244, 0.3);
+  padding: 8px 10px;
+  margin-top: 8px;
+}
+
+.accordion__summary {
+  cursor: pointer;
+  user-select: none;
+  font-weight: 800;
+  font-size: 12px;
+  color: rgba(40, 28, 18, 0.86);
+}
+
+.accordion__body {
+  margin-top: 8px;
+  color: rgba(40, 28, 18, 0.84);
+}
+
+.document-viewer {
+  border: 1px solid rgba(72, 55, 30, 0.14);
+  border-radius: 18px;
+  background: rgba(255, 252, 244, 0.6);
+  box-shadow: 0 16px 60px rgba(40, 28, 18, 0.08);
+  padding: 12px;
+}
+
+.document-tabs {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.document-tab {
+  border: 1px solid rgba(72, 55, 30, 0.2);
+  border-radius: 999px;
+  background: rgba(255, 252, 244, 0.8);
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 900;
+  color: rgba(40, 28, 18, 0.88);
+  cursor: pointer;
+}
+
+.document-tab.is-active {
+  border-color: rgba(64, 100, 68, 0.45);
+  box-shadow: 0 0 0 3px rgba(99, 168, 110, 0.12);
+}
+
+.document-tab.is-missing {
+  border-color: rgba(176, 88, 88, 0.45);
+  box-shadow: 0 0 0 3px rgba(248, 113, 113, 0.10);
+}
+
+.paper-document {
+  background: rgba(235, 223, 196, 0.32);
+  border: 1px solid rgba(72, 55, 30, 0.1);
+  border-radius: 14px;
+  padding: 18px;
+}
+
+.paper-page {
+  background: rgba(255, 255, 255, 0.98);
+  border: 1px solid rgba(20, 20, 20, 0.06);
+  border-radius: 12px;
+  box-shadow: 0 18px 50px rgba(20, 20, 20, 0.12);
+  padding: 18px 18px 14px;
+  min-height: 520px;
+}
+
+.paper-page__title {
+  font-weight: 1000;
+  letter-spacing: 0.22px;
+  color: rgba(32, 24, 18, 0.95);
+  font-size: 16px;
+}
+
+.paper-page__sub {
+  margin-top: 4px;
+  color: rgba(32, 24, 18, 0.62);
+  font-size: 12px;
+}
+
+.paper-page__grid {
+  margin-top: 12px;
+  display: grid;
+  gap: 8px;
+}
+
+.paper-row {
+  display: grid;
+  grid-template-columns: 140px 1fr;
+  gap: 8px 12px;
+  padding: 8px 10px;
+  border: 1px solid rgba(20, 20, 20, 0.05);
+  border-radius: 10px;
+  background: rgba(250, 250, 250, 0.92);
+}
+
+.paper-row__k {
+  font-weight: 900;
+  color: rgba(32, 24, 18, 0.82);
+  font-size: 12px;
+}
+
+.paper-row__v {
+  color: rgba(32, 24, 18, 0.9);
+  font-size: 12px;
+}
+
+.paper-row__note {
+  grid-column: 1 / -1;
+  color: rgba(32, 24, 18, 0.62);
+  font-size: 11px;
+}
+
+.paper-annotation {
+  margin-top: 12px;
+  border-left: 4px solid rgba(251, 191, 36, 0.72);
+  background: rgba(255, 242, 199, 0.72);
+  border-radius: 10px;
+  padding: 10px 10px 10px 12px;
+}
+
+.paper-annotation__title {
+  font-weight: 1000;
+  font-size: 12px;
+  color: rgba(56, 40, 20, 0.9);
+}
+
+.paper-annotation__body {
+  margin-top: 4px;
+  font-size: 12px;
+  color: rgba(56, 40, 20, 0.82);
+}
+
+.sticky-note {
+  border: 1px solid rgba(72, 55, 30, 0.18);
+  border-radius: 14px;
+  background: linear-gradient(180deg, rgba(255, 245, 191, 0.92), rgba(255, 238, 156, 0.92));
+  box-shadow: 0 18px 40px rgba(40, 28, 18, 0.10);
+  padding: 12px;
+  transform: rotate(-0.4deg);
+}
+
+.sticky-note__title {
+  font-weight: 1000;
+  font-size: 12px;
+  color: rgba(56, 40, 20, 0.92);
+  margin-bottom: 8px;
+}
+
+.sticky-note__list {
+  margin: 0;
+  padding-left: 18px;
+  color: rgba(56, 40, 20, 0.88);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.human-memo {
+  border: 1px solid rgba(72, 55, 30, 0.14);
+  border-radius: 14px;
+  background: rgba(255, 252, 244, 0.72);
+  box-shadow: 0 18px 40px rgba(40, 28, 18, 0.06);
+  padding: 12px;
+}
+
+.human-memo__title {
+  font-weight: 1000;
+  font-size: 12px;
+  color: rgba(56, 40, 20, 0.92);
+  margin-bottom: 8px;
+}
+
+.human-memo__list {
+  margin: 0;
+  padding-left: 18px;
+  color: rgba(56, 40, 20, 0.88);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.page-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed rgba(72, 55, 30, 0.22);
+  color: rgba(56, 40, 20, 0.74);
+  font-size: 12px;
+}
+
+.page-controls__count {
+  font-variant-numeric: tabular-nums;
+}
+
+.btn--mini {
+  padding: 6px 10px;
+  font-size: 12px;
+}
+
+@media (max-width: 980px) {
+  .workspace-layout {
+    grid-template-columns: 1fr;
+  }
+  .paper-page {
+    min-height: 420px;
+  }
+}
+
 .case-cover {
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 12px;

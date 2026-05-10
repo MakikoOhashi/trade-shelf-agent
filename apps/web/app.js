@@ -37,6 +37,11 @@ const state = {
    * @type {"case" | "si" | "invoice" | "bl" | "supplier" | "incident"}
    */
   currentViewLens: "case",
+  /**
+   * Workspace（Shipment / SI）内の Document Viewer UI state
+   * @type {Record<string, { activeDocId: string | null, activePageByDocId: Record<string, number> }>}
+   */
+  workspaceUiByModalId: {},
 };
 
 function ensureShelvesDom() {
@@ -775,6 +780,8 @@ function openWorkspaceModal(modalId, { title, bodyHtml }) {
   const body = modal.querySelector(".modal__body");
   if (modalTitle) modalTitle.textContent = title || "";
   if (body) body.innerHTML = typeof bodyHtml === "string" ? bodyHtml : "";
+  // Workspace modal body is interactive; keep the currently opened tradeCase id on the modal.
+  if (state.modalTradeCaseId) modal.setAttribute("data-tradecase-id", String(state.modalTradeCaseId));
   modal.classList.add("is-open");
   modal.setAttribute("aria-hidden", "false");
 }
@@ -784,12 +791,259 @@ function closeWorkspaceModal(modalId) {
   if (!modal) return;
   modal.classList.remove("is-open");
   modal.setAttribute("aria-hidden", "true");
+  modal.removeAttribute("data-tradecase-id");
 }
 
 function isAnyWorkspaceModalOpen() {
   const shipment = document.getElementById("shipment-workspace-modal");
   const si = document.getElementById("si-workspace-modal");
   return Boolean((shipment && shipment.classList.contains("is-open")) || (si && si.classList.contains("is-open")));
+}
+
+function getWorkspaceUi(modalId) {
+  if (!state.workspaceUiByModalId[modalId]) {
+    state.workspaceUiByModalId[modalId] = { activeDocId: null, activePageByDocId: {} };
+  }
+  return state.workspaceUiByModalId[modalId];
+}
+
+function ensureWorkspaceUiDefaults(modalId, documents) {
+  const ui = getWorkspaceUi(modalId);
+  const docIds = Array.isArray(documents) ? documents.map((d) => d && d.id).filter(Boolean) : [];
+  if (!docIds.length) return ui;
+
+  // keep activeDocId if still valid; otherwise pick the first available doc
+  if (!ui.activeDocId || !docIds.includes(ui.activeDocId)) ui.activeDocId = docIds[0];
+
+  for (const id of docIds) {
+    if (typeof ui.activePageByDocId[id] !== "number") ui.activePageByDocId[id] = 0;
+  }
+  return ui;
+}
+
+function clamp(n, min, max) {
+  return Math.max(min, Math.min(max, n));
+}
+
+function renderDocumentViewer(documents, { modalId, viewerKey }) {
+  const docs = Array.isArray(documents) ? documents.filter(Boolean) : [];
+  const ui = ensureWorkspaceUiDefaults(modalId, docs);
+  const activeDoc = docs.find((d) => d && d.id === ui.activeDocId) || docs[0] || null;
+  const activeDocId = activeDoc ? activeDoc.id : null;
+
+  const tabsHtml = `
+    <div class="document-tabs" role="tablist" aria-label="Documents">
+      ${docs
+        .map((d) => {
+          const isActive = Boolean(activeDocId && d.id === activeDocId);
+          const label = d.label || d.id;
+          const isMissing = d.status === "missing";
+          return `<button class="document-tab ${isActive ? "is-active" : ""} ${isMissing ? "is-missing" : ""}" type="button" role="tab"
+            aria-selected="${isActive ? "true" : "false"}"
+            data-doc-tab="${escapeHtml(d.id)}"
+            data-workspace-viewer="${escapeHtml(viewerKey)}"
+          >${escapeHtml(label)}${isMissing ? ` <span class="pill pill--mini pill--warn">missing</span>` : ""}</button>`;
+        })
+        .join("")}
+    </div>
+  `;
+
+  const pageCount = activeDoc && Array.isArray(activeDoc.mockPages) ? activeDoc.mockPages.length : 1;
+  const activePageIdxRaw = activeDocId ? ui.activePageByDocId[activeDocId] : 0;
+  const activePageIdx = clamp(typeof activePageIdxRaw === "number" ? activePageIdxRaw : 0, 0, Math.max(0, pageCount - 1));
+  if (activeDocId) ui.activePageByDocId[activeDocId] = activePageIdx;
+
+  let pageHtml = `<div class="paper-page"><div class="muted">No document</div></div>`;
+  if (activeDoc) {
+    if (activeDoc.status === "missing") {
+      pageHtml = `
+        <div class="paper-page">
+          <div class="paper-page__title">PACKING LIST</div>
+          <div class="paper-page__sub">Status: <span class="pill pill--mini pill--warn">Missing</span></div>
+          <div class="paper-page__block">
+            <div class="paper-annotation">
+              <div class="paper-annotation__title">AI Note</div>
+              <div class="paper-annotation__body">Packing List has not been received. Customs preparation may be blocked.</div>
+            </div>
+          </div>
+        </div>
+      `;
+    } else {
+      const pages = Array.isArray(activeDoc.mockPages) && activeDoc.mockPages.length ? activeDoc.mockPages : [{ title: activeDoc.title || activeDoc.type, rows: [] }];
+      const p = pages[activePageIdx] || pages[0];
+      const rows = Array.isArray(p.rows) ? p.rows : [];
+      pageHtml = `
+        <div class="paper-page">
+          <div class="paper-page__title">${escapeHtml(p.title || activeDoc.title || activeDoc.type || activeDoc.label || activeDoc.id)}</div>
+          ${p.subtitle ? `<div class="paper-page__sub">${escapeHtml(p.subtitle)}</div>` : ""}
+          <div class="paper-page__grid">
+            ${rows
+              .map((r) => {
+                const key = r && r.k != null ? String(r.k) : "";
+                const value = r && r.v != null ? String(r.v) : "";
+                const note = r && r.note ? String(r.note) : "";
+                const warn = r && r.warn ? String(r.warn) : "";
+                return `<div class="paper-row">
+                  <div class="paper-row__k">${escapeHtml(key)}</div>
+                  <div class="paper-row__v">${escapeHtml(value)}${warn ? ` <span class="pill pill--mini pill--warn">${escapeHtml(warn)}</span>` : ""}</div>
+                  ${note ? `<div class="paper-row__note">${escapeHtml(note)}</div>` : ""}
+                </div>`;
+              })
+              .join("")}
+          </div>
+          ${
+            p.annotation
+              ? `<div class="paper-annotation">
+                  <div class="paper-annotation__title">Annotation</div>
+                  <div class="paper-annotation__body">${escapeHtml(p.annotation)}</div>
+                </div>`
+              : ""
+          }
+        </div>
+      `;
+    }
+  }
+
+  const controlsHtml = `
+    <div class="page-controls">
+      <button class="btn btn--ghost btn--mini" type="button" data-doc-prev="1" data-workspace-viewer="${escapeHtml(viewerKey)}" ${activePageIdx <= 0 ? "disabled" : ""}>前のページ</button>
+      <div class="page-controls__count">page ${activePageIdx + 1} / ${pageCount}</div>
+      <button class="btn btn--ghost btn--mini" type="button" data-doc-next="1" data-workspace-viewer="${escapeHtml(viewerKey)}" ${activePageIdx >= pageCount - 1 ? "disabled" : ""}>次のページ</button>
+    </div>
+  `;
+
+  return `
+    <div class="document-viewer" data-doc-viewer="${escapeHtml(viewerKey)}">
+      ${tabsHtml}
+      <div class="paper-document" role="document" aria-label="Document page">
+        ${pageHtml}
+      </div>
+      ${controlsHtml}
+    </div>
+  `;
+}
+
+function buildShipmentWorkspaceDocuments(tradeCase) {
+  const sh = tradeCase && tradeCase.shipmentEntity ? tradeCase.shipmentEntity : null;
+  const si = tradeCase && tradeCase.siEntity ? tradeCase.siEntity : null;
+  const incidents = detectIncidents(tradeCase);
+  const mismatch = incidents.find((i) => i && i.type === "invoiceQuantityMismatch") || null;
+  const details = mismatch && mismatch.details && typeof mismatch.details === "object" ? mismatch.details : null;
+  const siQty = typeof details?.siQuantity === "number" ? details.siQuantity : null;
+  const invQty = typeof details?.invoiceQuantity === "number" ? details.invoiceQuantity : null;
+
+  return [
+    {
+      id: "inv-1122",
+      label: "INV-1122",
+      type: "Invoice",
+      title: "Commercial Invoice",
+      mockPages: [
+        {
+          title: "COMMERCIAL INVOICE",
+          subtitle: "Mock / paper view",
+          rows: [
+            { k: "Invoice No", v: "INV-1122" },
+            { k: "Supplier", v: "ACME Components (Shenzhen)" },
+            { k: "SI No", v: si?.siNo || "SI-2026-001" },
+            { k: "BL", v: sh?.blNo || "BL-SZX-7781" },
+            { k: "Item", v: "UC-1M-BK" },
+            { k: "Qty", v: invQty != null ? `${invQty} pcs` : "400 pcs", warn: siQty != null && invQty != null && siQty !== invQty ? `⚠ SI ${siQty}pcs` : "" },
+            { k: "Amount", v: "USD 12,800.00" },
+          ],
+          annotation: siQty != null && invQty != null && siQty !== invQty ? "⚠ Quantity mismatch detected" : "",
+        },
+      ],
+    },
+    {
+      id: "pl-missing",
+      label: "PL",
+      type: "Packing List",
+      status: "missing",
+    },
+    {
+      id: "bl-szx-7781",
+      label: "BL-SZX-7781",
+      type: "B/L",
+      title: "Bill of Lading",
+      mockPages: [
+        {
+          title: "BILL OF LADING",
+          subtitle: "Mock / paper view",
+          rows: [
+            { k: "B/L No", v: sh?.blNo || "BL-SZX-7781" },
+            { k: "Booking No", v: sh?.bookingNo || "BK-44521" },
+            { k: "Container", v: sh?.containerNo || "TCLU1234567" },
+            { k: "ETD", v: sh?.etd || "2026-05-03" },
+            { k: "ETA", v: sh?.eta || "2026-05-10" },
+            { k: "POL → POD", v: "Shenzhen → Tokyo" },
+          ],
+        },
+      ],
+    },
+  ];
+}
+
+function buildSiWorkspaceDocuments(tradeCase) {
+  const si = tradeCase && tradeCase.siEntity ? tradeCase.siEntity : null;
+  const salesCommitments = Array.isArray(tradeCase?.decisionContext?.salesCommitments) ? tradeCase.decisionContext.salesCommitments : [];
+  const first = salesCommitments[0] || null;
+
+  return [
+    {
+      id: "si-2026-001",
+      label: "SI-2026-001",
+      type: "Shipping Instruction",
+      title: "Shipping Instruction",
+      mockPages: [
+        {
+          title: "SHIPPING INSTRUCTION",
+          subtitle: "Mock / paper view",
+          rows: [
+            { k: "SI No", v: si?.siNo || "SI-2026-001" },
+            { k: "Requested delivery", v: si?.requestedDeliveryDate || "2026-05-20" },
+            { k: "Customer", v: first?.customerName || "Example Customer" },
+            { k: "SKU", v: first?.sku || "UC-1M-BK" },
+            { k: "Qty", v: first?.committedQty != null ? `${first.committedQty} pcs` : "1000 pcs" },
+          ],
+        },
+      ],
+    },
+    {
+      id: "sales-commitment",
+      label: "売約表",
+      type: "Sales Commitment",
+      title: "Sales Commitment",
+      mockPages: [
+        {
+          title: "売約表（Mock）",
+          subtitle: "Sales commitment sheet",
+          rows: [
+            { k: "Customer", v: first?.customerName || "Example Customer" },
+            { k: "SKU", v: first?.sku || "UC-1M-BK" },
+            { k: "Committed Qty", v: first?.committedQty != null ? String(first.committedQty) : "1000" },
+            { k: "Delivery date", v: first?.requestedDeliveryDate || si?.requestedDeliveryDate || "2026-05-20" },
+          ],
+        },
+      ],
+    },
+    {
+      id: "sales-response",
+      label: "営業回答",
+      type: "Sales Response",
+      title: "Sales Response",
+      mockPages: [
+        {
+          title: "営業回答（Mock）",
+          subtitle: "Short notes only",
+          rows: [
+            { k: "Answer", v: "分納でも可。AIR希望の可能性あり。" },
+            { k: "Customer impact", v: "納期遅延は要事前連絡。" },
+          ],
+        },
+      ],
+    },
+  ];
 }
 
 function renderShipmentWorkspace(tradeCase) {
@@ -820,47 +1074,84 @@ function renderShipmentWorkspace(tradeCase) {
     ? `<ul class="list">${incidents.map((i) => `<li>${escapeHtml(incidentTitleJa(i))} <span class="muted">(${escapeHtml(i.severity || "low")})</span></li>`).join("")}</ul>`
     : `<div class="muted">(no active risks)</div>`;
 
+  const documents = buildShipmentWorkspaceDocuments(tradeCase);
+  const viewerHtml = renderDocumentViewer(documents, { modalId: "shipment-workspace-modal", viewerKey: "shipment" });
+
+  const aiNotes = [
+    incidents.some((i) => i.type === "invoiceQuantityMismatch") ? "INV数量がSIと一致していません" : null,
+    docStatus.some((d) => String(d.docType || "").toLowerCase().includes("packing") && String(d.status || "").toLowerCase().includes("missing"))
+      ? "PLが未着です"
+      : "PLが未着です（mock）",
+    sh?.blNo ? "BLはBooking情報と紐づいています" : null,
+  ].filter(Boolean);
+
   return `
-    <div class="detail-section detail-section--summary">
-      <h3 class="detail-section__title">Shipment Workspace</h3>
-      <div class="detail__meta">
-        <div><span class="muted">Shipment ID:</span> <span class="mono">${escapeHtml(sh?.id || "-")}</span></div>
-        <div><span class="muted">BL:</span> <span class="mono">${escapeHtml(sh?.blNo || "-")}</span></div>
-        <div><span class="muted">Booking:</span> <span class="mono">${escapeHtml(sh?.bookingNo || "-")}</span></div>
-        <div><span class="muted">Container:</span> <span class="mono">${escapeHtml(sh?.containerNo || "-")}</span></div>
-        <div><span class="muted">ETA:</span> <span class="mono">${escapeHtml(sh?.eta || "-")}</span></div>
+    <div class="workspace-desk">
+      <div class="workspace-layout">
+        <aside class="workspace-pane workspace-pane--left" aria-label="Shipment summary">
+          <div class="workspace-section">
+            <div class="workspace-section__title">Shipment summary</div>
+            <div class="workspace-kv">
+              <div><span class="muted">Shipment</span> <span class="mono">${escapeHtml(sh?.id || "-")}</span></div>
+              <div><span class="muted">Booking</span> <span class="mono">${escapeHtml(sh?.bookingNo || "-")}</span></div>
+              <div><span class="muted">BL</span> <span class="mono">${escapeHtml(sh?.blNo || "-")}</span></div>
+              <div><span class="muted">Container</span> <span class="mono">${escapeHtml(sh?.containerNo || "-")}</span></div>
+              <div><span class="muted">ETA</span> <span class="mono">${escapeHtml(sh?.eta || "-")}</span></div>
+            </div>
+          </div>
+
+          <div class="workspace-section">
+            <div class="workspace-section__title">Invoice / docs</div>
+            <div class="case-cover__meta">${invHtml}</div>
+            <details class="accordion">
+              <summary class="accordion__summary">Document progress</summary>
+              <div class="accordion__body">${docHtml}</div>
+            </details>
+          </div>
+
+          <div class="workspace-section">
+            <div class="workspace-section__title">Shipment progress</div>
+            <details class="accordion">
+              <summary class="accordion__summary">Timeline</summary>
+              <div class="accordion__body">${timelineHtml}</div>
+            </details>
+          </div>
+
+          <div class="workspace-section">
+            <div class="workspace-section__title">Links</div>
+            <div class="workspace-kv">
+              <div><span class="muted">Case</span> <span class="mono">${escapeHtml(tradeCase?.id || "-")}</span></div>
+              <div><span class="muted">Related SI</span> <span class="mono">${escapeHtml(si?.siNo || "-")}</span></div>
+            </div>
+          </div>
+        </aside>
+
+        <main class="workspace-pane workspace-pane--center" aria-label="Document viewer">
+          ${viewerHtml}
+        </main>
+
+        <aside class="workspace-pane workspace-pane--right" aria-label="Notes">
+          <div class="sticky-note">
+            <div class="sticky-note__title">AI Notes</div>
+            ${aiNotes.length ? `<ul class="sticky-note__list">${aiNotes.map((x) => `<li>${escapeHtml(x)}</li>`).join("")}</ul>` : `<div class="muted">-</div>`}
+          </div>
+          <div class="human-memo">
+            <div class="human-memo__title">Human Memo</div>
+            <ul class="human-memo__list">
+              <li>仕入先へ5/9 12:00まで回答依頼中</li>
+              <li>営業AはAIR希望</li>
+            </ul>
+          </div>
+          <details class="accordion accordion--right">
+            <summary class="accordion__summary">Current shipment risks</summary>
+            <div class="accordion__body">${riskHtml}</div>
+          </details>
+        </aside>
+      </div>
+      <div class="workspace-role-note">
+        <span class="muted">UI note:</span> Shipment Workspace は「貨物と船積書類を見る」。問題と判断は Case detail に集約する。
       </div>
     </div>
-
-    <section class="detail-section">
-      <h3 class="detail-section__title">INV一覧</h3>
-      <div class="case-cover__meta">${invHtml}</div>
-    </section>
-
-    <section class="detail-section">
-      <h3 class="detail-section__title">Document progress</h3>
-      ${docHtml}
-    </section>
-
-    <section class="detail-section">
-      <h3 class="detail-section__title">Shipment timeline</h3>
-      ${timelineHtml}
-    </section>
-
-    <section class="detail-section">
-      <h3 class="detail-section__title">Related Cases</h3>
-      <div class="mono">${escapeHtml(tradeCase?.id || "-")}</div>
-    </section>
-
-    <section class="detail-section">
-      <h3 class="detail-section__title">Related SI</h3>
-      <div class="mono">${escapeHtml(si?.siNo || "-")}</div>
-    </section>
-
-    <section class="detail-section">
-      <h3 class="detail-section__title">Current shipment risks</h3>
-      ${riskHtml}
-    </section>
   `;
 }
 
@@ -884,35 +1175,74 @@ function renderSiWorkspace(tradeCase) {
   const relatedShipments = uniqStrings(si?.relatedShipmentIds || []);
   const relatedInvoices = uniqStrings(si?.relatedInvoiceNos || []);
 
+  const documents = buildSiWorkspaceDocuments(tradeCase);
+  const viewerHtml = renderDocumentViewer(documents, { modalId: "si-workspace-modal", viewerKey: "si" });
+
+  const aiNotes = [
+    si?.requestedDeliveryDate ? `顧客納期: ${si.requestedDeliveryDate}` : null,
+    relatedShipments.length ? "関連Shipmentを確認してください" : null,
+    relatedInvoices.length ? "関連INVを照合してください" : null,
+  ].filter(Boolean);
+
   return `
-    <div class="detail-section detail-section--summary">
-      <h3 class="detail-section__title">SI Workspace</h3>
-      <div class="detail__meta">
-        <div><span class="muted">SI No:</span> <span class="mono">${escapeHtml(si?.siNo || "-")}</span></div>
-        <div><span class="muted">顧客納期:</span> <span class="mono">${escapeHtml(si?.requestedDeliveryDate || "-")}</span></div>
-        <div><span class="muted">営業担当:</span> <span class="case-cover__meta">${ownersHtml}</span></div>
+    <div class="workspace-desk">
+      <div class="workspace-layout">
+        <aside class="workspace-pane workspace-pane--left" aria-label="SI summary">
+          <div class="workspace-section">
+            <div class="workspace-section__title">SI summary</div>
+            <div class="workspace-kv">
+              <div><span class="muted">SI No</span> <span class="mono">${escapeHtml(si?.siNo || "-")}</span></div>
+              <div><span class="muted">顧客納期</span> <span class="mono">${escapeHtml(si?.requestedDeliveryDate || "-")}</span></div>
+              <div><span class="muted">営業担当</span> <span class="case-cover__meta">${ownersHtml}</span></div>
+            </div>
+          </div>
+
+          <div class="workspace-section">
+            <div class="workspace-section__title">売約 / 営業回答</div>
+            <details class="accordion">
+              <summary class="accordion__summary">売約</summary>
+              <div class="accordion__body">${commitmentsHtml}</div>
+            </details>
+          </div>
+
+          <div class="workspace-section">
+            <div class="workspace-section__title">分納状況</div>
+            <div class="muted">（mock）INV 分納や次便紐付けの判断履歴をここに集約する</div>
+          </div>
+
+          <div class="workspace-section">
+            <div class="workspace-section__title">Related</div>
+            <details class="accordion">
+              <summary class="accordion__summary">Related shipments / invoices</summary>
+              <div class="accordion__body">
+                <div class="muted" style="margin-bottom:6px;">Shipments</div>
+                ${relatedShipments.length ? `<div class="case-cover__meta">${relatedShipments.map((x) => `<span class="pill pill--mini">${escapeHtml(x)}</span>`).join("")}</div>` : `<div class="muted">-</div>`}
+                <div class="muted" style="margin:10px 0 6px;">Invoices</div>
+                ${relatedInvoices.length ? `<div class="case-cover__meta">${relatedInvoices.map((x) => `<span class="pill pill--mini">${escapeHtml(x)}</span>`).join("")}</div>` : `<div class="muted">-</div>`}
+              </div>
+            </details>
+          </div>
+        </aside>
+
+        <main class="workspace-pane workspace-pane--center" aria-label="SI documents">
+          ${viewerHtml}
+        </main>
+
+        <aside class="workspace-pane workspace-pane--right" aria-label="Notes">
+          <div class="sticky-note">
+            <div class="sticky-note__title">AI Annotation / Delivery risk</div>
+            ${aiNotes.length ? `<ul class="sticky-note__list">${aiNotes.map((x) => `<li>${escapeHtml(x)}</li>`).join("")}</ul>` : `<div class="muted">-</div>`}
+          </div>
+          <div class="human-memo">
+            <div class="human-memo__title">Sales comments</div>
+            <div class="muted">（mock）営業コメントは短く。長文は Case detail に集約。</div>
+          </div>
+        </aside>
+      </div>
+      <div class="workspace-role-note">
+        <span class="muted">UI note:</span> SI Workspace は「販売約束と顧客納期を見る」。問題と判断は Case detail に集約する。
       </div>
     </div>
-
-    <section class="detail-section">
-      <h3 class="detail-section__title">売約</h3>
-      ${commitmentsHtml}
-    </section>
-
-    <section class="detail-section">
-      <h3 class="detail-section__title">関連Shipment</h3>
-      ${relatedShipments.length ? `<div class="case-cover__meta">${relatedShipments.map((x) => `<span class="pill pill--mini">${escapeHtml(x)}</span>`).join("")}</div>` : `<div class="muted">-</div>`}
-    </section>
-
-    <section class="detail-section">
-      <h3 class="detail-section__title">関連INV</h3>
-      ${relatedInvoices.length ? `<div class="case-cover__meta">${relatedInvoices.map((x) => `<span class="pill pill--mini">${escapeHtml(x)}</span>`).join("")}</div>` : `<div class="muted">-</div>`}
-    </section>
-
-    <section class="detail-section">
-      <h3 class="detail-section__title">分納状況</h3>
-      <div class="muted">（mock）INV 分納や次便紐付けの判断履歴をここに集約する</div>
-    </section>
   `;
 }
 
@@ -2300,6 +2630,44 @@ function setupWorkspaceModals() {
       if (!target) return;
       const closeEl = target.closest && target.closest("[data-close-workspace]");
       if (closeEl) closeWorkspaceModal(modalId);
+
+      const tabEl = target.closest && target.closest("[data-doc-tab]");
+      if (tabEl) {
+        const docId = tabEl.getAttribute("data-doc-tab");
+        const viewerKey = tabEl.getAttribute("data-workspace-viewer") || "";
+        const ui = getWorkspaceUi(modalId);
+        if (docId) {
+          ui.activeDocId = docId;
+          ui.activePageByDocId[docId] = 0;
+        }
+        const tradeCaseId = modalEl.getAttribute("data-tradecase-id");
+        const tc = tradeCaseId ? getTradeCaseById(tradeCaseId) : null;
+        if (tc) {
+          const body = modalEl.querySelector(".modal__body");
+          if (body) body.innerHTML = modalId === "shipment-workspace-modal" ? renderShipmentWorkspace(tc) : renderSiWorkspace(tc);
+        }
+        return;
+      }
+
+      const prevEl = target.closest && target.closest("[data-doc-prev]");
+      const nextEl = target.closest && target.closest("[data-doc-next]");
+      if (prevEl || nextEl) {
+        const ui = getWorkspaceUi(modalId);
+        if (!ui.activeDocId) return;
+        const documents = modalId === "shipment-workspace-modal" ? buildShipmentWorkspaceDocuments(getTradeCaseById(modalEl.getAttribute("data-tradecase-id") || "")) : buildSiWorkspaceDocuments(getTradeCaseById(modalEl.getAttribute("data-tradecase-id") || ""));
+        const activeDoc = Array.isArray(documents) ? documents.find((d) => d && d.id === ui.activeDocId) : null;
+        const pageCount = activeDoc && Array.isArray(activeDoc.mockPages) ? activeDoc.mockPages.length : 1;
+        const current = typeof ui.activePageByDocId[ui.activeDocId] === "number" ? ui.activePageByDocId[ui.activeDocId] : 0;
+        const nextPage = clamp(current + (nextEl ? 1 : -1), 0, Math.max(0, pageCount - 1));
+        ui.activePageByDocId[ui.activeDocId] = nextPage;
+        const tradeCaseId = modalEl.getAttribute("data-tradecase-id");
+        const tc = tradeCaseId ? getTradeCaseById(tradeCaseId) : null;
+        if (tc) {
+          const body = modalEl.querySelector(".modal__body");
+          if (body) body.innerHTML = modalId === "shipment-workspace-modal" ? renderShipmentWorkspace(tc) : renderSiWorkspace(tc);
+        }
+        return;
+      }
     });
   };
 
