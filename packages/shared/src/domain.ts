@@ -198,6 +198,34 @@ export type ResolutionWorkflow = {
   };
 };
 
+export type ProgressStatus =
+  | "done"
+  | "waiting"
+  | "missing"
+  | "blocked"
+  | "inProgress"
+  | "notStarted"
+  | "needsFix";
+
+export type ProgressItem = {
+  id: string;
+  label: string;
+  status: ProgressStatus;
+  note?: string;
+  blocking?: boolean;
+  updatedAt?: string;
+};
+
+export type CaseProgress = {
+  caseId: string;
+  overallPercent: number;
+  currentStatusLabel: string;
+  blockingSummary: string[];
+  documents: ProgressItem[];
+  bookingSchedule: ProgressItem[];
+  resolution: ProgressItem[];
+};
+
 export type DecisionContext = {
   caseId: string;
   inventory: InventorySnapshot[];
@@ -335,6 +363,7 @@ export type TradeCase = {
   tradeType: TradeType;
   supplier: Party;
   customer: Party;
+  caseProgress?: CaseProgress;
   decisionContext?: DecisionContext;
   /**
    * Operations graph refs (View Lens 用)

@@ -37,6 +37,31 @@ export const mockTradeCases: TradeCase[] = [
       country: "JP",
       contactEmail: "procurement@kansai-trading.example",
     },
+    caseProgress: {
+      caseId: "TC-2026-0001",
+      overallPercent: 42,
+      currentStatusLabel: "仕入先回答待ち",
+      blockingSummary: ["INV数量差異の理由未確認", "Packing List未着", "残600pcsの次便補充確定待ち"],
+      documents: [
+        { id: "si", label: "SI", status: "done", note: "1000pcs 指図済み" },
+        { id: "inv", label: "INV", status: "needsFix", note: "400pcsのみ。SIとの差異あり", blocking: true },
+        { id: "pl", label: "PL", status: "missing", note: "未着", blocking: true },
+        { id: "dpl", label: "DPL", status: "inProgress", note: "修正中 / 受領待ち" },
+        { id: "bl", label: "BL", status: "missing", note: "未着" },
+      ],
+      bookingSchedule: [
+        { id: "booking", label: "Booking", status: "done", note: "booking済み" },
+        { id: "etd", label: "ETD", status: "done", note: "2026-05-08" },
+        { id: "eta", label: "ETA", status: "done", note: "2026-05-12" },
+        { id: "vessel", label: "Vessel", status: "waiting", note: "船名確認待ち" },
+      ],
+      resolution: [
+        { id: "supplier-check", label: "Supplier check", status: "waiting", note: "数量差異理由の回答待ち", blocking: true },
+        { id: "next-shipment", label: "Next shipment", status: "waiting", note: "残600pcs補充可否確認待ち", blocking: true },
+        { id: "sales-check", label: "Sales check", status: "notStarted", note: "必要に応じて並行開始" },
+        { id: "final-decision", label: "Final decision", status: "notStarted", note: "未決定" },
+      ],
+    },
     decisionContext: {
       caseId: "TC-2026-0001",
       inventory: [

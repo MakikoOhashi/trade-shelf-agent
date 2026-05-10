@@ -1617,6 +1617,87 @@ function renderTradeCaseDetail(tradeCase) {
     </div>`;
   }
 
+  function renderCaseProgress(tradeCase) {
+    const cp = tradeCase && tradeCase.caseProgress ? tradeCase.caseProgress : null;
+    if (!cp) return "";
+
+    const percentRaw = Number(cp.overallPercent);
+    const percent = Number.isFinite(percentRaw) ? Math.max(0, Math.min(100, Math.round(percentRaw))) : 0;
+    const wfCurrentLabel = (() => {
+      const dc = tradeCase && tradeCase.decisionContext ? tradeCase.decisionContext : null;
+      const wf = dc && dc.resolutionWorkflow ? dc.resolutionWorkflow : null;
+      const steps = wf && Array.isArray(wf.steps) ? wf.steps : [];
+      const current = wf && wf.currentStepId ? steps.find((s) => s && s.id === wf.currentStepId) : null;
+      const label = current && current.label ? current.label : "";
+      return label ? String(label) : "";
+    })();
+
+    const iconFor = (st) => {
+      const s = String(st || "");
+      if (s === "done") return "✅";
+      if (s === "waiting") return "⏳";
+      if (s === "missing") return "❌";
+      if (s === "blocked") return "⛔";
+      if (s === "inProgress") return "🔄";
+      if (s === "notStarted") return "○";
+      if (s === "needsFix") return "⚠️";
+      return "•";
+    };
+
+    const renderItems = (items) => {
+      const list = Array.isArray(items) ? items : [];
+      if (list.length === 0) return `<div class="muted">(no items)</div>`;
+      return `<ul class="progress-list">${list
+        .map((it) => {
+          if (!it) return "";
+          const label = it.label || it.id || "-";
+          const note = it.note ? `<div class="progress-item__note">${escapeHtml(String(it.note))}</div>` : "";
+          const blockingBadge = it.blocking ? `<span class="pill pill--mini pill--high">blocking</span>` : "";
+          return `<li class="progress-item ${it.blocking ? "is-blocking" : ""}">
+            <div class="progress-item__main">
+              <span class="progress-item__icon">${escapeHtml(iconFor(it.status))}</span>
+              <span class="progress-item__label">${escapeHtml(String(label))}</span>
+              ${blockingBadge}
+            </div>
+            ${note}
+          </li>`;
+        })
+        .join("")}</ul>`;
+    };
+
+    const blocking = Array.isArray(cp.blockingSummary) ? cp.blockingSummary : [];
+    const blockingHtml = blocking.length
+      ? `<div class="detail-subhead">Blocking Summary</div><ul class="mini-list">${blocking.map((x) => `<li>${escapeHtml(String(x))}</li>`).join("")}</ul>`
+      : "";
+
+    return `<section class="detail-section detail-section--progress">
+      <h3 class="detail-section__title">Case Progress / 進捗</h3>
+      <div class="progress-top">
+        <div class="progress-bar" role="progressbar" aria-valuenow="${escapeHtml(String(percent))}" aria-valuemin="0" aria-valuemax="100">
+          <div class="progress-bar__fill" style="width:${escapeHtml(String(percent))}%"></div>
+        </div>
+        <div class="progress-top__meta">
+          <div class="progress-top__percent">${escapeHtml(String(percent))}% <span class="muted">complete</span></div>
+          <div class="progress-top__status"><span class="muted">現在:</span> ${escapeHtml(cp.currentStatusLabel || "-")}</div>
+          ${wfCurrentLabel ? `<div class="progress-top__workflow"><span class="muted">workflow:</span> ${escapeHtml(wfCurrentLabel)}</div>` : ""}
+        </div>
+      </div>
+
+      ${blockingHtml}
+
+      <div class="progress-help muted">AIが書類・船積予定・確認手順を照合し、対応進捗を更新します。</div>
+
+      <div class="detail-subhead">Documents / 書類</div>
+      ${renderItems(cp.documents)}
+
+      <div class="detail-subhead">Booking &amp; Schedule / Booking・船積予定</div>
+      ${renderItems(cp.bookingSchedule)}
+
+      <div class="detail-subhead">Resolution / 対応進捗</div>
+      ${renderItems(cp.resolution)}
+    </section>`;
+  }
+
   function renderResolutionWorkflow(tradeCase) {
     const dc = tradeCase && tradeCase.decisionContext ? tradeCase.decisionContext : null;
     const wf = dc && dc.resolutionWorkflow ? dc.resolutionWorkflow : null;
@@ -1738,6 +1819,8 @@ function renderTradeCaseDetail(tradeCase) {
               <div>${escapeHtml(decisionSummary.mainIssue)}</div>
             </div>
           </section>
+
+          ${renderCaseProgress(tradeCase)}
 
           <section class="detail-section">
             <h3 class="detail-section__title">Decision History / Timeline</h3>
