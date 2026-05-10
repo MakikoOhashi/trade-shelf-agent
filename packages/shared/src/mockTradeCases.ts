@@ -24,6 +24,23 @@ export const mockTradeCases: TradeCase[] = [
     ],
     blNumbers: ["BL-SZX-7781"],
     shipmentRefs: ["SHP-2026-009"],
+    shipmentEntity: {
+      id: "SHP-2026-009",
+      blNo: "BL-SZX-7781",
+      bookingNo: "BK-88201",
+      containerNo: "TCLU-998877",
+      supplierInvoices: ["INV-1122", "INV-1240"],
+      eta: "2026-05-12",
+      shipmentState: "shippingPending",
+    },
+    siEntity: {
+      id: "SIE-2026-001",
+      siNo: "SI-2026-001",
+      requestedDeliveryDate: "2026-05-15",
+      relatedShipmentIds: ["SHP-2026-009"],
+      relatedInvoiceNos: ["INV-1122", "INV-1240"],
+      salesOwners: ["営業A", "営業B"],
+    },
     supplierIds: ["SUP-ACME"],
     supplier: {
       id: "SUP-CHN-ACME",

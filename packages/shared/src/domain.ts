@@ -1,5 +1,27 @@
 export type TradeType = "import" | "triangular";
 
+export type OperationalEntityType = "case" | "shipment" | "si";
+
+export type ShipmentEntity = {
+  id: string;
+  blNo?: string;
+  bookingNo?: string;
+  containerNo?: string;
+  supplierInvoices?: string[];
+  switchInvoices?: string[];
+  eta?: string;
+  shipmentState?: string;
+};
+
+export type SIEntity = {
+  id: string;
+  siNo: string;
+  requestedDeliveryDate?: string;
+  relatedShipmentIds?: string[];
+  relatedInvoiceNos?: string[];
+  salesOwners?: string[];
+};
+
 export type ShipmentState =
   | "notArranged"
   | "bookingRequested"
@@ -363,6 +385,8 @@ export type TradeCase = {
   tradeType: TradeType;
   supplier: Party;
   customer: Party;
+  shipmentEntity?: ShipmentEntity;
+  siEntity?: SIEntity;
   caseProgress?: CaseProgress;
   decisionContext?: DecisionContext;
   /**

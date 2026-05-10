@@ -768,6 +768,154 @@ function closeModal() {
   state.activeContextDrawer = null;
 }
 
+function openWorkspaceModal(modalId, { title, bodyHtml }) {
+  const modal = document.getElementById(modalId);
+  if (!modal) return;
+  const modalTitle = modal.querySelector(".modal__title");
+  const body = modal.querySelector(".modal__body");
+  if (modalTitle) modalTitle.textContent = title || "";
+  if (body) body.innerHTML = typeof bodyHtml === "string" ? bodyHtml : "";
+  modal.classList.add("is-open");
+  modal.setAttribute("aria-hidden", "false");
+}
+
+function closeWorkspaceModal(modalId) {
+  const modal = document.getElementById(modalId);
+  if (!modal) return;
+  modal.classList.remove("is-open");
+  modal.setAttribute("aria-hidden", "true");
+}
+
+function isAnyWorkspaceModalOpen() {
+  const shipment = document.getElementById("shipment-workspace-modal");
+  const si = document.getElementById("si-workspace-modal");
+  return Boolean((shipment && shipment.classList.contains("is-open")) || (si && si.classList.contains("is-open")));
+}
+
+function renderShipmentWorkspace(tradeCase) {
+  const sh = tradeCase && tradeCase.shipmentEntity ? tradeCase.shipmentEntity : null;
+  const si = tradeCase && tradeCase.siEntity ? tradeCase.siEntity : null;
+  const incidents = detectIncidents(tradeCase).filter((i) => i && i.status !== "resolved");
+
+  const invs = uniqStrings([...(sh?.supplierInvoices || []), ...(sh?.switchInvoices || [])]);
+  const invHtml = invs.length ? invs.map((x) => `<span class="pill pill--mini">${escapeHtml(x)}</span>`).join("") : `<span class="muted">-</span>`;
+
+  const docStatus = Array.isArray(tradeCase?.decisionContext?.documentStatus) ? tradeCase.decisionContext.documentStatus : [];
+  const docHtml = docStatus.length
+    ? `<ul class="list">${docStatus
+        .map((d) => `<li><span class="pill pill--mini pill--muted">${escapeHtml(d.docType)}</span> ${escapeHtml(d.status)} ${
+          d.riskNote ? `<span class="muted">- ${escapeHtml(d.riskNote)}</span>` : ""
+        }</li>`)
+        .join("")}</ul>`
+    : `<div class="muted">(none)</div>`;
+
+  const bookingSchedule = Array.isArray(tradeCase?.caseProgress?.bookingSchedule) ? tradeCase.caseProgress.bookingSchedule : [];
+  const timelineHtml = bookingSchedule.length
+    ? `<ul class="list">${bookingSchedule
+        .map((x) => `<li><span class="pill pill--mini pill--muted">${escapeHtml(x.label)}</span> ${escapeHtml(x.status)} <span class="muted">${escapeHtml(x.note || "")}</span></li>`)
+        .join("")}</ul>`
+    : `<div class="muted">(none)</div>`;
+
+  const riskHtml = incidents.length
+    ? `<ul class="list">${incidents.map((i) => `<li>${escapeHtml(incidentTitleJa(i))} <span class="muted">(${escapeHtml(i.severity || "low")})</span></li>`).join("")}</ul>`
+    : `<div class="muted">(no active risks)</div>`;
+
+  return `
+    <div class="detail-section detail-section--summary">
+      <h3 class="detail-section__title">Shipment Workspace</h3>
+      <div class="detail__meta">
+        <div><span class="muted">Shipment ID:</span> <span class="mono">${escapeHtml(sh?.id || "-")}</span></div>
+        <div><span class="muted">BL:</span> <span class="mono">${escapeHtml(sh?.blNo || "-")}</span></div>
+        <div><span class="muted">Booking:</span> <span class="mono">${escapeHtml(sh?.bookingNo || "-")}</span></div>
+        <div><span class="muted">Container:</span> <span class="mono">${escapeHtml(sh?.containerNo || "-")}</span></div>
+        <div><span class="muted">ETA:</span> <span class="mono">${escapeHtml(sh?.eta || "-")}</span></div>
+      </div>
+    </div>
+
+    <section class="detail-section">
+      <h3 class="detail-section__title">INV一覧</h3>
+      <div class="case-cover__meta">${invHtml}</div>
+    </section>
+
+    <section class="detail-section">
+      <h3 class="detail-section__title">Document progress</h3>
+      ${docHtml}
+    </section>
+
+    <section class="detail-section">
+      <h3 class="detail-section__title">Shipment timeline</h3>
+      ${timelineHtml}
+    </section>
+
+    <section class="detail-section">
+      <h3 class="detail-section__title">Related Cases</h3>
+      <div class="mono">${escapeHtml(tradeCase?.id || "-")}</div>
+    </section>
+
+    <section class="detail-section">
+      <h3 class="detail-section__title">Related SI</h3>
+      <div class="mono">${escapeHtml(si?.siNo || "-")}</div>
+    </section>
+
+    <section class="detail-section">
+      <h3 class="detail-section__title">Current shipment risks</h3>
+      ${riskHtml}
+    </section>
+  `;
+}
+
+function renderSiWorkspace(tradeCase) {
+  const si = tradeCase && tradeCase.siEntity ? tradeCase.siEntity : null;
+  const salesCommitments = Array.isArray(tradeCase?.decisionContext?.salesCommitments) ? tradeCase.decisionContext.salesCommitments : [];
+  const commitmentsHtml = salesCommitments.length
+    ? `<ul class="list">${salesCommitments
+        .map(
+          (x) =>
+            `<li><span class="pill pill--mini pill--muted">${escapeHtml(x.customerName)}</span> <span class="mono">${escapeHtml(
+              x.sku,
+            )}</span> qty ${escapeHtml(String(x.committedQty))} / delivery <span class="mono">${escapeHtml(x.requestedDeliveryDate)}</span></li>`,
+        )
+        .join("")}</ul>`
+    : `<div class="muted">(none)</div>`;
+
+  const owners = uniqStrings(si?.salesOwners || []);
+  const ownersHtml = owners.length ? owners.map((x) => `<span class="pill pill--mini">${escapeHtml(x)}</span>`).join("") : `<span class="muted">-</span>`;
+
+  const relatedShipments = uniqStrings(si?.relatedShipmentIds || []);
+  const relatedInvoices = uniqStrings(si?.relatedInvoiceNos || []);
+
+  return `
+    <div class="detail-section detail-section--summary">
+      <h3 class="detail-section__title">SI Workspace</h3>
+      <div class="detail__meta">
+        <div><span class="muted">SI No:</span> <span class="mono">${escapeHtml(si?.siNo || "-")}</span></div>
+        <div><span class="muted">顧客納期:</span> <span class="mono">${escapeHtml(si?.requestedDeliveryDate || "-")}</span></div>
+        <div><span class="muted">営業担当:</span> <span class="case-cover__meta">${ownersHtml}</span></div>
+      </div>
+    </div>
+
+    <section class="detail-section">
+      <h3 class="detail-section__title">売約</h3>
+      ${commitmentsHtml}
+    </section>
+
+    <section class="detail-section">
+      <h3 class="detail-section__title">関連Shipment</h3>
+      ${relatedShipments.length ? `<div class="case-cover__meta">${relatedShipments.map((x) => `<span class="pill pill--mini">${escapeHtml(x)}</span>`).join("")}</div>` : `<div class="muted">-</div>`}
+    </section>
+
+    <section class="detail-section">
+      <h3 class="detail-section__title">関連INV</h3>
+      ${relatedInvoices.length ? `<div class="case-cover__meta">${relatedInvoices.map((x) => `<span class="pill pill--mini">${escapeHtml(x)}</span>`).join("")}</div>` : `<div class="muted">-</div>`}
+    </section>
+
+    <section class="detail-section">
+      <h3 class="detail-section__title">分納状況</h3>
+      <div class="muted">（mock）INV 分納や次便紐付けの判断履歴をここに集約する</div>
+    </section>
+  `;
+}
+
 function renderTradeCaseDetail(tradeCase) {
   const documents = Array.isArray(tradeCase.documents) ? tradeCase.documents : [];
   const timeline = Array.isArray(tradeCase.timeline) ? tradeCase.timeline : [];
@@ -825,6 +973,48 @@ function renderTradeCaseDetail(tradeCase) {
         )
         .join("")
     : "<li class=\"muted\">(none)</li>";
+
+  function renderOperationalEntities(tc) {
+    const shipment = tc && tc.shipmentEntity ? tc.shipmentEntity : null;
+    const si = tc && tc.siEntity ? tc.siEntity : null;
+
+    const shipRows = shipment
+      ? [
+          shipment.blNo ? `<div><span class="muted">BL</span> <span class="mono">${escapeHtml(shipment.blNo)}</span></div>` : null,
+          shipment.bookingNo ? `<div><span class="muted">Booking</span> <span class="mono">${escapeHtml(shipment.bookingNo)}</span></div>` : null,
+          shipment.eta ? `<div><span class="muted">ETA</span> <span class="mono">${escapeHtml(shipment.eta)}</span></div>` : null,
+        ].filter(Boolean)
+      : [];
+
+    const siRows = si
+      ? [
+          si.siNo ? `<div><span class="muted">SI</span> <span class="mono">${escapeHtml(si.siNo)}</span></div>` : null,
+          si.requestedDeliveryDate
+            ? `<div><span class="muted">Delivery</span> <span class="mono">${escapeHtml(si.requestedDeliveryDate)}</span></div>`
+            : null,
+        ].filter(Boolean)
+      : [];
+
+    if (!shipment && !si) return "";
+
+    return `<section class="detail-section">
+      <h3 class="detail-section__title">Operational Entities / 関連主体</h3>
+      <div class="detail-block">
+        <div class="detail-subhead">Shipment</div>
+        ${shipment ? `<div class="detail__meta">${shipRows.join("") || `<div class="muted">-</div>`}</div>` : `<div class="muted">(none)</div>`}
+        ${
+          shipment
+            ? `<div class="action-row"><button class="btn btn--primary" type="button" data-open-shipment-workspace="1">Shipment Workspace を開く</button></div>`
+            : ""
+        }
+      </div>
+      <div class="detail-block">
+        <div class="detail-subhead">SI</div>
+        ${si ? `<div class="detail__meta">${siRows.join("") || `<div class="muted">-</div>`}</div>` : `<div class="muted">(none)</div>`}
+        ${si ? `<div class="action-row"><button class="btn btn--primary" type="button" data-open-si-workspace="1">SI Workspace を開く</button></div>` : ""}
+      </div>
+    </section>`;
+  }
 
   function incidentTypeLabel(type) {
     const t = String(type || "");
@@ -1783,6 +1973,7 @@ function renderTradeCaseDetail(tradeCase) {
 
   const activeDrawerKey = state.activeContextDrawer;
   const drawerIsOpen = Boolean(activeDrawerKey);
+  const operationalEntitiesHtml = renderOperationalEntities(tradeCase);
 
   openModal({
     title: `案件詳細`,
@@ -1819,6 +2010,8 @@ function renderTradeCaseDetail(tradeCase) {
               <div>${escapeHtml(decisionSummary.mainIssue)}</div>
             </div>
           </section>
+
+          ${operationalEntitiesHtml}
 
           ${renderCaseProgress(tradeCase)}
 
@@ -2014,6 +2207,20 @@ function setupModal() {
     if (!target) return;
     if (target.matches("[data-close]")) closeModal();
 
+    const openShipmentWorkspaceEl = target.closest && target.closest("[data-open-shipment-workspace]");
+    if (openShipmentWorkspaceEl) {
+      const tc = state.modalTradeCaseId ? getTradeCaseById(state.modalTradeCaseId) : null;
+      if (tc) openWorkspaceModal("shipment-workspace-modal", { title: "Shipment Workspace", bodyHtml: renderShipmentWorkspace(tc) });
+      return;
+    }
+
+    const openSiWorkspaceEl = target.closest && target.closest("[data-open-si-workspace]");
+    if (openSiWorkspaceEl) {
+      const tc = state.modalTradeCaseId ? getTradeCaseById(state.modalTradeCaseId) : null;
+      if (tc) openWorkspaceModal("si-workspace-modal", { title: "SI Workspace", bodyHtml: renderSiWorkspace(tc) });
+      return;
+    }
+
     const contextCloseEl = target.closest && target.closest("[data-context-close]");
     if (contextCloseEl) {
       state.activeContextDrawer = null;
@@ -2072,8 +2279,32 @@ function setupModal() {
   });
 
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") closeModal();
+    if (e.key !== "Escape") return;
+    if (isAnyWorkspaceModalOpen()) {
+      closeWorkspaceModal("shipment-workspace-modal");
+      closeWorkspaceModal("si-workspace-modal");
+      return;
+    }
+    closeModal();
   });
+}
+
+function setupWorkspaceModals() {
+  const shipment = document.getElementById("shipment-workspace-modal");
+  const si = document.getElementById("si-workspace-modal");
+
+  const attach = (modalEl, modalId) => {
+    if (!modalEl) return;
+    modalEl.addEventListener("click", (e) => {
+      const target = e.target;
+      if (!target) return;
+      const closeEl = target.closest && target.closest("[data-close-workspace]");
+      if (closeEl) closeWorkspaceModal(modalId);
+    });
+  };
+
+  attach(shipment, "shipment-workspace-modal");
+  attach(si, "si-workspace-modal");
 }
 
 // Manual upload modal (separate from trade case detail modal)
@@ -2170,6 +2401,7 @@ function main() {
   setupDropzone();
   setupTextAdd();
   setupModal();
+  setupWorkspaceModals();
   setupManualModal();
   setupTopActions();
   setupViewLens();

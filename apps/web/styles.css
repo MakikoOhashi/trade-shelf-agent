@@ -635,7 +635,7 @@ body {
   background: var(--bg);
 }
 
-.modal--tradecase #btn-back {
+.modal--tradecase .btn--back {
   position: relative;
   z-index: 1200;
   pointer-events: auto;
@@ -647,6 +647,11 @@ body {
   flex: 1;
   overflow: auto;
   margin: 12px 16px 16px;
+}
+
+/* Operational entity workspaces sit above the case detail modal */
+.modal--workspace {
+  z-index: 1200;
 }
 
 .case-cover {

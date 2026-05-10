@@ -131,31 +131,73 @@ TradeCase は以下のように進む。
 
 ---
 
-##構造
+# Operational Entities
 
-###Case
+Trade Shelf Agent は trade operations を複数 entity で扱う。
 
-###問題単位
+## Case
+
+問題・異常・判断単位
+
+例:
 
 - 数量差異
 - ETA変更
 - 書類不足
+- 納期リスク
 
-###Shipment
+Case は incident / decision / coordination の中心。
 
-###物流単位
+---
+
+## Shipment
+
+物流単位
+
+例:
 
 - BL
-- Container
 - Booking
-- INV
+- Container
+- Supplier INV
+- Switch INV
 - ETA
 
-###SI
+Shipment は「貨物の現在地」を表す。
 
-###需要・販売約束単位
+1 Shipment が:
+
+- 複数INV
+- 複数SKU
+- 複数顧客
+- 複数営業
+
+へ影響する場合がある。
+
+---
+
+## SI
+
+需要・販売約束単位
+
+例:
 
 - 顧客納期
 - 売約
 - 営業回答
 - 分納判断
+- AIR切替
+
+SI は「販売側の約束」を表す。
+
+1 SI が:
+
+- 複数Shipment
+- 複数INV
+- 分納
+
+へ分割される場合がある。
+
+---
+
+Trade Shelf Agent は、これらを Trade Operations Graph として接続する。
