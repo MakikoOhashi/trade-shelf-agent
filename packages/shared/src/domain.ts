@@ -148,6 +148,11 @@ export type StakeholderResponse = {
   deadline: string;
   escalationRule: string;
   note?: string;
+  /**
+   * AI summary comment generated from Teams/email threads (future).
+   * Display alongside stakeholder response for quick triage.
+   */
+  aiComment?: string;
 };
 
 export type DocumentStatus = {
@@ -155,6 +160,42 @@ export type DocumentStatus = {
   docType: "SI" | "INV" | "PL" | "BL";
   status: "missing" | "received";
   riskNote?: string;
+};
+
+export type ResolutionStepStatus =
+  | "notStarted"
+  | "waiting"
+  | "confirmed"
+  | "blocked"
+  | "skipped"
+  | "escalated";
+
+export type ResolutionStep = {
+  id: string;
+  label: string;
+  ownerType: "supplier" | "forwarder" | "sales" | "warehouse" | "internal";
+  ownerName?: string;
+  status: ResolutionStepStatus;
+  question: string;
+  expectedAnswer?: string;
+  receivedAnswer?: string;
+  dueAt?: string;
+  blockingDecision: boolean;
+  nextIfConfirmed?: string;
+  nextIfRejected?: string;
+  nextIfNoReply?: string;
+};
+
+export type ResolutionWorkflow = {
+  caseId: string;
+  incidentId?: string;
+  currentStepId: string;
+  steps: ResolutionStep[];
+  fallbackRoute?: {
+    triggerCondition: string;
+    suggestedAction: string;
+    escalationTarget?: string;
+  };
 };
 
 export type DecisionContext = {
@@ -165,6 +206,7 @@ export type DecisionContext = {
   similarPastCases: SimilarPastCase[];
   stakeholderResponses?: StakeholderResponse[];
   documentStatus?: DocumentStatus[];
+  resolutionWorkflow?: ResolutionWorkflow;
   supplierReliability?: {
     supplierName: string;
     onTimeRate: number;
@@ -345,6 +387,8 @@ export type HumanInterventionType =
   | "markAsNoIssue"
   | "escalate"
   | "requestConfirmation"
+  | "startSalesCheck"
+  | "considerAirSwitch"
   | "hold";
 
 export type HumanIntervention = {

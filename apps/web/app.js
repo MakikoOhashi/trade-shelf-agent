@@ -1337,6 +1337,9 @@ function renderTradeCaseDetail(tradeCase) {
       )}</div>`
     : `<div class="muted">(none)</div>`;
 
+  // Context Drawer should represent a filtered slice from broader operational sources
+  // such as inventory table, sales commitments, inbound schedule, and document archive,
+  // not only a case-local summary.
   const contextDefs = [
     { key: "inventory", label: "在庫を見る" },
     { key: "salesCommitments", label: "売約を見る" },
@@ -1510,6 +1513,7 @@ function renderTradeCaseDetail(tradeCase) {
                     <span class="muted">deadline</span> ${escapeHtml(x.deadline || "-")}
                   </div>
                   <div><span class="muted">escalation rule</span> ${escapeHtml(x.escalationRule || "-")}</div>
+                  ${x.aiComment ? `<div><span class="muted">ai comment</span> ${escapeHtml(x.aiComment)}</div>` : ""}
                   ${x.note ? `<div class="muted">${escapeHtml(x.note)}</div>` : ""}
                 </div>
               </div>`,
@@ -1552,6 +1556,19 @@ function renderTradeCaseDetail(tradeCase) {
     const deadline = "2026-05-12 15:00";
     const rec = dc && dc.agentRecommendation && dc.agentRecommendation.summary ? dc.agentRecommendation.summary : "—";
 
+    const responseRows = list.length
+      ? `<ul class="mini-list">${list
+          .map((x) => {
+            const status = x && x.responseStatus ? x.responseStatus : "-";
+            const action = x && x.requestedAction ? x.requestedAction : "-";
+            const ai = x && x.aiComment ? x.aiComment : "";
+            return `<li>${escapeHtml(x.salesRep || "-")} <span class="muted">(${escapeHtml(status)} / ${escapeHtml(
+              action,
+            )})</span>${ai ? ` <span class="muted">—</span> <span class="muted">${escapeHtml(ai)}</span>` : ""}</li>`;
+          })
+          .join("")}</ul>`
+      : `<div class="muted">(no stakeholder responses)</div>`;
+
     return `<div class="detail-section detail-section--coordination">
       <h3 class="detail-section__title">Stakeholder Coordination / 関係者確認</h3>
       <div class="detail-block">
@@ -1561,6 +1578,8 @@ function renderTradeCaseDetail(tradeCase) {
           <span class="muted">確認中/未返信</span> ${escapeHtml(String(waitingCount))}
           <span class="muted">判断期限</span> ${escapeHtml(deadline)}
         </div>
+        <div class="detail-subhead">responses (with AI comment)</div>
+        ${responseRows}
         <div class="detail-subhead">current recommendation</div>
         <div class="muted">${escapeHtml(rec)}</div>
       </div>
@@ -1595,6 +1614,89 @@ function renderTradeCaseDetail(tradeCase) {
         <div class="detail-subhead">reasoning</div>
         <ul class="mini-list">${reasoning.map((x) => `<li>${escapeHtml(x)}</li>`).join("")}</ul>
       </div>
+    </div>`;
+  }
+
+  function renderResolutionWorkflow(tradeCase) {
+    const dc = tradeCase && tradeCase.decisionContext ? tradeCase.decisionContext : null;
+    const wf = dc && dc.resolutionWorkflow ? dc.resolutionWorkflow : null;
+    if (!wf || !Array.isArray(wf.steps) || wf.steps.length === 0) {
+      return `<div class="detail-section"><h3 class="detail-section__title">Resolution Workflow / 確認手順</h3><div class="muted">(no workflow)</div></div>`;
+    }
+
+    const steps = wf.steps;
+    const current = steps.find((s) => s && s.id === wf.currentStepId) || steps[0];
+
+    const statusLabel = (s) => {
+      const st = String(s || "");
+      if (st === "waiting") return "回答待ち";
+      if (st === "notStarted") return "未開始";
+      if (st === "confirmed") return "確認済み";
+      if (st === "blocked") return "停滞";
+      if (st === "escalated") return "エスカレーション済み";
+      if (st === "skipped") return "スキップ";
+      return st || "-";
+    };
+
+    const ownerLabel = (t) => {
+      const ot = String(t || "");
+      if (ot === "supplier") return "仕入先";
+      if (ot === "forwarder") return "フォワーダー";
+      if (ot === "sales") return "営業";
+      if (ot === "warehouse") return "倉庫";
+      if (ot === "internal") return "社内";
+      return ot || "-";
+    };
+
+    const nextActionText = (() => {
+      const owner = current ? ownerLabel(current.ownerType) : "担当";
+      const label = current && current.label ? current.label : "確認中";
+      const due = current && current.dueAt ? `期限: ${current.dueAt}` : "";
+      const fallback = current && current.nextIfNoReply ? current.nextIfNoReply : wf.fallbackRoute ? wf.fallbackRoute.suggestedAction : "";
+      const second = fallback ? `期限までに回答がない場合、${fallback}` : "";
+      return `${owner}へ「${label}」を対応中。${due}${second ? `\n${second}` : ""}`;
+    })();
+
+    const fallbackHtml = wf.fallbackRoute
+      ? `<div class="detail-subhead">fallback route</div>
+         <div class="muted">${escapeHtml(wf.fallbackRoute.triggerCondition || "-")}</div>
+         <div>${escapeHtml(wf.fallbackRoute.suggestedAction || "-")}</div>
+         ${wf.fallbackRoute.escalationTarget ? `<div class="muted">escalation: ${escapeHtml(wf.fallbackRoute.escalationTarget)}</div>` : ""}`
+      : "";
+
+    const items = steps
+      .map((s) => {
+        if (!s) return "";
+        const isCurrent = s.id === wf.currentStepId;
+        const dueAt = s.dueAt ? `<div class="workflow-step__meta"><span class="muted">dueAt</span> ${escapeHtml(String(s.dueAt))}</div>` : "";
+        const nextIfNoReply = s.nextIfNoReply
+          ? `<div class="workflow-step__meta"><span class="muted">nextIfNoReply</span> ${escapeHtml(String(s.nextIfNoReply))}</div>`
+          : "";
+        const blocking = s.blockingDecision ? `<span class="pill pill--mini pill--high">blocking</span>` : `<span class="pill pill--mini pill--muted">non-blocking</span>`;
+        return `<li class="workflow-step ${isCurrent ? "is-current" : ""}">
+          <div class="workflow-step__top">
+            <div class="workflow-step__title">${escapeHtml(s.label || s.id)}</div>
+            <div class="workflow-step__badges">
+              <span class="pill pill--mini">${escapeHtml(ownerLabel(s.ownerType))}</span>
+              <span class="pill pill--mini">${escapeHtml(statusLabel(s.status))}</span>
+              ${blocking}
+            </div>
+          </div>
+          <div class="workflow-step__question">${escapeHtml(s.question || "-")}</div>
+          ${dueAt}
+          ${nextIfNoReply}
+        </li>`;
+      })
+      .join("");
+
+    return `<div class="detail-section">
+      <h3 class="detail-section__title">Resolution Workflow / 確認手順</h3>
+      <div class="next-required-action">
+        <div class="next-required-action__title">Next Required Action</div>
+        <pre class="pre pre--compact">${escapeHtml(nextActionText)}</pre>
+      </div>
+      <ul class="workflow-timeline">${items}</ul>
+      ${fallbackHtml}
     </div>`;
   }
 
@@ -1693,14 +1795,21 @@ function renderTradeCaseDetail(tradeCase) {
               <div class="decision-summary__row"><span class="muted">Deadline / ETA</span><span class="decision-summary__value">${escapeHtml(decisionSummary.eta)}</span></div>
               <div class="decision-summary__row"><span class="muted">Confidence</span><span class="decision-summary__value">${escapeHtml(decisionSummary.confidence)}</span></div>
             </div>
-            <div class="detail-subhead">Context Launcher / 必要資料</div>
+          </section>
+
+          ${renderResolutionWorkflow(tradeCase)}
+
+          <section class="detail-section">
+            <h3 class="detail-section__title">Context Launcher / 必要資料</h3>
             ${renderContextLauncher(activeDrawerKey)}
           </section>
 
+          ${renderStakeholderCoordinationPreview(tradeCase)}
           ${renderAgentRecommendation(tradeCase)}
 
           <section class="detail-section detail-section--decision">
             <h3 class="detail-section__title">Human Decision Actions / 判断と承認</h3>
+            <div class="muted">最終判断は確認手順の進捗に応じて実行してください。</div>
             <div class="detail-subhead">Human Intervention</div>
             <div class="action-groups">
               <div class="action-group">
@@ -1708,6 +1817,8 @@ function renderTradeCaseDetail(tradeCase) {
                 <div class="action-row">
                   <button class="btn btn--primary" type="button" data-human-action="markAsPartialShipment" data-human-label="分納として処理">分納として処理</button>
                   <button class="btn btn--primary" type="button" data-human-action="linkToNextShipment" data-human-label="次便に紐づけ">次便に紐づけ</button>
+                  <button class="btn btn--primary" type="button" data-human-action="considerAirSwitch" data-human-label="AIR切替を検討">AIR切替を検討</button>
+                  <button class="btn btn--primary" type="button" data-human-action="startSalesCheck" data-human-label="営業確認を開始">営業確認を開始</button>
                 </div>
               </div>
               <div class="action-group">
@@ -1731,7 +1842,6 @@ function renderTradeCaseDetail(tradeCase) {
             ${renderProposals(nextActions)}
           </section>
 
-          ${renderStakeholderCoordinationPreview(tradeCase)}
           ${renderTeamsMessagePreview(tradeCase)}
 
           <section class="detail-section">

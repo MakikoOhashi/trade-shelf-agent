@@ -97,6 +97,7 @@ export const mockTradeCases: TradeCase[] = [
           deadline: "2026-05-12 15:00",
           escalationRule: "期限までに代替案が確定しない場合は部長承認へエスカレーション",
           note: "顧客側イベントがあり納期厳守",
+          aiComment: "顧客側イベントがあり納期厳守。AIR切替または優先出荷の検討が必要。",
         },
         {
           id: "STK-2026-0001-B",
@@ -133,6 +134,63 @@ export const mockTradeCases: TradeCase[] = [
         { id: "DOCSTAT-2026-0001-PL", docType: "PL", status: "missing", riskNote: "PL遅延でブッキング/通関が遅れる可能性" },
         { id: "DOCSTAT-2026-0001-BL", docType: "BL", status: "missing", riskNote: "B/L未着で輸送確定・通関手配が遅延" },
       ],
+      resolutionWorkflow: {
+        caseId: "TC-2026-0001",
+        incidentId: "INC-0001",
+        currentStepId: "rs-1",
+        steps: [
+          {
+            id: "rs-1",
+            label: "仕入先に数量差異の理由を確認",
+            ownerType: "supplier",
+            status: "waiting",
+            question: "INV 400pcs は書類上のミスですか？それとも生産ショート/分納ですか？",
+            expectedAnswer: "書類ミス / 分納 / 生産ショート / 補充不可 のいずれか",
+            dueAt: "2026-05-09 12:00",
+            blockingDecision: true,
+            nextIfConfirmed: "分納または生産ショートの場合、次便補充可否を確認",
+            nextIfNoReply: "船積み・納期影響が進む場合は営業へ影響確認を開始",
+          },
+          {
+            id: "rs-2",
+            label: "次便補充可否を確認",
+            ownerType: "supplier",
+            status: "notStarted",
+            question: "残600pcsを次便で補充できますか？ETAは2026-05-12で確定ですか？",
+            blockingDecision: true,
+          },
+          {
+            id: "rs-3",
+            label: "書類再発行可否を確認",
+            ownerType: "supplier",
+            status: "notStarted",
+            question: "追加INV/PLをいつ発行できますか？",
+            blockingDecision: true,
+          },
+          {
+            id: "rs-4",
+            label: "営業へ納期影響確認",
+            ownerType: "sales",
+            status: "notStarted",
+            question: "顧客納期に対して、遅延許容/AIR希望/分納許容の確認をお願いします",
+            blockingDecision: false,
+          },
+          {
+            id: "rs-5",
+            label: "最終対応方針を決定",
+            ownerType: "internal",
+            status: "notStarted",
+            question: "分納・次便紐付け・AIR切替・エスカレーションのどれで進めるか",
+            blockingDecision: true,
+          },
+        ],
+        fallbackRoute: {
+          triggerCondition: "仕入先回答が期限までにない、かつ貨物/船積が進行している",
+          suggestedAction:
+            "営業へ暫定影響確認を開始し、重要顧客はAIR切替可能性を確認。仕入先回答待ちを続けながら、納期リスクを先に潰す。",
+          escalationTarget: "Sales Manager / Operations Lead",
+        },
+      },
       agentRecommendation: {
         summary:
           "現有効在庫50pcsでは不足するが、次便600pcsが2026-05-12に予定されているため、分納として記録し、残数量を次便に紐づけるのが妥当",

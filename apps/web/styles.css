@@ -730,6 +730,81 @@ body {
   line-height: 1.5;
 }
 
+.pre--compact {
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.next-required-action {
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  padding: 10px;
+  background: rgba(255, 255, 255, 0.04);
+  margin-top: 8px;
+}
+
+.next-required-action__title {
+  font-weight: 900;
+  font-size: 12px;
+  letter-spacing: 0.16px;
+  color: var(--text);
+  margin-bottom: 6px;
+}
+
+.workflow-timeline {
+  list-style: none;
+  padding: 0;
+  margin: 10px 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  position: relative;
+}
+
+.workflow-step {
+  position: relative;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.12);
+  padding: 10px;
+}
+
+.workflow-step.is-current {
+  border-color: rgba(125, 211, 252, 0.35);
+  background: rgba(125, 211, 252, 0.06);
+}
+
+.workflow-step__top {
+  display: flex;
+  gap: 8px;
+  align-items: start;
+  justify-content: space-between;
+}
+
+.workflow-step__title {
+  font-weight: 900;
+  color: var(--text);
+  font-size: 13px;
+}
+
+.workflow-step__badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.workflow-step__question {
+  margin-top: 6px;
+  color: var(--text);
+}
+
+.workflow-step__meta {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
 .decision-workspace {
   position: relative;
   display: grid;
