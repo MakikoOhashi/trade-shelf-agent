@@ -116,6 +116,7 @@ export type SalesCommitment = {
   committedQty: number;
   requestedDeliveryDate: string;
   priority: "low" | "medium" | "high";
+  impactNote?: string;
 };
 
 export type InboundPlan = {
@@ -138,12 +139,32 @@ export type SimilarPastCase = {
   outcome: string;
 };
 
+export type StakeholderResponse = {
+  id: string;
+  salesRep: string;
+  customer: string;
+  responseStatus: string;
+  requestedAction: string;
+  deadline: string;
+  escalationRule: string;
+  note?: string;
+};
+
+export type DocumentStatus = {
+  id: string;
+  docType: "SI" | "INV" | "PL" | "BL";
+  status: "missing" | "received";
+  riskNote?: string;
+};
+
 export type DecisionContext = {
   caseId: string;
   inventory: InventorySnapshot[];
   salesCommitments: SalesCommitment[];
   inboundPlans: InboundPlan[];
   similarPastCases: SimilarPastCase[];
+  stakeholderResponses?: StakeholderResponse[];
+  documentStatus?: DocumentStatus[];
   supplierReliability?: {
     supplierName: string;
     onTimeRate: number;

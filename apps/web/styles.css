@@ -711,6 +711,97 @@ body {
   border-color: rgba(52, 211, 153, 0.18);
 }
 
+.detail-section--coordination {
+  background: rgba(122, 128, 96, 0.06);
+  border-color: rgba(122, 128, 96, 0.18);
+}
+
+.detail-section--message {
+  background: rgba(138, 111, 61, 0.05);
+  border-color: rgba(138, 111, 61, 0.18);
+}
+
+.pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.decision-workspace {
+  position: relative;
+  display: grid;
+  grid-template-columns: 380px 1fr;
+  gap: 12px;
+  align-items: start;
+  min-height: 100%;
+}
+
+@media (max-width: 980px) {
+  .decision-workspace {
+    grid-template-columns: 1fr;
+  }
+}
+
+.workspace-left,
+.workspace-main {
+  min-width: 0;
+}
+
+.context-launcher {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.context-drawer {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: min(420px, 86vw);
+  height: 100%;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--paper) 92%, transparent);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+  transform: translateX(calc(100% + 12px));
+  opacity: 0;
+  pointer-events: none;
+  transition: transform 160ms ease, opacity 160ms ease;
+}
+
+.decision-workspace.is-drawer-open .context-drawer {
+  transform: translateX(0);
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.context-drawer__top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--paper) 86%, transparent);
+}
+
+.context-drawer__title {
+  font-weight: 900;
+  color: var(--text);
+  min-width: 0;
+}
+
+.context-drawer__body {
+  padding: 10px;
+  overflow: auto;
+  height: calc(100% - 48px);
+}
+
 .mono {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
   font-variant-numeric: tabular-nums;
