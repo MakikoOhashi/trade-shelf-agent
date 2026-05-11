@@ -30,6 +30,11 @@ const state = {
    */
   selectedDecisionBranch: null,
   /**
+   * Resolution Decision Tree の branch commit 状態（nodeId -> branchValue）
+   * @type {Record<string, string>}
+   */
+  committedDecisionBranchByNodeId: {},
+  /**
    * Decision Workspace の右ドロワ表示状態
    * @type {null | "inventory" | "salesCommitments" | "inboundPlans" | "similarPastCases" | "supplierReliability" | "stakeholderResponses" | "documentStatus"}
    */
@@ -82,6 +87,18 @@ function recordTimelineEvent(tradeCaseId, event) {
   if (!tc) return;
   if (!Array.isArray(tc.timeline)) tc.timeline = [];
   tc.timeline.unshift(event);
+}
+
+function recordDecisionTreeActivity(tradeCaseId, { label, nextTitle, note }) {
+  const at = nowIso();
+  recordTimelineEvent(tradeCaseId, {
+    id: shortId(),
+    at,
+    type: "decisionTree",
+    message: `Decision Tree: ${label || "-"} route selected → ${nextTitle || "-"}`,
+    label: "Decision Tree",
+    note: note || "",
+  });
 }
 
 function recordHumanIntervention(tradeCaseId, { actionType, label, note }) {
@@ -1890,13 +1907,134 @@ function renderTradeCaseDetail(tradeCase) {
   }
 
   function renderDrawerPanel(title, bodyHtml) {
+    return renderDrawerPanelV2({ title, headerSummary: "", summaryStripHtml: "", bodyHtml });
+  }
+
+  function renderContextSummaryStrip({ key, tradeCase }) {
+    const dc = tradeCase && tradeCase.decisionContext ? tradeCase.decisionContext : null;
+    const inventory = Array.isArray(dc && dc.inventory) ? dc.inventory : [];
+    const sales = Array.isArray(dc && dc.salesCommitments) ? dc.salesCommitments : [];
+    const inbound = Array.isArray(dc && dc.inboundPlans) ? dc.inboundPlans : [];
+    const docs = Array.isArray(dc && dc.documentStatus) ? dc.documentStatus : [];
+    const stakeholders = Array.isArray(dc && dc.stakeholderResponses) ? dc.stakeholderResponses : [];
+
+    const primarySku = (() => {
+      const fromProducts =
+        tradeCase && Array.isArray(tradeCase.products) && tradeCase.products[0] && tradeCase.products[0].sku
+          ? tradeCase.products[0].sku
+          : "";
+      const fromInventory = inventory[0] && inventory[0].sku ? inventory[0].sku : "";
+      const fromSales = sales[0] && sales[0].sku ? sales[0].sku : "";
+      return String(fromProducts || fromInventory || fromSales || "");
+    })();
+
+    const fmtQty = (n) => (typeof n === "number" && Number.isFinite(n) ? String(Math.round(n)) : "-");
+
+    if (key === "inventory") {
+      const invSku = inventory.filter((x) => x && String(x.sku || "") === primarySku);
+      const available = invSku.reduce((sum, x) => sum + (typeof x.availableQty === "number" ? x.availableQty : 0), 0);
+      const allocated = invSku.reduce((sum, x) => sum + (typeof x.allocatedQty === "number" ? x.allocatedQty : 0), 0);
+      const committed = sales
+        .filter((x) => x && String(x.sku || "") === primarySku)
+        .reduce((sum, x) => sum + (typeof x.committedQty === "number" ? x.committedQty : 0), 0);
+      const shortage = Math.max(0, committed - available);
+      return `<div class="context-summary-strip__grid mono">
+        <div class="context-summary-strip__k">${escapeHtml(primarySku || "-")}</div>
+        <div><span class="muted">available</span> ${escapeHtml(fmtQty(available))}</div>
+        <div><span class="muted">allocated</span> ${escapeHtml(fmtQty(allocated))}</div>
+        <div><span class="muted">shortage</span> ${escapeHtml(fmtQty(shortage))}</div>
+      </div>`;
+    }
+
+    if (key === "salesCommitments") {
+      const list = sales.filter((x) => x && (!primarySku || String(x.sku || "") === primarySku));
+      const committed = list.reduce((sum, x) => sum + (typeof x.committedQty === "number" ? x.committedQty : 0), 0);
+      const requested = list
+        .map((x) => (x && x.requestedDeliveryDate ? String(x.requestedDeliveryDate) : ""))
+        .filter(Boolean)
+        .slice()
+        .sort()[0];
+      return `<div class="context-summary-strip__grid mono">
+        <div class="context-summary-strip__k">${escapeHtml(primarySku || "-")}</div>
+        <div><span class="muted">requested</span> ${escapeHtml(requested || "-")}</div>
+        <div><span class="muted">commit</span> ${escapeHtml(fmtQty(committed))}</div>
+        <div><span class="muted">lines</span> ${escapeHtml(String(list.length))}</div>
+      </div>`;
+    }
+
+    if (key === "inboundPlans") {
+      const list = inbound.filter((x) => x && (!primarySku || String(x.sku || "") === primarySku));
+      const bookedQty = list
+        .filter((x) => String(x.status || "") === "booked")
+        .reduce((sum, x) => sum + (typeof x.qty === "number" ? x.qty : 0), 0);
+      const eta = list
+        .map((x) => (x && x.eta ? String(x.eta) : ""))
+        .filter(Boolean)
+        .slice()
+        .sort()[0];
+      return `<div class="context-summary-strip__grid mono">
+        <div class="context-summary-strip__k">${escapeHtml(primarySku || "-")}</div>
+        <div><span class="muted">ETA</span> ${escapeHtml(eta || "-")}</div>
+        <div><span class="muted">booked</span> ${escapeHtml(fmtQty(bookedQty))}</div>
+        <div><span class="muted">plans</span> ${escapeHtml(String(list.length))}</div>
+      </div>`;
+    }
+
+    if (key === "documentStatus") {
+      const missing = docs.filter((x) => x && String(x.status || "") === "missing");
+      const lastReceived = (() => {
+        const tl = Array.isArray(tradeCase && tradeCase.timeline) ? tradeCase.timeline : [];
+        const received = tl.filter((e) => e && String(e.type || "") === "documentReceived" && e.at);
+        const sorted = received.slice().sort((a, b) => String(b.at).localeCompare(String(a.at)));
+        return sorted[0] && sorted[0].at ? formatLocalTime(sorted[0].at) : "";
+      })();
+      return `<div class="context-summary-strip__grid mono">
+        <div class="context-summary-strip__k">DOCS</div>
+        <div><span class="muted">missing</span> ${escapeHtml(String(missing.length))}</div>
+        <div><span class="muted">last received</span> ${escapeHtml(lastReceived || "-")}</div>
+        <div><span class="muted">tracked</span> ${escapeHtml(String(docs.length))}</div>
+      </div>`;
+    }
+
+    if (key === "stakeholderResponses") {
+      const total = stakeholders.length;
+      const answered = stakeholders.filter((x) => {
+        const s = String(x && x.responseStatus ? x.responseStatus : "");
+        return s && s !== "確認中" && s !== "未返信";
+      }).length;
+      const pending = Math.max(0, total - answered);
+      return `<div class="context-summary-strip__grid mono">
+        <div class="context-summary-strip__k">SALES</div>
+        <div><span class="muted">answered</span> ${escapeHtml(String(answered))}</div>
+        <div><span class="muted">pending</span> ${escapeHtml(String(pending))}</div>
+        <div><span class="muted">total</span> ${escapeHtml(String(total))}</div>
+      </div>`;
+    }
+
+    return `<div class="context-summary-strip__grid mono">
+      <div class="context-summary-strip__k">${escapeHtml(String(key || "Context"))}</div>
+      <div class="muted">—</div>
+      <div class="muted">—</div>
+      <div class="muted">—</div>
+    </div>`;
+  }
+
+  function renderDrawerPanelV2({ title, headerSummary, summaryStripHtml, bodyHtml }) {
+    const summaryHtml = headerSummary ? `<div class="context-drawer__header-summary muted">${escapeHtml(headerSummary)}</div>` : "";
+    const stripHtml = summaryStripHtml ? `<div class="context-summary-strip">${summaryStripHtml}</div>` : "";
     return `
-      <div class="context-drawer__top">
-        <div class="context-drawer__title">${escapeHtml(title)}</div>
-        <button class="btn btn--small btn--ghost" type="button" data-context-close>閉じる</button>
-      </div>
-      <div class="context-drawer__body">
-        ${bodyHtml}
+      <div class="context-drawer__scroll">
+        <div class="context-drawer__header context-drawer-header-sticky">
+          <div class="context-drawer__header-top">
+            <div class="context-drawer__title">${escapeHtml(title)}</div>
+            <button class="btn btn--small btn--ghost" type="button" data-context-close>閉じる</button>
+          </div>
+          ${summaryHtml}
+          ${stripHtml}
+        </div>
+        <div class="context-drawer__content">
+          ${bodyHtml}
+        </div>
       </div>
     `;
   }
@@ -1913,6 +2051,12 @@ function renderTradeCaseDetail(tradeCase) {
 
     const key = String(activeKey || "");
     if (!key) return "";
+    const contextTitleFromKey = (() => {
+      const hit = contextDefs.find((d) => d && d.key === key);
+      return hit && hit.label ? String(hit.label) : "";
+    })();
+    const caseSummary = `${tradeCase && tradeCase.id ? tradeCase.id : "Case"}${tradeCase && tradeCase.title ? ` • ${tradeCase.title}` : ""}`;
+    const summaryStripHtml = renderContextSummaryStrip({ key, tradeCase });
 
     if (key === "inventory") {
       const rows = inventory.length
@@ -1942,7 +2086,12 @@ function renderTradeCaseDetail(tradeCase) {
             })
             .join("")
         : `<div class="muted">(no data)</div>`;
-      return renderDrawerPanel("Inventory / 在庫", `<div class="evidence-table">${rows}</div>`);
+      return renderDrawerPanelV2({
+        title: contextTitleFromKey || "在庫を見る",
+        headerSummary: caseSummary,
+        summaryStripHtml,
+        bodyHtml: `<div class="evidence-table">${rows}</div>`,
+      });
     }
 
     if (key === "salesCommitments") {
@@ -1963,7 +2112,12 @@ function renderTradeCaseDetail(tradeCase) {
             )
             .join("")
         : `<div class="muted">(no data)</div>`;
-      return renderDrawerPanel("Sales Commitments / 売約", `<div class="evidence-table">${rows}</div>`);
+      return renderDrawerPanelV2({
+        title: contextTitleFromKey || "売約を見る",
+        headerSummary: caseSummary,
+        summaryStripHtml,
+        bodyHtml: `<div class="evidence-table">${rows}</div>`,
+      });
     }
 
     if (key === "inboundPlans") {
@@ -1987,7 +2141,12 @@ function renderTradeCaseDetail(tradeCase) {
             )
             .join("")
         : `<div class="muted">(no data)</div>`;
-      return renderDrawerPanel("Inbound Plans / 次便", `<div class="evidence-table">${rows}</div>`);
+      return renderDrawerPanelV2({
+        title: contextTitleFromKey || "次便を見る",
+        headerSummary: caseSummary,
+        summaryStripHtml,
+        bodyHtml: `<div class="evidence-table">${rows}</div>`,
+      });
     }
 
     if (key === "similarPastCases") {
@@ -2006,7 +2165,12 @@ function renderTradeCaseDetail(tradeCase) {
             )
             .join("")
         : `<div class="muted">(no data)</div>`;
-      return renderDrawerPanel("Similar Past Cases / 類似案件", `<div class="evidence-table">${rows}</div>`);
+      return renderDrawerPanelV2({
+        title: contextTitleFromKey || "類似案件を見る",
+        headerSummary: caseSummary,
+        summaryStripHtml,
+        bodyHtml: `<div class="evidence-table">${rows}</div>`,
+      });
     }
 
     if (key === "supplierReliability") {
@@ -2023,7 +2187,12 @@ function renderTradeCaseDetail(tradeCase) {
               .join("")}</ul>
           </div>`
         : `<div class="muted">(no data)</div>`;
-      return renderDrawerPanel("Supplier Reliability / 仕入先傾向", html);
+      return renderDrawerPanelV2({
+        title: contextTitleFromKey || "仕入先傾向を見る",
+        headerSummary: caseSummary,
+        summaryStripHtml,
+        bodyHtml: html,
+      });
     }
 
     if (key === "stakeholderResponses") {
@@ -2046,7 +2215,12 @@ function renderTradeCaseDetail(tradeCase) {
             )
             .join("")
         : `<div class="muted">(no data)</div>`;
-      return renderDrawerPanel("Stakeholder Responses / 関係者回答", `<div class="evidence-table">${rows}</div>`);
+      return renderDrawerPanelV2({
+        title: contextTitleFromKey || "営業回答を見る",
+        headerSummary: caseSummary,
+        summaryStripHtml,
+        bodyHtml: `<div class="evidence-table">${rows}</div>`,
+      });
     }
 
     if (key === "documentStatus") {
@@ -2063,17 +2237,29 @@ function renderTradeCaseDetail(tradeCase) {
             })
             .join("")
         : `<div class="muted">(no data)</div>`;
-      return renderDrawerPanel("Document Status / 書類状況", `<div class="evidence-table">${rows}</div>`);
+      return renderDrawerPanelV2({
+        title: contextTitleFromKey || "書類状況を見る",
+        headerSummary: caseSummary,
+        summaryStripHtml,
+        bodyHtml: `<div class="evidence-table">${rows}</div>`,
+      });
     }
 
     if (key === "freightCost") {
-      return renderDrawerPanel(
-        "Freight cost (mock)",
-        `<div class="muted">（mock）このケースの見積運賃・AIR切替コスト比較は今後追加予定です。</div>`,
-      );
+      return renderDrawerPanelV2({
+        title: contextTitleFromKey || "Freight cost",
+        headerSummary: caseSummary,
+        summaryStripHtml,
+        bodyHtml: `<div class="muted">（mock）このケースの見積運賃・AIR切替コスト比較は今後追加予定です。</div>`,
+      });
     }
 
-    return renderDrawerPanel("Context", `<div class="muted">(unknown context)</div>`);
+    return renderDrawerPanelV2({
+      title: contextTitleFromKey || "Context",
+      headerSummary: caseSummary,
+      summaryStripHtml,
+      bodyHtml: `<div class="muted">(unknown context)</div>`,
+    });
   }
 
   function renderStakeholderCoordinationPreview(tradeCase) {
@@ -2320,6 +2506,33 @@ function renderTradeCaseDetail(tradeCase) {
     const getBranchByValue = (val) => branches.find((b) => b && String(b.value || "") === String(val || "")) || null;
     const selectedBranch = selectedBranchValue ? getBranchByValue(selectedBranchValue) : null;
 
+    const missingContextKeySet = (() => {
+      const dc0 = tradeCase && tradeCase.decisionContext ? tradeCase.decisionContext : null;
+      const missing = new Set();
+      const hasAny = (arr) => Array.isArray(arr) && arr.length > 0;
+      if (!hasAny(dc0 && dc0.inventory)) missing.add("inventory");
+      if (!hasAny(dc0 && dc0.salesCommitments)) missing.add("salesCommitments");
+      if (!hasAny(dc0 && dc0.inboundPlans)) missing.add("inboundPlans");
+      if (!hasAny(dc0 && dc0.documentStatus)) missing.add("documents");
+      if (!hasAny(dc0 && dc0.stakeholderResponses)) missing.add("stakeholderResponses");
+      if (!(dc0 && dc0.supplierReliability)) missing.add("supplierReliability");
+      return missing;
+    })();
+
+    const branchUiStatus = (b) => {
+      if (!b) return { kind: "unavailable", label: "unavailable", dot: "×" };
+      const val = String(b.value || "");
+      const isSelected = selectedBranchValue && val === selectedBranchValue;
+      if (isSelected) return { kind: "active", label: "active", dot: "●" };
+
+      const required = Array.isArray(b.requiredContext) ? b.requiredContext : [];
+      const isBlocked = required.some((k) => missingContextKeySet.has(String(k || "")));
+      if (isBlocked) return { kind: "blocked", label: "blocked", dot: "!" };
+
+      if (isNoReplyBranch(b)) return { kind: "waiting", label: "waiting", dot: "○" };
+      return { kind: "waiting", label: "waiting", dot: "○" };
+    };
+
     const requiredChipsHtml = (required) => {
       const req = Array.isArray(required) ? required : [];
       if (!req.length) return `<div class="muted">(none)</div>`;
@@ -2343,18 +2556,28 @@ function renderTradeCaseDetail(tradeCase) {
             const required = Array.isArray(b.requiredContext) ? b.requiredContext : [];
             const isWarning = isNoReplyBranch(b);
             const isSelected = selectedBranchValue && String(b.value || "") === selectedBranchValue;
+            const st = branchUiStatus(b);
 
-            return `<div class="flow-branch-node ${isSelected ? "is-selected" : ""} ${isWarning ? "is-warning" : ""}" role="button" tabindex="0"
+            return `<div class="flow-branch-node ${isSelected ? "is-selected" : ""} ${isWarning ? "is-warning" : ""} is-${escapeHtml(
+              st.kind,
+            )}" role="button" tabindex="0"
               data-decision-branch-select="1"
               data-branch-node-id="${escapeHtml(String(current.id || ""))}"
               data-branch-label="${escapeHtml(String(b.label || ""))}"
               data-branch-value="${escapeHtml(String(b.value || ""))}"
               data-branch-next="${escapeHtml(String(b.nextNodeId || ""))}">
               <div class="flow-branch-node__top">
-                <div class="flow-branch-node__label">${escapeHtml(String(b.label || "-"))}</div>
-                ${isWarning ? `<span class="pill pill--mini flow-branch-node__badge">期限切れ時</span>` : ""}
+                <div class="flow-branch-node__label-row">
+                  <div class="flow-branch-node__label">${escapeHtml(String(b.label || "-"))}</div>
+                  <div class="flow-branch-node__status"><span class="flow-branch-node__dot" aria-hidden="true">${escapeHtml(
+                    st.dot,
+                  )}</span> ${escapeHtml(st.label)}</div>
+                  ${isWarning ? `<span class="pill pill--mini flow-branch-node__badge">fallback</span>` : ""}
+                </div>
               </div>
-              <div class="flow-branch-node__next">${escapeHtml(nextTitle || "-")}</div>
+              <div class="flow-branch-node__next"><span class="flow-branch-node__arrow" aria-hidden="true">↓</span> ${escapeHtml(
+                nextTitle || "-",
+              )}</div>
               <div class="flow-branch-node__chips">${requiredChipsHtml(required)}</div>
             </div>`;
           })
@@ -2369,8 +2592,9 @@ function renderTradeCaseDetail(tradeCase) {
       const warningNote = isNoReplyBranch(selectedBranch)
         ? `<div class="selected-branch-detail__warning muted">未回答・期限切れの場合の暫定ルート</div>`
         : "";
+      const routeNote = isNoReplyBranch(selectedBranch) ? "fallback route / 未回答時ルート" : "primary route";
 
-      return `<div class="selected-branch-detail">
+      return `<div class="selected-branch-detail decision-flow-detail-panel">
         <div class="selected-branch-detail__top">
           <div class="selected-branch-detail__label">${escapeHtml(String(selectedBranch.label || "-"))}</div>
           <button class="btn btn--primary btn--small" type="button"
@@ -2381,10 +2605,11 @@ function renderTradeCaseDetail(tradeCase) {
             data-branch-next="${escapeHtml(String(selectedBranch.nextNodeId || ""))}">このルートで進める</button>
         </div>
         ${warningNote}
+        <div class="selected-branch-detail__row"><span class="muted">route</span> ${escapeHtml(routeNote)}</div>
         <div class="selected-branch-detail__row"><span class="muted">action</span> ${escapeHtml(String(selectedBranch.actionLabel || "-"))}</div>
-        ${selectedBranch.explanation ? `<div class="selected-branch-detail__row"><span class="muted">detail</span> ${escapeHtml(String(selectedBranch.explanation))}</div>` : ""}
-        <div class="selected-branch-detail__row"><span class="muted">next</span> ${escapeHtml(nextTitle || "-")}</div>
-        <div class="selected-branch-detail__row"><span class="muted">required</span></div>
+        ${selectedBranch.explanation ? `<div class="selected-branch-detail__row"><span class="muted">explanation</span> ${escapeHtml(String(selectedBranch.explanation))}</div>` : ""}
+        <div class="selected-branch-detail__row"><span class="muted">next node</span> ${escapeHtml(nextTitle || "-")}</div>
+        <div class="selected-branch-detail__row"><span class="muted">required context</span></div>
         ${requiredChipsHtml(required)}
       </div>`;
     })();
@@ -2412,28 +2637,32 @@ function renderTradeCaseDetail(tradeCase) {
 
     return `<section class="detail-section decision-tree">
       <h3 class="detail-section__title">Resolution Decision Tree / 分岐型確認フロー</h3>
-      <div class="decision-flow-graph decision-flow-compact">
-        <div class="flow-current-node current-question-card">
-          <div class="current-question-card__top">
-            <div class="flow-current-node__title">[${escapeHtml(current.title || current.id || "-")}]</div>
-            <div class="current-question-card__badges">
-              <span class="pill pill--mini">${escapeHtml(ownerText || "-")}</span>
-              <span class="pill pill--mini">${escapeHtml(statusLabel(current.status))}</span>
-              ${current.dueAt ? `<span class="pill pill--mini">due ${escapeHtml(String(current.dueAt))}</span>` : `<span class="pill pill--mini pill--muted">due -</span>`}
-              ${blockingBadge}
+      <div class="decision-flow">
+        <div class="decision-flow-minimap">
+          <div class="flow-current-node current-question-card">
+            <div class="current-question-card__top">
+              <div class="flow-current-node__title">[${escapeHtml(current.title || current.id || "-")}]</div>
+              <div class="current-question-card__badges">
+                <span class="pill pill--mini">${escapeHtml(ownerText || "-")}</span>
+                <span class="pill pill--mini">${escapeHtml(statusLabel(current.status))}</span>
+                ${current.dueAt ? `<span class="pill pill--mini">due ${escapeHtml(String(current.dueAt))}</span>` : `<span class="pill pill--mini pill--muted">due -</span>`}
+                ${blockingBadge}
+              </div>
             </div>
+            <div class="current-question-card__question"><span class="muted">Q:</span> ${escapeHtml(current.question || "-")}</div>
+            ${received}
           </div>
-          <div class="current-question-card__question"><span class="muted">Q:</span> ${escapeHtml(current.question || "-")}</div>
-          ${received}
+
+          <div class="flow-connector" aria-hidden="true"></div>
+
+          <div class="flow-branch-row decision-flow-minimap-branches">
+            ${branchRowHtml}
+          </div>
         </div>
 
-        <div class="flow-connector" aria-hidden="true"></div>
-
-        <div class="flow-branch-row">
-          ${branchRowHtml}
+        <div class="decision-flow-detail">
+          ${selectedDetailHtml}
         </div>
-
-        ${selectedDetailHtml}
       </div>
 
       ${fallback}
@@ -2846,6 +3075,7 @@ function setupModal() {
         const activeNode = clickedNode || current;
         if (activeNode) {
           activeNode.receivedAnswer = branchLabel || branchValue || "";
+          if (nodeId && branchValue) state.committedDecisionBranchByNodeId[String(nodeId)] = String(branchValue);
           if (nextNodeId) {
             activeNode.status = "completed";
             const next = tree.nodes.find((n) => n && n.id === nextNodeId) || null;
@@ -2855,6 +3085,16 @@ function setupModal() {
             }
           }
         }
+      }
+
+      if (tc && state.modalTradeCaseId) {
+        const nodes = tree && Array.isArray(tree.nodes) ? tree.nodes : [];
+        const nextTitle = nextNodeId ? nodes.find((n) => n && n.id === nextNodeId)?.title || nextNodeId : nextNodeId;
+        recordDecisionTreeActivity(state.modalTradeCaseId, {
+          label: branchLabel || branchValue || "branch",
+          nextTitle: String(nextTitle || "-"),
+          note: `commit node:${nodeId} value:${branchValue} next:${nextNodeId}`,
+        });
       }
 
       recordHumanIntervention(state.modalTradeCaseId, {
@@ -2873,6 +3113,18 @@ function setupModal() {
       if (!branchValue) return;
       state.selectedDecisionBranch = branchValue;
       const tc = state.modalTradeCaseId ? getTradeCaseById(state.modalTradeCaseId) : null;
+      if (tc && state.modalTradeCaseId && tc.decisionContext && tc.decisionContext.resolutionDecisionTree) {
+        const tree = tc.decisionContext.resolutionDecisionTree;
+        const nodeId = decisionBranchSelectEl.getAttribute("data-branch-node-id") || "";
+        const branchLabel = decisionBranchSelectEl.getAttribute("data-branch-label") || "";
+        const nextNodeId = decisionBranchSelectEl.getAttribute("data-branch-next") || "";
+        const nextTitle = nextNodeId ? tree.nodes.find((n) => n && n.id === nextNodeId)?.title || nextNodeId : nextNodeId;
+        recordDecisionTreeActivity(state.modalTradeCaseId, {
+          label: branchLabel || branchValue || "branch",
+          nextTitle: String(nextTitle || "-"),
+          note: `select node:${nodeId} value:${branchValue} next:${nextNodeId}`,
+        });
+      }
       if (tc) renderTradeCaseDetail(tc);
       return;
     }
