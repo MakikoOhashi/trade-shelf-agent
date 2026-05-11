@@ -2421,7 +2421,7 @@ function renderTradeCaseDetail(tradeCase) {
     const dc = tradeCase && tradeCase.decisionContext ? tradeCase.decisionContext : null;
     const tree = dc && dc.resolutionDecisionTree ? dc.resolutionDecisionTree : null;
     if (!tree || !Array.isArray(tree.nodes) || tree.nodes.length === 0) {
-      return `<div class="detail-section decision-tree"><h3 class="detail-section__title">Resolution Decision Tree / 分岐型確認フロー</h3><div class="muted">(no decision tree)</div></div>`;
+      return `<div class="detail-section decision-tree"><h3 class="detail-section__title">Resolution Decision Tree / 分岐ルート（裏側）</h3><div class="muted">(no decision tree)</div></div>`;
     }
 
     const nodes = tree.nodes;
@@ -2602,7 +2602,7 @@ function renderTradeCaseDetail(tradeCase) {
             data-branch-node-id="${escapeHtml(String(current.id || ""))}"
             data-branch-label="${escapeHtml(String(selectedBranch.label || ""))}"
             data-branch-value="${escapeHtml(String(selectedBranch.value || ""))}"
-            data-branch-next="${escapeHtml(String(selectedBranch.nextNodeId || ""))}">このルートで進める</button>
+            data-branch-next="${escapeHtml(String(selectedBranch.nextNodeId || ""))}">手動で分岐を確定（例外）</button>
         </div>
         ${warningNote}
         <div class="selected-branch-detail__row"><span class="muted">route</span> ${escapeHtml(routeNote)}</div>
@@ -2636,7 +2636,7 @@ function renderTradeCaseDetail(tradeCase) {
     </div>`;
 
     return `<section class="detail-section decision-tree">
-      <h3 class="detail-section__title">Resolution Decision Tree / 分岐型確認フロー</h3>
+      <h3 class="detail-section__title">Resolution Decision Tree / 分岐ルート（裏側）</h3>
       <div class="decision-flow">
         <div class="decision-flow-minimap">
           <div class="flow-current-node current-question-card">
@@ -2668,6 +2668,193 @@ function renderTradeCaseDetail(tradeCase) {
       ${fallback}
 
       ${overviewAccordion}
+    </section>`;
+  }
+
+  function agentRunStatusLabel(status) {
+    const s = String(status || "");
+    if (s === "waitingHumanApproval") return "人間承認待ち";
+    if (s === "waitingExternalReply") return "外部回答待ち";
+    if (s === "completed") return "完了";
+    if (s === "blocked") return "ブロック";
+    if (s === "running") return "進行中";
+    return s || "-";
+  }
+
+  function agentRunStepStatusLabel(status) {
+    const s = String(status || "");
+    if (s === "proposed") return "提案済み";
+    if (s === "approved") return "承認済み";
+    if (s === "sent") return "送信済み";
+    if (s === "waitingReply") return "返信待ち";
+    if (s === "replyReceived") return "返信受領";
+    if (s === "classified") return "分類済み";
+    if (s === "completed") return "完了";
+    if (s === "detected") return "検知";
+    if (s === "held") return "保留";
+    if (s === "blocked") return "ブロック";
+    return s || "-";
+  }
+
+  function agentRunStepIcon(status) {
+    const s = String(status || "");
+    if (s === "completed" || s === "sent" || s === "classified") return "✅";
+    if (s === "proposed" || s === "approved") return "🟡";
+    if (s === "waitingReply") return "○";
+    if (s === "held") return "⏸";
+    if (s === "blocked") return "⛔";
+    return "○";
+  }
+
+  function agentActorLabel(actor) {
+    const a = String(actor || "");
+    if (a === "agent") return "AI";
+    if (a === "human") return "Human";
+    if (a === "supplier") return "Supplier";
+    if (a === "sales") return "Sales";
+    if (a === "forwarder") return "Forwarder";
+    if (a === "system") return "System";
+    return a || "-";
+  }
+
+  function renderResolutionAgentRun(tradeCase) {
+    const run = tradeCase && tradeCase.resolutionAgentRun ? tradeCase.resolutionAgentRun : null;
+    if (!run) {
+      return `<section class="detail-section agent-run-card">
+        <h3 class="detail-section__title">Resolution Agent Run / 対応エージェント進行</h3>
+        <div class="muted">(no agent run)</div>
+      </section>`;
+    }
+
+    const steps = Array.isArray(run.steps) ? run.steps : [];
+    const current = steps.find((s) => s && s.id === run.currentStepId) || null;
+    const next = run.nextHumanAction || null;
+
+    const progress = typeof run.progressPercent === "number" ? clamp(run.progressPercent, 0, 100) : 0;
+    const status = agentRunStatusLabel(run.status);
+    const currentTitle = current && current.title ? String(current.title) : run.currentStepId || "-";
+    const nextLabel = next && next.label ? String(next.label) : "-";
+
+    return `<section class="detail-section agent-run-card">
+      <h3 class="detail-section__title">Resolution Agent Run / 対応エージェント進行</h3>
+      <div class="agent-run-status">
+        <div class="agent-progress-bar" role="progressbar" aria-valuenow="${escapeHtml(String(progress))}" aria-valuemin="0" aria-valuemax="100">
+          <div class="agent-progress-bar__fill" style="width:${escapeHtml(String(progress))}%"></div>
+        </div>
+        <div class="kv" style="margin-top:10px;">
+          <span class="muted">Progress</span> ${escapeHtml(String(progress))}%
+          <span class="muted">Status</span> ${escapeHtml(status)}
+        </div>
+        <div class="kv" style="margin-top:6px;">
+          <span class="muted">Current</span> ${escapeHtml(currentTitle)}
+          <span class="muted">Next</span> ${escapeHtml(nextLabel)}
+        </div>
+      </div>
+    </section>`;
+  }
+
+  function renderNextHumanApproval(tradeCase) {
+    const run = tradeCase && tradeCase.resolutionAgentRun ? tradeCase.resolutionAgentRun : null;
+    if (!run) return "";
+    const steps = Array.isArray(run.steps) ? run.steps : [];
+    const current = steps.find((s) => s && s.id === run.currentStepId) || null;
+    if (!current || !current.requiresHumanApproval) return "";
+
+    const msg = current.proposedMessage || null;
+    if (!msg) {
+      return `<section class="detail-section next-human-approval-card">
+        <h3 class="detail-section__title">Next Human Approval / 次の承認</h3>
+        <div class="muted">（pending）承認が必要なステップです。</div>
+      </section>`;
+    }
+
+    const evidence = Array.isArray(current.evidence) ? current.evidence : [];
+    const evidenceHtml = evidence.length ? `<ul class="mini-list">${evidence.map((x) => `<li>${escapeHtml(x)}</li>`).join("")}</ul>` : "";
+    const statusText = agentRunStepStatusLabel(current.status);
+
+    const canApprove = current.status === "proposed" || current.status === "approved";
+
+    const desc =
+      run && run.nextHumanAction && run.nextHumanAction.description
+        ? String(run.nextHumanAction.description)
+        : "AIが外部送信文面を作成しました。送信してよいですか？";
+
+    return `<section class="detail-section next-human-approval-card">
+      <h3 class="detail-section__title">Next Human Approval / 次の承認</h3>
+      <div class="next-human-approval-card__lead">
+        <div>${escapeHtml(desc)}</div>
+        <div class="muted" style="margin-top:6px;">通常はAIが判定予定です。外部送信前に人間承認が必要です。</div>
+      </div>
+      <div class="proposed-message-preview">
+        <div class="kv">
+          <span class="muted">channel</span> ${escapeHtml(String(msg.channel || "-"))}
+          <span class="muted">status</span> <span class="pill pill--mini">${escapeHtml(statusText)}</span>
+        </div>
+        <div class="kv" style="margin-top:6px;"><span class="muted">to</span> ${escapeHtml((Array.isArray(msg.to) ? msg.to : []).join(", ") || "-")}</div>
+        ${msg.subject ? `<div class="kv" style="margin-top:6px;"><span class="muted">subject</span> ${escapeHtml(String(msg.subject))}</div>` : ""}
+        <div class="detail-subhead" style="margin-top:10px;">body</div>
+        <pre class="pre proposed-message-preview__body">${escapeHtml(String(msg.body || ""))}</pre>
+        ${evidenceHtml ? `<div class="detail-subhead" style="margin-top:10px;">evidence</div>${evidenceHtml}` : ""}
+      </div>
+      <div class="approval-actions">
+        <button class="btn btn--primary" type="button" data-agent-run-approve="1" ${canApprove ? "" : "disabled"}>Approve / 承認して送信</button>
+        <button class="btn" type="button" data-agent-run-edit="1">Edit / 修正</button>
+        <button class="btn" type="button" data-agent-run-hold="1">Hold / 保留</button>
+      </div>
+    </section>`;
+  }
+
+  function renderAgentRunTimeline(tradeCase) {
+    const run = tradeCase && tradeCase.resolutionAgentRun ? tradeCase.resolutionAgentRun : null;
+    if (!run) return "";
+    const steps = Array.isArray(run.steps) ? run.steps : [];
+    if (!steps.length) return "";
+
+    const items = steps
+      .map((s) => {
+        if (!s) return "";
+        const icon = agentRunStepIcon(s.status);
+        const actor = agentActorLabel(s.actor);
+        const status = agentRunStepStatusLabel(s.status);
+        const approvalBadge = s.requiresHumanApproval ? `<span class="pill pill--mini pill--warn">requires approval</span>` : "";
+        return `<div class="agent-run-step">
+          <div class="agent-run-step__head">
+            <span class="agent-run-step__icon" aria-hidden="true">${escapeHtml(icon)}</span>
+            <div class="agent-run-step__title">${escapeHtml(String(s.title || s.id || "-"))}</div>
+            <div class="agent-run-step__meta">
+              <span class="pill pill--mini">${escapeHtml(actor)}</span>
+              ${approvalBadge}
+              <span class="pill pill--mini agent-run-step__status">${escapeHtml(status)}</span>
+            </div>
+          </div>
+          <div class="agent-run-step__summary muted">${escapeHtml(String(s.summary || ""))}</div>
+        </div>`;
+      })
+      .join("");
+
+    return `<section class="detail-section agent-run-timeline">
+      <h3 class="detail-section__title">Agent Run Timeline</h3>
+      <div class="agent-run-timeline__list">${items}</div>
+    </section>`;
+  }
+
+  function renderDecisionTreeOverviewAccordion(tradeCase) {
+    const dc = tradeCase && tradeCase.decisionContext ? tradeCase.decisionContext : null;
+    const tree = dc && dc.resolutionDecisionTree ? dc.resolutionDecisionTree : null;
+    const hasTree = tree && Array.isArray(tree.nodes) && tree.nodes.length > 0;
+
+    return `<section class="detail-section">
+      <div class="accordion" data-accordion-root>
+        <div class="accordion__item">
+          <button class="accordion__trigger" type="button" data-accordion-trigger aria-expanded="false">
+            <span class="pill pill--mini">分岐ルートを見る</span>
+            <span class="accordion__summary">AIはこの分岐ルートをもとに、仕入先回答や営業回答を分類し次アクションを提案します。</span>
+          </button>
+          <div class="accordion__panel" hidden>
+            ${hasTree ? renderResolutionDecisionTree(tradeCase) : `<div class="muted">(no decision tree)</div>`}
+          </div>
+        </div>
+      </div>
     </section>`;
   }
 
@@ -2841,22 +3028,10 @@ function renderTradeCaseDetail(tradeCase) {
         </aside>
 
         <main class="workspace-main">
-          <section class="detail-section detail-section--summary">
-            <h3 class="detail-section__title">Decision Summary</h3>
-            <div class="decision-summary">
-              <div class="decision-summary__row">
-                <span class="muted">Risk level</span>
-                <span class="pill ${severityClass(decisionSummary.riskLevel)}">${escapeHtml(decisionSummary.riskLevel)}</span>
-              </div>
-              <div class="decision-summary__row"><span class="muted">Main issue</span><span class="decision-summary__value">${escapeHtml(decisionSummary.mainIssue)}</span></div>
-              <div class="decision-summary__row"><span class="muted">Recommended action</span><span class="decision-summary__value">${escapeHtml(decisionSummary.recommendedAction)}</span></div>
-              <div class="decision-summary__row"><span class="muted">Required decision</span><span class="decision-summary__value">${escapeHtml(decisionSummary.requiredDecision)}</span></div>
-              <div class="decision-summary__row"><span class="muted">Deadline / ETA</span><span class="decision-summary__value">${escapeHtml(decisionSummary.eta)}</span></div>
-              <div class="decision-summary__row"><span class="muted">Confidence</span><span class="decision-summary__value">${escapeHtml(decisionSummary.confidence)}</span></div>
-            </div>
-          </section>
-
-          ${renderResolutionDecisionTree(tradeCase)}
+          ${renderResolutionAgentRun(tradeCase)}
+          ${renderNextHumanApproval(tradeCase)}
+          ${renderAgentRunTimeline(tradeCase)}
+          ${renderDecisionTreeOverviewAccordion(tradeCase)}
 
           <section class="detail-section">
             <h3 class="detail-section__title">Context Launcher / 必要資料</h3>
@@ -2868,7 +3043,7 @@ function renderTradeCaseDetail(tradeCase) {
 
           <section class="detail-section detail-section--decision">
             <h3 class="detail-section__title">Human Decision Actions / 判断と承認</h3>
-            <div class="muted">最終判断は確認手順の進捗に応じて実行してください。</div>
+            <div class="muted">通常はAgent Runが進行します。必要な場合のみ手動介入してください。</div>
             <div class="detail-subhead">Human Intervention</div>
             <div class="action-groups">
               <div class="action-group">
@@ -3055,6 +3230,83 @@ function setupModal() {
       const isOpen = item.classList.toggle("is-open");
       accordionTrigger.setAttribute("aria-expanded", isOpen ? "true" : "false");
       if (panel) panel.hidden = !isOpen;
+      return;
+    }
+
+    const agentRunApproveEl = target.closest && target.closest("[data-agent-run-approve]");
+    if (agentRunApproveEl) {
+      if (!state.modalTradeCaseId) return;
+      const tc = getTradeCaseById(state.modalTradeCaseId);
+      const run = tc && tc.resolutionAgentRun ? tc.resolutionAgentRun : null;
+      if (!run) return;
+      const steps = Array.isArray(run.steps) ? run.steps : [];
+      const current = steps.find((s) => s && s.id === run.currentStepId) || null;
+      if (!current || !current.requiresHumanApproval) return;
+
+      const nowIso = new Date().toISOString();
+      current.status = "sent";
+      current.approvedBy = "human";
+      current.approvedAt = nowIso;
+
+      const waitStep = steps.find((s) => s && s.id === "step-wait-supplier-reply") || null;
+      if (waitStep && waitStep.status === "waitingReply") {
+        run.currentStepId = waitStep.id;
+        run.status = "waitingExternalReply";
+        run.progressPercent = Math.max(run.progressPercent || 0, 45);
+        run.nextHumanAction = undefined;
+      } else {
+        run.status = "waitingExternalReply";
+        run.progressPercent = Math.max(run.progressPercent || 0, 45);
+        run.nextHumanAction = undefined;
+      }
+
+      recordHumanIntervention(state.modalTradeCaseId, {
+        actionType: "agentRunApproveSend",
+        label: "Agent Run: Approve & Send",
+        note: `step:${current.id}`,
+      });
+      log(`送信（mock）: ${current.id}`);
+      renderTradeCaseDetail(tc);
+      return;
+    }
+
+    const agentRunHoldEl = target.closest && target.closest("[data-agent-run-hold]");
+    if (agentRunHoldEl) {
+      if (!state.modalTradeCaseId) return;
+      const tc = getTradeCaseById(state.modalTradeCaseId);
+      const run = tc && tc.resolutionAgentRun ? tc.resolutionAgentRun : null;
+      if (!run) return;
+      const steps = Array.isArray(run.steps) ? run.steps : [];
+      const current = steps.find((s) => s && s.id === run.currentStepId) || null;
+      if (!current) return;
+      current.status = "held";
+      run.status = "waitingHumanApproval";
+      run.nextHumanAction = {
+        label: "保留を解除して承認",
+        description: "保留中です。内容を確認し、送信する場合は承認してください。",
+        actionType: current.actionType || "humanApproval",
+      };
+      recordHumanIntervention(state.modalTradeCaseId, { actionType: "agentRunHold", label: "Agent Run: Hold", note: `step:${current.id}` });
+      log(`保留: ${current.id}`);
+      renderTradeCaseDetail(tc);
+      return;
+    }
+
+    const agentRunEditEl = target.closest && target.closest("[data-agent-run-edit]");
+    if (agentRunEditEl) {
+      if (!state.modalTradeCaseId) return;
+      const tc = getTradeCaseById(state.modalTradeCaseId);
+      const run = tc && tc.resolutionAgentRun ? tc.resolutionAgentRun : null;
+      if (!run) return;
+      const steps = Array.isArray(run.steps) ? run.steps : [];
+      const current = steps.find((s) => s && s.id === run.currentStepId) || null;
+      const msg = current && current.proposedMessage ? current.proposedMessage : null;
+      if (!current || !msg) return;
+      const nextBody = window.prompt("Edit message body（mock）", String(msg.body || ""));
+      if (typeof nextBody === "string") msg.body = nextBody;
+      recordHumanIntervention(state.modalTradeCaseId, { actionType: "agentRunEdit", label: "Agent Run: Edit", note: `step:${current.id}` });
+      log(`修正（mock）: ${current.id}`);
+      renderTradeCaseDetail(tc);
       return;
     }
 

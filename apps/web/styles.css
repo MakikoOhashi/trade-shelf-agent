@@ -1869,6 +1869,112 @@ body {
   --dt-shadow: 0 10px 30px rgba(0, 0, 0, 0.18);
 }
 
+.agent-run-card,
+.next-human-approval-card,
+.agent-run-timeline {
+  background: linear-gradient(180deg, color-mix(in srgb, var(--paper) 92%, #fff 8%), var(--paper));
+  border-color: color-mix(in srgb, var(--wood) 22%, var(--border));
+  box-shadow: 0 10px 22px rgba(0, 0, 0, 0.12);
+}
+
+.agent-run-status {
+  padding: 10px 10px 8px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--wood) 12%, var(--paper));
+  border: 1px dashed color-mix(in srgb, var(--wood) 20%, var(--border));
+}
+
+.agent-progress-bar {
+  height: 10px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--wood) 20%, var(--border));
+  background: color-mix(in srgb, var(--paper) 75%, var(--surface-2));
+  overflow: hidden;
+}
+
+.agent-progress-bar__fill {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 76%, var(--wood) 24%), color-mix(in srgb, var(--ok) 72%, var(--wood) 28%));
+}
+
+.next-human-approval-card__lead {
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: color-mix(in srgb, #fff 40%, var(--paper));
+  border: 1px solid color-mix(in srgb, var(--wood) 18%, var(--border));
+}
+
+.proposed-message-preview {
+  margin-top: 10px;
+  padding: 10px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--paper) 86%, #fff 14%);
+  border: 1px solid color-mix(in srgb, var(--wood) 18%, var(--border));
+}
+
+.proposed-message-preview__body {
+  margin-top: 6px;
+  padding: 10px;
+  border-radius: 10px;
+  border: 1px dashed color-mix(in srgb, var(--wood) 20%, var(--border));
+  background: color-mix(in srgb, var(--paper) 70%, var(--surface-2));
+  color: var(--wood-dark);
+}
+
+.approval-actions {
+  margin-top: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.agent-run-timeline__list {
+  display: grid;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.agent-run-step {
+  padding: 10px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--paper) 86%, #fff 14%);
+  border: 1px solid color-mix(in srgb, var(--wood) 18%, var(--border));
+}
+
+.agent-run-step__head {
+  display: grid;
+  grid-template-columns: 22px 1fr;
+  align-items: start;
+  gap: 8px;
+}
+
+.agent-run-step__icon {
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.agent-run-step__title {
+  font-weight: 900;
+  color: var(--wood-dark);
+}
+
+.agent-run-step__meta {
+  grid-column: 2;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.agent-run-step__summary {
+  margin-top: 6px;
+  line-height: 1.45;
+}
+
 .decision-flow-compact {
   gap: 12px;
 }

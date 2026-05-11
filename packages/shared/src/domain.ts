@@ -270,6 +270,71 @@ export type ResolutionDecisionTree = {
   };
 };
 
+export type AgentRunStepStatus =
+  | "detected"
+  | "proposed"
+  | "approved"
+  | "sent"
+  | "waitingReply"
+  | "replyReceived"
+  | "classified"
+  | "completed"
+  | "blocked"
+  | "held";
+
+export type AgentRunActionType =
+  | "detectIncident"
+  | "proposeSupplierConfirmation"
+  | "sendSupplierEmail"
+  | "classifySupplierReply"
+  | "proposeSalesCheck"
+  | "sendTeamsMessage"
+  | "aggregateSalesResponses"
+  | "proposeFinalDecision"
+  | "humanApproval"
+  | "hold"
+  | "escalate";
+
+export type AgentRunStep = {
+  id: string;
+  title: string;
+  status: AgentRunStepStatus;
+  actionType: AgentRunActionType;
+  actor: "agent" | "human" | "supplier" | "sales" | "forwarder" | "system";
+  summary: string;
+  evidence?: string[];
+  proposedMessage?: {
+    channel: "email" | "teams";
+    to: string[];
+    subject?: string;
+    body: string;
+  };
+  classification?: {
+    label: string;
+    confidence: number;
+    reasoning?: string[];
+  };
+  requiresHumanApproval: boolean;
+  approvedBy?: string;
+  approvedAt?: string;
+  createdAt: string;
+};
+
+export type ResolutionAgentRun = {
+  id: string;
+  caseId: string;
+  incidentId?: string;
+  currentStepId: string;
+  status: "running" | "waitingHumanApproval" | "waitingExternalReply" | "completed" | "blocked";
+  progressPercent: number;
+  nextHumanAction?: {
+    label: string;
+    description: string;
+    actionType: AgentRunActionType;
+  };
+  steps: AgentRunStep[];
+};
+
 export type ProgressStatus =
   | "done"
   | "waiting"
@@ -440,6 +505,7 @@ export type TradeCase = {
   siEntity?: SIEntity;
   caseProgress?: CaseProgress;
   decisionContext?: DecisionContext;
+  resolutionAgentRun?: ResolutionAgentRun;
   /**
    * Operations graph refs (View Lens 用)
    * - SI / Invoice / BL / Shipment / Supplier などの識別子で同じ業務データを再構成する。
