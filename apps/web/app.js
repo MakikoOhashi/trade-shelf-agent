@@ -1868,6 +1868,7 @@ function renderTradeCaseDetail(tradeCase) {
     { key: "supplierReliability", label: "仕入先傾向を見る" },
     { key: "stakeholderResponses", label: "営業回答を見る" },
     { key: "documentStatus", label: "書類状況を見る" },
+    { key: "freightCost", label: "Freight cost" },
   ];
 
   function renderContextLauncher(activeKey) {
@@ -2060,6 +2061,13 @@ function renderTradeCaseDetail(tradeCase) {
       return renderDrawerPanel("Document Status / 書類状況", `<div class="evidence-table">${rows}</div>`);
     }
 
+    if (key === "freightCost") {
+      return renderDrawerPanel(
+        "Freight cost (mock)",
+        `<div class="muted">（mock）このケースの見積運賃・AIR切替コスト比較は今後追加予定です。</div>`,
+      );
+    }
+
     return renderDrawerPanel("Context", `<div class="muted">(unknown context)</div>`);
   }
 
@@ -2215,6 +2223,156 @@ function renderTradeCaseDetail(tradeCase) {
 
       <div class="detail-subhead">Resolution / 対応進捗</div>
       ${renderItems(cp.resolution)}
+    </section>`;
+  }
+
+  function renderResolutionDecisionTree(tradeCase) {
+    const dc = tradeCase && tradeCase.decisionContext ? tradeCase.decisionContext : null;
+    const tree = dc && dc.resolutionDecisionTree ? dc.resolutionDecisionTree : null;
+    if (!tree || !Array.isArray(tree.nodes) || tree.nodes.length === 0) {
+      return `<div class="detail-section decision-tree"><h3 class="detail-section__title">Resolution Decision Tree / 分岐型確認フロー</h3><div class="muted">(no decision tree)</div></div>`;
+    }
+
+    const nodes = tree.nodes;
+    const current =
+      nodes.find((n) => n && n.id === tree.currentNodeId) || nodes.find((n) => n && n.status === "current") || nodes[0];
+
+    const statusLabel = (s) => {
+      const st = String(s || "");
+      if (st === "current") return "現在";
+      if (st === "available") return "確認可能";
+      if (st === "completed") return "完了";
+      if (st === "blocked") return "停滞";
+      if (st === "notReached") return "未到達";
+      if (st === "skipped") return "スキップ";
+      return st || "-";
+    };
+
+    const ownerLabel = (t) => {
+      const ot = String(t || "");
+      if (ot === "supplier") return "仕入先";
+      if (ot === "forwarder") return "フォワーダー";
+      if (ot === "sales") return "営業";
+      if (ot === "warehouse") return "倉庫";
+      if (ot === "internal") return "社内";
+      return ot || "-";
+    };
+
+    const contextMeta = (key) => {
+      const k = String(key || "");
+      if (k === "documents") return { label: "書類状況", drawerKey: "documentStatus" };
+      if (k === "inventory") return { label: "在庫", drawerKey: "inventory" };
+      if (k === "salesCommitments") return { label: "売約", drawerKey: "salesCommitments" };
+      if (k === "inboundPlans") return { label: "次便", drawerKey: "inboundPlans" };
+      if (k === "stakeholderResponses") return { label: "営業回答", drawerKey: "stakeholderResponses" };
+      if (k === "supplierReliability") return { label: "仕入先傾向", drawerKey: "supplierReliability" };
+      if (k === "freightCost") return { label: "Freight cost", drawerKey: "freightCost" };
+      return { label: k || "-", drawerKey: "" };
+    };
+
+    const blockingBadge = current.blockingDecision
+      ? `<span class="pill pill--mini pill--high">blocking</span>`
+      : `<span class="pill pill--mini pill--muted">non-blocking</span>`;
+
+    const ownerText = [ownerLabel(current.ownerType), current.ownerName].filter(Boolean).join(" / ");
+    const received = current.receivedAnswer
+      ? `<div class="current-question-card__received"><span class="muted">received</span> ${escapeHtml(String(current.receivedAnswer))}</div>`
+      : "";
+
+    const fallback = tree.fallbackRoute
+      ? `<div class="fallback-route-card">
+          <div class="fallback-route-card__title">No Reply Route / 未回答時の暫定ルート</div>
+          <div class="muted">${escapeHtml(tree.fallbackRoute.triggerCondition || "-")}</div>
+          <div>${escapeHtml(tree.fallbackRoute.suggestedAction || "-")}</div>
+          ${tree.fallbackRoute.escalationTarget ? `<div class="muted">escalation: ${escapeHtml(tree.fallbackRoute.escalationTarget)}</div>` : ""}
+        </div>`
+      : "";
+
+    const branches = Array.isArray(current.branches) ? current.branches : [];
+    const branchCards = branches.length
+      ? branches
+          .map((b) => {
+            if (!b) return "";
+            const nextNode = b.nextNodeId ? nodes.find((n) => n && n.id === b.nextNodeId) : null;
+            const nextTitle = nextNode && nextNode.title ? String(nextNode.title) : "";
+            const required = Array.isArray(b.requiredContext) ? b.requiredContext : [];
+            const requiredHtml = required.length
+              ? `<div class="required-context-row">
+                  <div class="required-context-row__label muted">この判断に必要:</div>
+                  <div class="required-context-row__items">
+                    ${required
+                      .map((k) => {
+                        const meta = contextMeta(k);
+                        const key = meta.drawerKey ? `data-context-open="${escapeHtml(meta.drawerKey)}"` : "";
+                        const cls = meta.drawerKey ? "btn btn--small btn--ghost" : "btn btn--small btn--ghost is-disabled";
+                        return `<button class="${cls}" type="button" ${key}>${escapeHtml(meta.label)}</button>`;
+                      })
+                      .join("")}
+                  </div>
+                </div>`
+              : "";
+
+            const nextHtml = nextTitle ? `<div class="muted">次の分岐: ${escapeHtml(nextTitle)}</div>` : "";
+            return `<div class="branch-choice-card" role="button" tabindex="0"
+              data-decision-branch="1"
+              data-branch-node-id="${escapeHtml(String(current.id || ""))}"
+              data-branch-label="${escapeHtml(String(b.label || ""))}"
+              data-branch-value="${escapeHtml(String(b.value || ""))}"
+              data-branch-next="${escapeHtml(String(b.nextNodeId || ""))}">
+              <div class="branch-label">${escapeHtml(String(b.label || "-"))}</div>
+              <div class="branch-choice-card__action">${escapeHtml(String(b.actionLabel || "-"))}</div>
+              ${b.explanation ? `<div class="muted">${escapeHtml(String(b.explanation))}</div>` : ""}
+              ${nextHtml}
+              ${requiredHtml}
+            </div>`;
+          })
+          .join("")
+      : `<div class="muted">(no branches)</div>`;
+
+    const overviewList = nodes
+      .map((n) => {
+        if (!n) return "";
+        const isCurrent = n.id === (current && current.id ? current.id : "");
+        const pill = `<span class="pill pill--mini ${isCurrent ? "pill--recommended" : ""}">${escapeHtml(statusLabel(n.status))}</span>`;
+        return `<li>${pill} ${escapeHtml(n.title || n.id || "-")}</li>`;
+      })
+      .join("");
+
+    const overviewAccordion = `<div class="accordion tree-overview-accordion" data-accordion-root>
+      <div class="accordion__item">
+        <button class="accordion__trigger" type="button" data-accordion-trigger aria-expanded="false">
+          <span class="pill pill--mini">全体フローを見る</span>
+          <span class="accordion__summary">Decision Tree overview</span>
+        </button>
+        <div class="accordion__panel" hidden>
+          <ul class="mini-list">${overviewList}</ul>
+        </div>
+      </div>
+    </div>`;
+
+    return `<section class="detail-section decision-tree">
+      <h3 class="detail-section__title">Resolution Decision Tree / 分岐型確認フロー</h3>
+      <div class="current-question-card">
+        <div class="current-question-card__top">
+          <div class="current-question-card__title">現在の確認: ${escapeHtml(current.title || current.id || "-")}</div>
+          <div class="current-question-card__badges">
+            <span class="pill pill--mini">${escapeHtml(ownerText || "-")}</span>
+            <span class="pill pill--mini">${escapeHtml(statusLabel(current.status))}</span>
+            ${current.dueAt ? `<span class="pill pill--mini">due ${escapeHtml(String(current.dueAt))}</span>` : `<span class="pill pill--mini pill--muted">due -</span>`}
+            ${blockingBadge}
+          </div>
+        </div>
+        <div class="current-question-card__question"><span class="muted">Q:</span> ${escapeHtml(current.question || "-")}</div>
+        ${received}
+      </div>
+
+      ${fallback}
+
+      <div class="branch-choice-grid">
+        ${branchCards}
+      </div>
+
+      ${overviewAccordion}
     </section>`;
   }
 
@@ -2403,7 +2561,7 @@ function renderTradeCaseDetail(tradeCase) {
             </div>
           </section>
 
-          ${renderResolutionWorkflow(tradeCase)}
+          ${renderResolutionDecisionTree(tradeCase)}
 
           <section class="detail-section">
             <h3 class="detail-section__title">Context Launcher / 必要資料</h3>
@@ -2454,6 +2612,18 @@ function renderTradeCaseDetail(tradeCase) {
             <h3 class="detail-section__title">Agent Analysis / AI分析</h3>
             <div class="detail-subhead">Detected Incidents</div>
             ${incidentAccordionHtml}
+            <div class="detail-subhead">Resolution Workflow（旧）</div>
+            <div class="accordion" data-accordion-root>
+              <div class="accordion__item">
+                <button class="accordion__trigger" type="button" data-accordion-trigger aria-expanded="false">
+                  <span class="pill pill--mini">直列表示を見る</span>
+                  <span class="accordion__summary">Resolution Workflow / 確認手順（旧UI）</span>
+                </button>
+                <div class="accordion__panel" hidden>
+                  ${renderResolutionWorkflow(tradeCase)}
+                </div>
+              </div>
+            </div>
           </section>
         </main>
 
@@ -2576,6 +2746,44 @@ function setupModal() {
       const isOpen = item.classList.toggle("is-open");
       accordionTrigger.setAttribute("aria-expanded", isOpen ? "true" : "false");
       if (panel) panel.hidden = !isOpen;
+      return;
+    }
+
+    const decisionBranchEl = target.closest && target.closest("[data-decision-branch]");
+    if (decisionBranchEl) {
+      const nodeId = decisionBranchEl.getAttribute("data-branch-node-id") || "";
+      const branchLabel = decisionBranchEl.getAttribute("data-branch-label") || "";
+      const branchValue = decisionBranchEl.getAttribute("data-branch-value") || "";
+      const nextNodeId = decisionBranchEl.getAttribute("data-branch-next") || "";
+
+      if (!state.modalTradeCaseId) return;
+      const tc = getTradeCaseById(state.modalTradeCaseId);
+      const tree = tc && tc.decisionContext && tc.decisionContext.resolutionDecisionTree ? tc.decisionContext.resolutionDecisionTree : null;
+
+      if (tree && Array.isArray(tree.nodes)) {
+        const current = tree.currentNodeId ? tree.nodes.find((n) => n && n.id === tree.currentNodeId) : null;
+        const clickedNode = nodeId ? tree.nodes.find((n) => n && n.id === nodeId) : null;
+        const activeNode = clickedNode || current;
+        if (activeNode) {
+          activeNode.receivedAnswer = branchLabel || branchValue || "";
+          if (nextNodeId) {
+            activeNode.status = "completed";
+            const next = tree.nodes.find((n) => n && n.id === nextNodeId) || null;
+            if (next) {
+              next.status = "current";
+              tree.currentNodeId = next.id;
+            }
+          }
+        }
+      }
+
+      recordHumanIntervention(state.modalTradeCaseId, {
+        actionType: "decisionTreeBranch",
+        label: `Decision Tree: ${branchLabel || branchValue || "branch"}`,
+        note: `node:${nodeId} value:${branchValue} next:${nextNodeId}`,
+      });
+
+      if (tc) renderTradeCaseDetail(tc);
       return;
     }
 

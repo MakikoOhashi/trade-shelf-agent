@@ -220,6 +220,56 @@ export type ResolutionWorkflow = {
   };
 };
 
+export type DecisionTreeNodeStatus =
+  | "current"
+  | "available"
+  | "completed"
+  | "blocked"
+  | "notReached"
+  | "skipped";
+
+export type DecisionTreeBranch = {
+  label: string;
+  value: string;
+  nextNodeId?: string;
+  actionLabel: string;
+  explanation?: string;
+  requiredContext?: Array<
+    | "documents"
+    | "inventory"
+    | "salesCommitments"
+    | "inboundPlans"
+    | "stakeholderResponses"
+    | "supplierReliability"
+    | "freightCost"
+  >;
+};
+
+export type ResolutionDecisionTreeNode = {
+  id: string;
+  title: string;
+  question: string;
+  ownerType: "supplier" | "forwarder" | "sales" | "warehouse" | "internal";
+  ownerName?: string;
+  status: DecisionTreeNodeStatus;
+  dueAt?: string;
+  blockingDecision: boolean;
+  receivedAnswer?: string;
+  branches: DecisionTreeBranch[];
+};
+
+export type ResolutionDecisionTree = {
+  caseId: string;
+  incidentId?: string;
+  currentNodeId: string;
+  nodes: ResolutionDecisionTreeNode[];
+  fallbackRoute?: {
+    triggerCondition: string;
+    suggestedAction: string;
+    escalationTarget?: string;
+  };
+};
+
 export type ProgressStatus =
   | "done"
   | "waiting"
@@ -257,6 +307,7 @@ export type DecisionContext = {
   stakeholderResponses?: StakeholderResponse[];
   documentStatus?: DocumentStatus[];
   resolutionWorkflow?: ResolutionWorkflow;
+  resolutionDecisionTree?: ResolutionDecisionTree;
   supplierReliability?: {
     supplierName: string;
     onTimeRate: number;

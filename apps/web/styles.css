@@ -1803,3 +1803,145 @@ body {
 .modal--tradecase .modal__title {
   color: var(--wood-dark);
 }
+
+/* Resolution Decision Tree (branching confirmation flow) */
+.decision-tree {
+  --dt-paper: color-mix(in srgb, var(--paper) 92%, #fff 8%);
+  --dt-note: color-mix(in srgb, var(--wood) 22%, var(--paper));
+  --dt-border: color-mix(in srgb, var(--wood) 26%, var(--border));
+  --dt-shadow: 0 10px 30px rgba(0, 0, 0, 0.18);
+}
+
+.current-question-card {
+  border: 1px solid var(--dt-border);
+  border-radius: 14px;
+  background: linear-gradient(180deg, var(--dt-paper), color-mix(in srgb, var(--dt-paper) 80%, var(--surface-2)));
+  box-shadow: var(--dt-shadow);
+  padding: 14px 14px 12px;
+  color: var(--wood-dark);
+}
+
+.current-question-card__top {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+}
+
+.current-question-card__title {
+  font-weight: 850;
+  letter-spacing: 0.2px;
+}
+
+.current-question-card__badges {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.current-question-card__question {
+  margin-top: 8px;
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.current-question-card__received {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed color-mix(in srgb, var(--wood) 18%, var(--border));
+  font-size: 13px;
+  color: var(--wood-dark);
+}
+
+.branch-choice-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 12px;
+}
+
+@media (max-width: 980px) {
+  .branch-choice-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.branch-choice-card {
+  text-align: left;
+  width: 100%;
+  border: 1px solid color-mix(in srgb, var(--dt-border) 78%, var(--border));
+  border-radius: 14px;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--dt-note) 94%, #fff 6%), var(--dt-paper));
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.14);
+  padding: 12px;
+  cursor: pointer;
+  transition: transform 120ms ease, border-color 120ms ease, background 120ms ease;
+  color: var(--wood-dark);
+}
+
+.branch-choice-card:hover {
+  transform: translateY(-1px);
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--dt-border));
+  background: linear-gradient(180deg, color-mix(in srgb, var(--dt-note) 88%, #fff 12%), var(--dt-paper));
+}
+
+.branch-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 900;
+  letter-spacing: 0.4px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.06);
+  border: 1px solid color-mix(in srgb, var(--wood) 22%, var(--border));
+  margin-bottom: 8px;
+}
+
+.branch-choice-card__action {
+  font-weight: 850;
+  margin-bottom: 6px;
+}
+
+.required-context-row {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed color-mix(in srgb, var(--wood) 18%, var(--border));
+  display: grid;
+  gap: 8px;
+}
+
+.required-context-row__items {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.required-context-row .btn--ghost {
+  border-color: color-mix(in srgb, var(--wood) 18%, var(--border));
+}
+
+.fallback-route-card {
+  margin-top: 12px;
+  border-radius: 14px;
+  border: 1px solid color-mix(in srgb, var(--warning) 36%, var(--dt-border));
+  background: linear-gradient(180deg, color-mix(in srgb, var(--warning) 10%, var(--dt-paper)), var(--dt-paper));
+  padding: 12px;
+  color: var(--wood-dark);
+}
+
+.fallback-route-card__title {
+  font-weight: 900;
+  margin-bottom: 6px;
+}
+
+.tree-overview-accordion {
+  margin-top: 12px;
+}
+
+.tree-overview-accordion .accordion__trigger {
+  background: color-mix(in srgb, var(--dt-paper) 62%, var(--surface-2));
+  border-color: color-mix(in srgb, var(--wood) 18%, var(--border));
+}
