@@ -763,67 +763,59 @@ function renderNewTop() {
 	              : "—";
 
 	      const currentStatusHtml = `<section class="issue-current-status ${sevClass}" aria-label="Current Status">
-	        <div class="issue-current-grid">
-	          <div class="issue-current-left">
-	            <div class="issue-current-title">Current Status</div>
-	            <div class="issue-current-rows">
-	              <div class="issue-current-row"><span class="k">Status</span><span class="v">${escapeHtml(statusJa)}</span></div>
-	              <div class="issue-current-row"><span class="k">Last activity</span><span class="v nt-mono">${escapeHtml(lastAtText)}</span></div>
-	              <div class="issue-current-row issue-current-row--pending"><span class="k">Pending approval</span><span class="v">${escapeHtml(pendingApprovalText)}</span></div>
-	              <div class="issue-current-row"><span class="k">Current proposal</span><span class="v">${escapeHtml(currentProposalText)}</span></div>
-	              <div class="issue-current-row"><span class="k">Next action</span><span class="v">${escapeHtml(nextActionText)}</span></div>
-	            </div>
-	            <div class="issue-current-actions">
-	              <button class="btn btn--primary btn--small" type="button" data-issue-approve="${escapeHtml(it.tradeCaseId)}" ${canAct ? "" : "disabled"}>Approve</button>
-	              <button class="btn btn--small" type="button" data-issue-edit="${escapeHtml(it.tradeCaseId)}" ${canAct ? "" : "disabled"}>Edit draft</button>
-	              <button class="btn btn--small" type="button" data-issue-hold="${escapeHtml(it.tradeCaseId)}">Hold</button>
-	            </div>
-	          </div>
-	          <div class="issue-current-right">
-	            <div class="issue-current-deadline">
-	              <div class="k">Deadline / SLA</div>
-	              <div class="v nt-mono">${escapeHtml(dueDate || "-")} ${overdue ? `<span class="issue-overdue">OVERDUE</span>` : ""}</div>
-	            </div>
-	          </div>
+	        <div class="issue-current-title">Current Status</div>
+	        <div class="issue-current-rows">
+	          <div class="issue-current-row"><span class="k">Status</span><span class="v">${escapeHtml(statusJa)}</span></div>
+	          <div class="issue-current-row issue-current-row--pending"><span class="k">Pending approval</span><span class="v">${escapeHtml(pendingApprovalText)}</span></div>
+	          <div class="issue-current-row"><span class="k">AI proposal</span><span class="v">${escapeHtml(currentProposalText)}</span></div>
+	        </div>
+	        <div class="issue-current-actions" aria-label="Next actions">
+	          <button class="btn btn--primary btn--small" type="button" data-issue-approve="${escapeHtml(it.tradeCaseId)}" ${canAct ? "" : "disabled"}>Approve</button>
+	          <button class="btn btn--small" type="button" data-issue-edit="${escapeHtml(it.tradeCaseId)}" ${canAct ? "" : "disabled"}>Edit draft</button>
+	          <button class="btn btn--small" type="button" data-issue-hold="${escapeHtml(it.tradeCaseId)}">Hold</button>
 	        </div>
 	      </section>`;
 
+	      const metaPanelHtml = `<aside class="issue-meta-panel issue-meta-panel--sticky" aria-label="Meta Panel">
+          <div class="issue-sidebar-row"><div class="issue-sidebar__k">Assignee / Owner</div><div class="issue-sidebar__v">${escapeHtml(assignee)}</div></div>
+          <div class="issue-sidebar-row"><div class="issue-sidebar__k">Labels</div><div class="issue-sidebar__v">${labelHtml}</div></div>
+          ${relatedLinksHtml}
+          <div class="issue-sidebar-row"><div class="issue-sidebar__k">External status</div><div class="issue-sidebar__v">${escapeHtml(externalStatus)}</div></div>
+          ${dueHtml}
+        </aside>`;
+
 	      return `<section class="issue-detail" aria-label="Issue detail">
-	        <div class="issue-detail__top">
-	          <button class="btn btn--small btn--ghost" type="button" data-issue-back="1">← Back</button>
-	          <div class="issue-detail__title">
-            <div class="issue-detail__h">${escapeHtml(it.title)}</div>
-            <div class="issue-detail__sub">
-              <span class="issue-pill nt-mono">#${escapeHtml(it.issueNo)}</span>
-	              <span class="issue-pill ${sevClass}">${escapeHtml(sev.toUpperCase())}</span>
-	              <span class="issue-pill">${escapeHtml(statusText)}</span>
-	            </div>
-	          </div>
-	        </div>
-	        ${currentStatusHtml}
-	        <div class="issue-detail__grid">
-	          <div class="issue-detail__main">
-	            <section class="detail-section">
-	              <h3 class="detail-section__title">Timeline / 対応履歴</h3>
-	              <div class="nt-muted">古い順に記録。現在の対応は上部の Current Status を確認。</div>
-	              <div class="issue-timeline">${timelineHtml}</div>
-	            </section>
-	            <div class="issue-comment">
-	              <div class="issue-comment__label">Comment</div>
-	              <textarea class="issue-comment__box" rows="3" placeholder="手動メモ・補足・判断理由を残す" data-issue-comment-box="1"></textarea>
-	              <div class="issue-comment__actions">
-	                <button class="btn btn--primary btn--small" type="button" data-issue-add-comment="${escapeHtml(it.tradeCaseId)}">Add comment</button>
+          <div class="issue-detail-layout" aria-label="Issue detail layout">
+            <div class="issue-main-column" aria-label="Issue conversation">
+              <div class="issue-detail__top">
+                <button class="btn btn--small btn--ghost" type="button" data-issue-back="1">← Back</button>
+                <div class="issue-detail__title">
+                  <div class="issue-detail__h">${escapeHtml(it.title)}</div>
+                  <div class="issue-detail__sub">
+                    <span class="issue-pill nt-mono">#${escapeHtml(it.issueNo)}</span>
+                    <span class="issue-pill ${sevClass}">${escapeHtml(sev.toUpperCase())}</span>
+                    <span class="issue-pill">${escapeHtml(statusText)}</span>
+                  </div>
+                </div>
               </div>
+              ${currentStatusHtml}
+              <section class="detail-section issue-timeline-section" aria-label="Timeline">
+                <h3 class="detail-section__title">Timeline / 対応履歴</h3>
+                <div class="nt-muted">古い順に記録。現在の対応は上部の Current Status を確認。</div>
+                <div class="issue-timeline">${timelineHtml}</div>
+                <div class="issue-comment">
+                  <div class="issue-comment__label">Comment</div>
+                  <textarea class="issue-comment__box" rows="3" placeholder="手動メモ・補足・判断理由を残す" data-issue-comment-box="1"></textarea>
+                  <div class="issue-comment__actions">
+                    <button class="btn btn--primary btn--small" type="button" data-issue-add-comment="${escapeHtml(it.tradeCaseId)}">Add comment</button>
+                  </div>
+                </div>
+              </section>
+            </div>
+            <div class="issue-sidebar-column" aria-label="Issue sidebar">
+              ${metaPanelHtml}
             </div>
           </div>
-          <aside class="issue-sidebar" aria-label="Metadata sidebar">
-            <div class="issue-sidebar-row"><div class="issue-sidebar__k">Assignee / Owner</div><div class="issue-sidebar__v">${escapeHtml(assignee)}</div></div>
-            <div class="issue-sidebar-row"><div class="issue-sidebar__k">Labels</div><div class="issue-sidebar__v">${labelHtml}</div></div>
-            ${relatedLinksHtml}
-            <div class="issue-sidebar-row"><div class="issue-sidebar__k">External status</div><div class="issue-sidebar__v">${escapeHtml(externalStatus)}</div></div>
-            ${dueHtml}
-          </aside>
-        </div>
       </section>`;
     };
 

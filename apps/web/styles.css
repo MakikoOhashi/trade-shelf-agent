@@ -479,6 +479,20 @@ body {
   border-bottom: 1px solid #d0d7de;
 }
 
+#app .issue-top-grid {
+  margin-top: 12px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 16px;
+  align-items: start;
+}
+
+@media (max-width: 920px) {
+  #app .issue-top-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 #app .issue-current-status {
   margin-top: 12px;
   border: 1px solid #d0d7de;
@@ -495,19 +509,6 @@ body {
 #app .issue-current-status.is-medium {
   border-color: color-mix(in srgb, #bf8700 24%, #d0d7de);
   background: color-mix(in srgb, #fff8c5 55%, #ffffff);
-}
-
-#app .issue-current-grid {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  gap: 12px;
-  align-items: start;
-}
-
-@media (max-width: 920px) {
-  #app .issue-current-grid {
-    grid-template-columns: 1fr;
-  }
 }
 
 #app .issue-current-title {
@@ -552,20 +553,43 @@ body {
   flex-wrap: wrap;
 }
 
-#app .issue-current-deadline {
-  text-align: right;
-  font-size: 12px;
-  color: #57606a;
+#app .issue-meta-panel {
+  border: 1px solid #d0d7de;
+  border-radius: 12px;
+  background: #ffffff;
+  padding: 12px;
+  height: fit-content;
 }
 
-#app .issue-current-deadline .k {
-  font-weight: 700;
+#app .issue-meta-panel--sticky {
+  position: sticky;
+  top: 88px;
 }
 
-#app .issue-current-deadline .v {
-  margin-top: 4px;
-  color: #24292f;
-  font-size: 12px;
+#app .issue-detail-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 16px;
+  align-items: start;
+  margin-top: 12px;
+}
+
+@media (max-width: 920px) {
+  #app .issue-detail-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+#app .issue-main-column {
+  min-width: 0;
+}
+
+#app .issue-sidebar-column {
+  min-width: 0;
+}
+
+#app .issue-timeline-section {
+  margin-top: 16px;
 }
 
 #app .issue-detail__title {
