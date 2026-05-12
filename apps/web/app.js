@@ -1137,7 +1137,7 @@ function isAnyWorkspaceModalOpen() {
 
 function getWorkspaceUi(modalId) {
   if (!state.workspaceUiByModalId[modalId]) {
-    state.workspaceUiByModalId[modalId] = { activeDocId: null, activePageByDocId: {} };
+    state.workspaceUiByModalId[modalId] = { activeDocId: null, activePageByDocId: {}, zoomByDocId: {}, showMarkers: true };
   }
   return state.workspaceUiByModalId[modalId];
 }
@@ -1152,6 +1152,7 @@ function ensureWorkspaceUiDefaults(modalId, documents) {
 
   for (const id of docIds) {
     if (typeof ui.activePageByDocId[id] !== "number") ui.activePageByDocId[id] = 0;
+    if (typeof ui.zoomByDocId[id] !== "number") ui.zoomByDocId[id] = 100;
   }
   return ui;
 }
@@ -1188,7 +1189,14 @@ function renderDocumentViewer(documents, { modalId, viewerKey }) {
   const activePageIdx = clamp(typeof activePageIdxRaw === "number" ? activePageIdxRaw : 0, 0, Math.max(0, pageCount - 1));
   if (activeDocId) ui.activePageByDocId[activeDocId] = activePageIdx;
 
+  const zoomRaw = activeDocId ? ui.zoomByDocId[activeDocId] : 100;
+  const zoom = clamp(typeof zoomRaw === "number" ? zoomRaw : 100, 80, 160);
+  if (activeDocId) ui.zoomByDocId[activeDocId] = zoom;
+
+  const showMarkers = ui.showMarkers !== false;
+
   let pageHtml = `<div class="paper-page"><div class="muted">No document</div></div>`;
+  let markersHtml = "";
   if (activeDoc) {
     if (activeDoc.status === "missing") {
       pageHtml = `
@@ -1203,10 +1211,31 @@ function renderDocumentViewer(documents, { modalId, viewerKey }) {
           </div>
         </div>
       `;
+      const missingMarkers = [
+        { kind: "warn", x: 72, y: 18, text: "⚠ PL missing" },
+        { kind: "note", x: 14, y: 66, text: "Supplier follow-up" },
+      ];
+      markersHtml = showMarkers
+        ? missingMarkers
+            .map((m) => `<div class="paper-marker paper-marker--${escapeHtml(m.kind)}" style="left:${escapeHtml(String(m.x))}%;top:${escapeHtml(String(m.y))}%">${escapeHtml(m.text)}</div>`)
+            .join("")
+        : "";
     } else {
       const pages = Array.isArray(activeDoc.mockPages) && activeDoc.mockPages.length ? activeDoc.mockPages : [{ title: activeDoc.title || activeDoc.type, rows: [] }];
       const p = pages[activePageIdx] || pages[0];
       const rows = Array.isArray(p.rows) ? p.rows : [];
+      const markers = Array.isArray(p.markers) ? p.markers : [];
+      markersHtml = showMarkers
+        ? markers
+            .map((m) => {
+              const kind = m && m.kind ? String(m.kind) : "note";
+              const x = typeof m?.x === "number" ? m.x : 12;
+              const y = typeof m?.y === "number" ? m.y : 12;
+              const text = m && m.text ? String(m.text) : "";
+              return `<div class="paper-marker paper-marker--${escapeHtml(kind)}" style="left:${escapeHtml(String(x))}%;top:${escapeHtml(String(y))}%">${escapeHtml(text)}</div>`;
+            })
+            .join("")
+        : "";
       pageHtml = `
         <div class="paper-page">
           <div class="paper-page__title">${escapeHtml(p.title || activeDoc.title || activeDoc.type || activeDoc.label || activeDoc.id)}</div>
@@ -1234,10 +1263,35 @@ function renderDocumentViewer(documents, { modalId, viewerKey }) {
                 </div>`
               : ""
           }
+          ${markersHtml ? `<div class="paper-overlay" aria-hidden="true">${markersHtml}</div>` : ""}
         </div>
       `;
     }
   }
+
+  const thumbsHtml = `
+    <div class="page-thumbs" aria-label="Page thumbnails">
+      ${Array.from({ length: pageCount })
+        .map((_, idx) => {
+          const isActive = idx === activePageIdx;
+          return `<button class="page-thumb ${isActive ? "is-active" : ""}" type="button"
+            data-doc-thumb="${idx}"
+            data-workspace-viewer="${escapeHtml(viewerKey)}"
+            aria-label="page ${idx + 1}"
+          ><span class="page-thumb__num">${idx + 1}</span></button>`;
+        })
+        .join("")}
+    </div>
+  `;
+
+  const toolsHtml = `
+    <div class="document-tools" aria-label="Viewer tools">
+      <button class="btn btn--ghost btn--mini" type="button" data-doc-zoom="-10" data-workspace-viewer="${escapeHtml(viewerKey)}" aria-label="Zoom out">−</button>
+      <div class="document-tools__zoom">${zoom}%</div>
+      <button class="btn btn--ghost btn--mini" type="button" data-doc-zoom="10" data-workspace-viewer="${escapeHtml(viewerKey)}" aria-label="Zoom in">＋</button>
+      <button class="btn btn--ghost btn--mini" type="button" data-doc-marker-toggle="1" data-workspace-viewer="${escapeHtml(viewerKey)}" aria-label="Toggle annotations">${showMarkers ? "Annotations: ON" : "Annotations: OFF"}</button>
+    </div>
+  `;
 
   const controlsHtml = `
     <div class="page-controls">
@@ -1249,9 +1303,17 @@ function renderDocumentViewer(documents, { modalId, viewerKey }) {
 
   return `
     <div class="document-viewer" data-doc-viewer="${escapeHtml(viewerKey)}">
-      ${tabsHtml}
-      <div class="paper-document" role="document" aria-label="Document page">
-        ${pageHtml}
+      <div class="document-viewer__top">
+        ${tabsHtml}
+        ${toolsHtml}
+      </div>
+      <div class="document-stage" role="region" aria-label="Document stage">
+        ${thumbsHtml}
+        <div class="paper-viewport">
+          <div class="paper-document" role="document" aria-label="Document page" style="--paper-zoom:${escapeHtml(String(zoom / 100))}">
+            ${pageHtml}
+          </div>
+        </div>
       </div>
       ${controlsHtml}
     </div>
@@ -1287,6 +1349,13 @@ function buildShipmentWorkspaceDocuments(tradeCase) {
             { k: "Amount", v: "USD 12,800.00" },
           ],
           annotation: siQty != null && invQty != null && siQty !== invQty ? "⚠ Quantity mismatch detected" : "",
+          markers:
+            siQty != null && invQty != null && siQty !== invQty
+              ? [
+                  { kind: "warn", x: 72, y: 34, text: "⚠ Qty mismatch" },
+                  { kind: "note", x: 16, y: 72, text: "Confirm split shipment?" },
+                ]
+              : [{ kind: "note", x: 16, y: 72, text: "Check customer impact" }],
         },
       ],
     },
@@ -1313,6 +1382,7 @@ function buildShipmentWorkspaceDocuments(tradeCase) {
             { k: "ETA", v: sh?.eta || "2026-05-10" },
             { k: "POL → POD", v: "Shenzhen → Tokyo" },
           ],
+          markers: [{ kind: "pin", x: 18, y: 18, text: "Vessel schedule" }],
         },
       ],
     },
@@ -1341,6 +1411,10 @@ function buildSiWorkspaceDocuments(tradeCase) {
             { k: "SKU", v: first?.sku || "UC-1M-BK" },
             { k: "Qty", v: first?.committedQty != null ? `${first.committedQty} pcs` : "1000 pcs" },
           ],
+          markers: [
+            { kind: "pin", x: 18, y: 26, text: "Customer delivery date" },
+            { kind: "note", x: 66, y: 72, text: "Split shipment decision" },
+          ],
         },
       ],
     },
@@ -1359,6 +1433,7 @@ function buildSiWorkspaceDocuments(tradeCase) {
             { k: "Committed Qty", v: first?.committedQty != null ? String(first.committedQty) : "1000" },
             { k: "Delivery date", v: first?.requestedDeliveryDate || si?.requestedDeliveryDate || "2026-05-20" },
           ],
+          markers: [{ kind: "warn", x: 70, y: 38, text: "⚠ Delivery risk?" }],
         },
       ],
     },
@@ -1390,20 +1465,16 @@ function renderShipmentWorkspace(tradeCase) {
   const invHtml = invs.length ? invs.map((x) => `<span class="pill pill--mini">${escapeHtml(x)}</span>`).join("") : `<span class="muted">-</span>`;
 
   const docStatus = Array.isArray(tradeCase?.decisionContext?.documentStatus) ? tradeCase.decisionContext.documentStatus : [];
-  const docHtml = docStatus.length
-    ? `<ul class="list">${docStatus
-        .map((d) => `<li><span class="pill pill--mini pill--muted">${escapeHtml(d.docType)}</span> ${escapeHtml(d.status)} ${
-          d.riskNote ? `<span class="muted">- ${escapeHtml(d.riskNote)}</span>` : ""
-        }</li>`)
-        .join("")}</ul>`
-    : `<div class="muted">(none)</div>`;
-
-  const bookingSchedule = Array.isArray(tradeCase?.caseProgress?.bookingSchedule) ? tradeCase.caseProgress.bookingSchedule : [];
-  const timelineHtml = bookingSchedule.length
-    ? `<ul class="list">${bookingSchedule
-        .map((x) => `<li><span class="pill pill--mini pill--muted">${escapeHtml(x.label)}</span> ${escapeHtml(x.status)} <span class="muted">${escapeHtml(x.note || "")}</span></li>`)
-        .join("")}</ul>`
-    : `<div class="muted">(none)</div>`;
+  const docSummaryHtml = docStatus.length
+    ? `<div class="doc-summary">${docStatus
+        .map((d) => {
+          const dt = d && d.docType ? String(d.docType) : "Doc";
+          const st = d && d.status ? String(d.status) : "-";
+          const isMissing = st.toLowerCase().includes("missing") || st.toLowerCase().includes("not");
+          return `<span class="pill pill--mini ${isMissing ? "pill--warn" : "pill--muted"}">${escapeHtml(dt)}: ${escapeHtml(st)}</span>`;
+        })
+        .join("")}</div>`
+    : `<div class="muted">-</div>`;
 
   const riskHtml = incidents.length
     ? `<ul class="list">${incidents.map((i) => `<li>${escapeHtml(incidentTitleJa(i))} <span class="muted">(${escapeHtml(i.severity || "low")})</span></li>`).join("")}</ul>`
@@ -1420,40 +1491,38 @@ function renderShipmentWorkspace(tradeCase) {
     sh?.blNo ? "BLはBooking情報と紐づいています" : null,
   ].filter(Boolean);
 
+  const nextActions = [
+    incidents.some((i) => i.type === "invoiceQuantityMismatch") ? "数量差異の扱い（分納/追加手配）を営業と合意" : null,
+    docStatus.some((d) => String(d.docType || "").toLowerCase().includes("packing") && String(d.status || "").toLowerCase().includes("missing"))
+      ? "PLを仕入先へリマインド"
+      : "PL到着予定を確認（mock）",
+    "顧客納期への影響を更新し、回答文を短く残す",
+  ].filter(Boolean);
+
   return `
     <div class="workspace-desk">
       <div class="workspace-layout">
-        <aside class="workspace-pane workspace-pane--left" aria-label="Shipment summary">
+        <aside class="workspace-pane workspace-pane--left" aria-label="Shipment context">
           <div class="workspace-section">
-            <div class="workspace-section__title">Shipment summary</div>
+            <div class="workspace-section__title">貨物 / 基本情報</div>
             <div class="workspace-kv">
               <div><span class="muted">Shipment</span> <span class="mono">${escapeHtml(sh?.id || "-")}</span></div>
               <div><span class="muted">Booking</span> <span class="mono">${escapeHtml(sh?.bookingNo || "-")}</span></div>
               <div><span class="muted">BL</span> <span class="mono">${escapeHtml(sh?.blNo || "-")}</span></div>
               <div><span class="muted">Container</span> <span class="mono">${escapeHtml(sh?.containerNo || "-")}</span></div>
+              <div><span class="muted">ETD</span> <span class="mono">${escapeHtml(sh?.etd || "-")}</span></div>
               <div><span class="muted">ETA</span> <span class="mono">${escapeHtml(sh?.eta || "-")}</span></div>
             </div>
           </div>
 
           <div class="workspace-section">
-            <div class="workspace-section__title">Invoice / docs</div>
+            <div class="workspace-section__title">書類 / 関連INV</div>
             <div class="case-cover__meta">${invHtml}</div>
-            <details class="accordion">
-              <summary class="accordion__summary">Document progress</summary>
-              <div class="accordion__body">${docHtml}</div>
-            </details>
+            ${docSummaryHtml}
           </div>
 
           <div class="workspace-section">
-            <div class="workspace-section__title">Shipment progress</div>
-            <details class="accordion">
-              <summary class="accordion__summary">Timeline</summary>
-              <div class="accordion__body">${timelineHtml}</div>
-            </details>
-          </div>
-
-          <div class="workspace-section">
-            <div class="workspace-section__title">Links</div>
+            <div class="workspace-section__title">Related</div>
             <div class="workspace-kv">
               <div><span class="muted">Case</span> <span class="mono">${escapeHtml(tradeCase?.id || "-")}</span></div>
               <div><span class="muted">Related SI</span> <span class="mono">${escapeHtml(si?.siNo || "-")}</span></div>
@@ -1465,22 +1534,23 @@ function renderShipmentWorkspace(tradeCase) {
           ${viewerHtml}
         </main>
 
-        <aside class="workspace-pane workspace-pane--right" aria-label="Notes">
-          <div class="sticky-note">
-            <div class="sticky-note__title">AI Notes</div>
-            ${aiNotes.length ? `<ul class="sticky-note__list">${aiNotes.map((x) => `<li>${escapeHtml(x)}</li>`).join("")}</ul>` : `<div class="muted">-</div>`}
+        <aside class="workspace-pane workspace-pane--right" aria-label="Decision helper">
+          <div class="workspace-section">
+            <div class="workspace-section__title">AI Notes</div>
+            ${aiNotes.length ? `<ul class="list">${aiNotes.map((x) => `<li>${escapeHtml(x)}</li>`).join("")}</ul>` : `<div class="muted">-</div>`}
           </div>
-          <div class="human-memo">
-            <div class="human-memo__title">Human Memo</div>
-            <ul class="human-memo__list">
-              <li>仕入先へ5/9 12:00まで回答依頼中</li>
-              <li>営業AはAIR希望</li>
-            </ul>
+          <div class="workspace-section">
+            <div class="workspace-section__title">Delivery risk</div>
+            ${riskHtml}
           </div>
-          <details class="accordion accordion--right">
-            <summary class="accordion__summary">Current shipment risks</summary>
-            <div class="accordion__body">${riskHtml}</div>
-          </details>
+          <div class="workspace-section">
+            <div class="workspace-section__title">Next action</div>
+            ${nextActions.length ? `<ul class="list">${nextActions.map((x) => `<li>${escapeHtml(x)}</li>`).join("")}</ul>` : `<div class="muted">-</div>`}
+          </div>
+          <div class="workspace-section">
+            <div class="workspace-section__title">Human memo</div>
+            <div class="muted">（mock）短文メモだけ。長文は Case detail に集約。</div>
+          </div>
         </aside>
       </div>
       <div class="workspace-role-note">
@@ -1513,10 +1583,23 @@ function renderSiWorkspace(tradeCase) {
   const documents = buildSiWorkspaceDocuments(tradeCase);
   const viewerHtml = renderDocumentViewer(documents, { modalId: "si-workspace-modal", viewerKey: "si" });
 
+  const incidents = detectIncidents(tradeCase).filter((i) => i && i.status !== "resolved");
+
   const aiNotes = [
     si?.requestedDeliveryDate ? `顧客納期: ${si.requestedDeliveryDate}` : null,
     relatedShipments.length ? "関連Shipmentを確認してください" : null,
     relatedInvoices.length ? "関連INVを照合してください" : null,
+  ].filter(Boolean);
+
+  const riskNotes = [
+    incidents.some((i) => i.type === "invoiceQuantityMismatch") ? "⚠ 数量差異あり（INV/SI）" : null,
+    "⚠ 顧客納期回答が未確定（mock）",
+  ].filter(Boolean);
+
+  const nextActions = [
+    "分納可否（売約条件）を確認",
+    "顧客への回答文（短文）を確定",
+    relatedShipments.length ? "関連Shipmentの書類を突合" : "Shipment側で必要書類の到着予定を確認（mock）",
   ].filter(Boolean);
 
   return `
@@ -1563,13 +1646,21 @@ function renderSiWorkspace(tradeCase) {
           ${viewerHtml}
         </main>
 
-        <aside class="workspace-pane workspace-pane--right" aria-label="Notes">
-          <div class="sticky-note">
-            <div class="sticky-note__title">AI Annotation / Delivery risk</div>
-            ${aiNotes.length ? `<ul class="sticky-note__list">${aiNotes.map((x) => `<li>${escapeHtml(x)}</li>`).join("")}</ul>` : `<div class="muted">-</div>`}
+        <aside class="workspace-pane workspace-pane--right" aria-label="Decision helper">
+          <div class="workspace-section">
+            <div class="workspace-section__title">AI Notes</div>
+            ${aiNotes.length ? `<ul class="list">${aiNotes.map((x) => `<li>${escapeHtml(x)}</li>`).join("")}</ul>` : `<div class="muted">-</div>`}
           </div>
-          <div class="human-memo">
-            <div class="human-memo__title">Sales comments</div>
+          <div class="workspace-section">
+            <div class="workspace-section__title">Delivery risk</div>
+            ${riskNotes.length ? `<ul class="list">${riskNotes.map((x) => `<li>${escapeHtml(x)}</li>`).join("")}</ul>` : `<div class="muted">-</div>`}
+          </div>
+          <div class="workspace-section">
+            <div class="workspace-section__title">Next action</div>
+            ${nextActions.length ? `<ul class="list">${nextActions.map((x) => `<li>${escapeHtml(x)}</li>`).join("")}</ul>` : `<div class="muted">-</div>`}
+          </div>
+          <div class="workspace-section">
+            <div class="workspace-section__title">Human memo</div>
             <div class="muted">（mock）営業コメントは短く。長文は Case detail に集約。</div>
           </div>
         </aside>
@@ -3745,6 +3836,54 @@ function setupWorkspaceModals() {
       if (!target) return;
       const closeEl = target.closest && target.closest("[data-close-workspace]");
       if (closeEl) closeWorkspaceModal(modalId);
+
+      const markerToggleEl = target.closest && target.closest("[data-doc-marker-toggle]");
+      if (markerToggleEl) {
+        const ui = getWorkspaceUi(modalId);
+        ui.showMarkers = ui.showMarkers === false;
+        const tradeCaseId = modalEl.getAttribute("data-tradecase-id");
+        const tc = tradeCaseId ? getTradeCaseById(tradeCaseId) : null;
+        if (tc) {
+          const body = modalEl.querySelector(".modal__body");
+          if (body) body.innerHTML = modalId === "shipment-workspace-modal" ? renderShipmentWorkspace(tc) : renderSiWorkspace(tc);
+        }
+        return;
+      }
+
+      const zoomEl = target.closest && target.closest("[data-doc-zoom]");
+      if (zoomEl) {
+        const ui = getWorkspaceUi(modalId);
+        if (!ui.activeDocId) return;
+        const deltaRaw = zoomEl.getAttribute("data-doc-zoom");
+        const delta = Number(deltaRaw);
+        if (!Number.isFinite(delta)) return;
+        const current = typeof ui.zoomByDocId[ui.activeDocId] === "number" ? ui.zoomByDocId[ui.activeDocId] : 100;
+        ui.zoomByDocId[ui.activeDocId] = clamp(current + delta, 80, 160);
+        const tradeCaseId = modalEl.getAttribute("data-tradecase-id");
+        const tc = tradeCaseId ? getTradeCaseById(tradeCaseId) : null;
+        if (tc) {
+          const body = modalEl.querySelector(".modal__body");
+          if (body) body.innerHTML = modalId === "shipment-workspace-modal" ? renderShipmentWorkspace(tc) : renderSiWorkspace(tc);
+        }
+        return;
+      }
+
+      const thumbEl = target.closest && target.closest("[data-doc-thumb]");
+      if (thumbEl) {
+        const ui = getWorkspaceUi(modalId);
+        if (!ui.activeDocId) return;
+        const idxRaw = thumbEl.getAttribute("data-doc-thumb");
+        const idx = Number(idxRaw);
+        if (!Number.isFinite(idx)) return;
+        ui.activePageByDocId[ui.activeDocId] = Math.max(0, idx);
+        const tradeCaseId = modalEl.getAttribute("data-tradecase-id");
+        const tc = tradeCaseId ? getTradeCaseById(tradeCaseId) : null;
+        if (tc) {
+          const body = modalEl.querySelector(".modal__body");
+          if (body) body.innerHTML = modalId === "shipment-workspace-modal" ? renderShipmentWorkspace(tc) : renderSiWorkspace(tc);
+        }
+        return;
+      }
 
       const tabEl = target.closest && target.closest("[data-doc-tab]");
       if (tabEl) {
