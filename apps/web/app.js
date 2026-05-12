@@ -37,6 +37,11 @@ const state = {
    * @type {string | null}
    */
   activeOperationalThreadId: null,
+  /**
+   * Operational Thread modal open state (Requests page)
+   * @type {boolean}
+   */
+  isOperationalThreadModalOpen: false,
   proposalApprovalStatusById: {},
   modalTradeCaseId: null,
   /**
@@ -154,6 +159,189 @@ function closeIngestionModal() {
   if (!modal) return;
   modal.classList.remove("is-open");
   modal.setAttribute("aria-hidden", "true");
+}
+
+function getActiveOperationalThread() {
+  const raw =
+    (Array.isArray(state.rawRequests) ? state.rawRequests : []).find((r) => r && r.id === state.activeRawRequestId) || null;
+  const threads = Array.isArray(raw?.aiThreads) ? raw.aiThreads : [];
+  const activeThreadId = state.activeOperationalThreadId || (threads[0] && threads[0].id) || null;
+  const thr = threads.find((t) => t && t.id === activeThreadId) || null;
+  return { raw, thr };
+}
+
+function renderOperationalThreadTimeline(thr) {
+  if (!thr) return `<div class="nt-muted">Select a thread</div>`;
+  const messages = Array.isArray(thr.messages) ? thr.messages.filter(Boolean) : [];
+
+  const evidenceHtml = (ev) => {
+    const list = Array.isArray(ev) ? ev.filter(Boolean) : [];
+    if (!list.length) return "";
+    return `<div class="thread-message__evidence">${list
+      .map((e) => {
+        const label = escapeHtml(String(e.label || ""));
+        const url = String(e.url || "").trim();
+        const inner = url
+          ? `<a class="evidence-chip" href="${escapeHtml(url)}" target="_blank" rel="noreferrer">${label}</a>`
+          : `<span class="evidence-chip">${label}</span>`;
+        return inner;
+      })
+      .join("")}</div>`;
+  };
+
+  const proposedActionHtml = (m) => {
+    if (!m || !m.proposedAction) return "";
+    const pa = m.proposedAction;
+    const stateLabel = String(m.proposedActionState || "pending");
+    const isDone = stateLabel === "sent" || stateLabel === "approved";
+
+    const draft = String(pa.draftBody || "").trim();
+    const draftHtml = draft ? `<pre class="proposed-action-card__draft">${escapeHtml(draft)}</pre>` : "";
+    const footHtml = isDone ? `<div class="proposed-action-card__status">Status: ${escapeHtml(stateLabel)}</div>` : "";
+
+    return `<div class="proposed-action-card" data-proposed-action-card="1">
+      <div class="proposed-action-card__head">
+        <div class="proposed-action-card__title">${escapeHtml(String(pa.label || "Proposed action"))}</div>
+        <div class="proposed-action-card__meta muted">${escapeHtml(String(pa.type || ""))}</div>
+      </div>
+      ${draftHtml}
+      <div class="proposed-action-card__actions">
+        <button class="btn btn--primary btn--small" type="button" data-op-thread-action="approve" data-op-thread-id="${escapeHtml(
+          String(thr.id || ""),
+        )}" data-op-message-id="${escapeHtml(String(m.id || ""))}" ${isDone ? "disabled" : ""}>Approve send</button>
+        <button class="btn btn--ghost btn--small" type="button" data-op-thread-action="edit" data-op-thread-id="${escapeHtml(
+          String(thr.id || ""),
+        )}" data-op-message-id="${escapeHtml(String(m.id || ""))}">Edit draft</button>
+        <button class="btn btn--ghost btn--small" type="button" data-op-thread-action="hold" data-op-thread-id="${escapeHtml(
+          String(thr.id || ""),
+        )}" data-op-message-id="${escapeHtml(String(m.id || ""))}">Hold</button>
+      </div>
+      ${footHtml}
+    </div>`;
+  };
+
+  if (!messages.length) return `<div class="nt-muted">No conversation yet</div>`;
+  return messages
+    .map((m, idx) => {
+      const role = String(m.role || "");
+      const isAgent = role === "agent";
+      const who = escapeHtml(String(m.sender || ""));
+      const text = escapeHtml(String(m.text || ""));
+      const at = m.createdAt ? formatLocalTime(m.createdAt) : "";
+      const atHtml = at ? `<div class="thread-message__at">${escapeHtml(at)}</div>` : "";
+      const cls = `thread-message ${isAgent ? "thread-message--agent" : "thread-message--requester"}`;
+      const tail = idx === messages.length - 1 ? " thread-message--latest" : "";
+      return `<div class="${cls}${tail}">
+        <div class="thread-message__bubble">
+          <div class="thread-message__sender">${who}</div>
+          <div class="thread-message__text">${text}</div>
+          ${evidenceHtml(m.evidence)}
+          ${proposedActionHtml(m)}
+        </div>
+        ${atHtml}
+      </div>`;
+    })
+    .join("");
+}
+
+function findLatestProposedActionMessage(thr) {
+  const messages = thr && Array.isArray(thr.messages) ? thr.messages.filter(Boolean) : [];
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (m && m.proposedAction) return m;
+  }
+  return null;
+}
+
+function renderOperationalThreadModalBody(thr) {
+  if (!thr) return `<div class="nt-muted">Select a thread</div>`;
+  const title = String(thr.title || "Operational Thread");
+  const status = String(thr.status || "—");
+  const confidence = String(thr.confidence || "—");
+
+  const linked = [
+    thr.linkedShipmentId ? `Shipment: ${thr.linkedShipmentId}` : "",
+    thr.linkedSiNo ? `SI: ${thr.linkedSiNo}` : "",
+    thr.linkedIssueId ? `Issue: ${thr.linkedIssueId}` : "",
+    thr.linkedCustomer ? `Customer: ${thr.linkedCustomer}` : "",
+    `Status: ${status}`,
+    `Confidence: ${confidence}`,
+  ].filter(Boolean);
+
+  const msg = findLatestProposedActionMessage(thr);
+  const hasProposed = Boolean(msg && msg.id);
+
+  return `<div class="op-thread-modal">
+    <div class="op-thread-modal__head">
+      <div class="op-thread-modal__title">${escapeHtml(title)}</div>
+      <div class="op-thread-modal__meta">
+        ${linked.map((x) => `<span class="mini-chip">${escapeHtml(x)}</span>`).join("")}
+      </div>
+    </div>
+
+    <div class="op-thread-modal__grid">
+      <div class="op-thread-modal__timeline" aria-label="Conversation timeline">
+        ${renderOperationalThreadTimeline(thr)}
+      </div>
+      <aside class="op-thread-modal__links" aria-label="Related links">
+        <div class="op-thread-modal__links-title">Related links</div>
+        <button class="btn btn--ghost btn--small" type="button" data-req-action="openShipment" data-req-thread="${escapeHtml(
+          String(thr.id || ""),
+        )}">Shipment Workspace</button>
+        <button class="btn btn--ghost btn--small" type="button" data-req-action="openSi" data-req-thread="${escapeHtml(
+          String(thr.id || ""),
+        )}">SI Workspace</button>
+        <button class="btn btn--ghost btn--small" type="button" data-req-action="openIssue" data-req-thread="${escapeHtml(
+          String(thr.id || ""),
+        )}">Open related Issue</button>
+      </aside>
+    </div>
+
+    <div class="op-thread-modal__actions" aria-label="Thread actions">
+      <div class="op-thread-modal__actions-left">
+        <button class="btn btn--primary btn--small ${hasProposed ? "" : "is-disabled"}" type="button" data-op-thread-action="approve" data-op-thread-id="${escapeHtml(
+          String(thr.id || ""),
+        )}" data-op-message-id="${escapeHtml(String((msg && msg.id) || ""))}" ${hasProposed ? "" : "aria-disabled=\"true\""}>Approve send</button>
+        <button class="btn btn--ghost btn--small ${hasProposed ? "" : "is-disabled"}" type="button" data-op-thread-action="edit" data-op-thread-id="${escapeHtml(
+          String(thr.id || ""),
+        )}" data-op-message-id="${escapeHtml(String((msg && msg.id) || ""))}" ${hasProposed ? "" : "aria-disabled=\"true\""}>Edit draft</button>
+        <button class="btn btn--ghost btn--small ${hasProposed ? "" : "is-disabled"}" type="button" data-op-thread-action="hold" data-op-thread-id="${escapeHtml(
+          String(thr.id || ""),
+        )}" data-op-message-id="${escapeHtml(String((msg && msg.id) || ""))}" ${hasProposed ? "" : "aria-disabled=\"true\""}>Hold</button>
+      </div>
+      <div class="op-thread-modal__actions-right">
+        <button class="btn btn--primary btn--small" type="button" data-req-action="addComment" data-req-thread="${escapeHtml(
+          String(thr.id || ""),
+        )}">Add to Issue</button>
+        <button class="btn btn--ghost btn--small" type="button" data-req-action="openIssue" data-req-thread="${escapeHtml(
+          String(thr.id || ""),
+        )}">Open related Issue</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+function syncOperationalThreadModal() {
+  const modal = document.getElementById("operational-thread-modal");
+  const body = document.getElementById("operational-thread-modal-body");
+  if (!modal || !body) return;
+
+  if (!state.isOperationalThreadModalOpen) {
+    modal.classList.remove("is-open");
+    modal.setAttribute("aria-hidden", "true");
+    body.innerHTML = "";
+    return;
+  }
+
+  const { thr } = getActiveOperationalThread();
+  body.innerHTML = renderOperationalThreadModalBody(thr);
+  modal.classList.add("is-open");
+  modal.setAttribute("aria-hidden", "false");
+}
+
+function closeOperationalThreadModal() {
+  state.isOperationalThreadModalOpen = false;
+  syncOperationalThreadModal();
 }
 
 function agentRunApproveSend(tradeCaseId) {
@@ -952,89 +1140,6 @@ function renderNewTop() {
       return null;
     };
 
-    const renderThreadDetail = (thr) => {
-      if (!thr) return `<div class="operational-thread-detail"><div class="nt-muted">Select a thread</div></div>`;
-
-      const title = String(thr.title || "Operational Thread");
-      const messages = Array.isArray(thr.messages) ? thr.messages.filter(Boolean) : [];
-
-      const evidenceHtml = (ev) => {
-        const list = Array.isArray(ev) ? ev.filter(Boolean) : [];
-        if (!list.length) return "";
-        return `<div class="thread-message__evidence">${list
-          .map((e) => {
-            const label = escapeHtml(String(e.label || ""));
-            const url = String(e.url || "").trim();
-            const inner = url ? `<a class="evidence-chip" href="${escapeHtml(url)}" target="_blank" rel="noreferrer">${label}</a>` : `<span class="evidence-chip">${label}</span>`;
-            return inner;
-          })
-          .join("")}</div>`;
-      };
-
-      const proposedActionHtml = (m) => {
-        if (!m || !m.proposedAction) return "";
-        const pa = m.proposedAction;
-        const stateLabel = String(m.proposedActionState || "pending");
-        const isDone = stateLabel === "sent" || stateLabel === "approved";
-
-        const draft = String(pa.draftBody || "").trim();
-        const draftHtml = draft ? `<pre class="proposed-action-card__draft">${escapeHtml(draft)}</pre>` : "";
-        const footHtml = isDone ? `<div class="proposed-action-card__status">Status: ${escapeHtml(stateLabel)}</div>` : "";
-
-        return `<div class="proposed-action-card" data-proposed-action-card="1">
-          <div class="proposed-action-card__head">
-            <div class="proposed-action-card__title">${escapeHtml(String(pa.label || "Proposed action"))}</div>
-            <div class="proposed-action-card__meta muted">${escapeHtml(String(pa.type || ""))}</div>
-          </div>
-          ${draftHtml}
-          <div class="proposed-action-card__actions">
-            <button class="btn btn--primary btn--small" type="button" data-op-thread-action="approve" data-op-thread-id="${escapeHtml(
-              String(thr.id || ""),
-            )}" data-op-message-id="${escapeHtml(String(m.id || ""))}" ${isDone ? "disabled" : ""}>Approve send</button>
-            <button class="btn btn--ghost btn--small" type="button" data-op-thread-action="edit" data-op-thread-id="${escapeHtml(
-              String(thr.id || ""),
-            )}" data-op-message-id="${escapeHtml(String(m.id || ""))}">Edit draft</button>
-            <button class="btn btn--ghost btn--small" type="button" data-op-thread-action="hold" data-op-thread-id="${escapeHtml(
-              String(thr.id || ""),
-            )}" data-op-message-id="${escapeHtml(String(m.id || ""))}">Hold</button>
-          </div>
-          ${footHtml}
-        </div>`;
-      };
-
-      const msgHtml = messages.length
-        ? messages
-            .map((m, idx) => {
-              const role = String(m.role || "");
-              const isAgent = role === "agent";
-              const who = escapeHtml(String(m.sender || ""));
-              const text = escapeHtml(String(m.text || ""));
-              const at = m.createdAt ? formatLocalTime(m.createdAt) : "";
-              const atHtml = at ? `<div class="thread-message__at">${escapeHtml(at)}</div>` : "";
-              const cls = `thread-message ${isAgent ? "thread-message--agent" : "thread-message--requester"}`;
-              const tail = idx === messages.length - 1 ? " thread-message--latest" : "";
-              return `<div class="${cls}${tail}">
-                <div class="thread-message__bubble">
-                  <div class="thread-message__sender">${who}</div>
-                  <div class="thread-message__text">${text}</div>
-                  ${evidenceHtml(m.evidence)}
-                  ${proposedActionHtml(m)}
-                </div>
-                ${atHtml}
-              </div>`;
-            })
-            .join("")
-        : `<div class="nt-muted">No conversation yet</div>`;
-
-      return `<div class="operational-thread-detail" aria-label="Operational Thread Detail">
-        <div class="operational-thread-detail__head">
-          <div class="operational-thread-detail__label">Operational Thread / 業務スレッド</div>
-          <div class="operational-thread-detail__title">${escapeHtml(title)}</div>
-        </div>
-        <div class="operational-thread-detail__body">${msgHtml}</div>
-      </div>`;
-    };
-
     const rawCardsHtml = list
       .map((r) => {
         const isActive = r && r.id === activeRawId;
@@ -1084,8 +1189,6 @@ function renderNewTop() {
     const canOpenIssue = Boolean(tcId);
     const canOpenShipment = Boolean(activeThread && activeThread.linkedShipmentId);
     const canOpenSi = Boolean(activeThread && activeThread.linkedSiNo);
-
-    const detailHtml = renderThreadDetail(activeThread);
 
     const actionHtml = activeThread
       ? `<div class="req-actions">
@@ -1144,7 +1247,6 @@ function renderNewTop() {
         </div>
         <div class="req-col req-col--right" aria-label="Linked entities / actions">
           <div class="req-col__head">Linked entities / actions</div>
-          ${detailHtml}
           ${actionHtml}
         </div>
       </div>
@@ -1180,6 +1282,172 @@ function renderApp() {
   const root = document.getElementById("app");
   if (!root) return;
   root.innerHTML = renderNewTop();
+  syncOperationalThreadModal();
+}
+
+function handleOperationalThreadAction({ action, threadId, messageId }) {
+  const raw =
+    (Array.isArray(state.rawRequests) ? state.rawRequests : []).find((r) => r && r.id === state.activeRawRequestId) || null;
+  const threads = Array.isArray(raw?.aiThreads) ? raw.aiThreads : [];
+  const thr = threads.find((t) => t && t.id === threadId) || null;
+  const msg = thr && Array.isArray(thr.messages) ? thr.messages.find((m) => m && m.id === messageId) : null;
+
+  const findTcId = () => {
+    if (!thr) return null;
+    const shipmentId = String(thr.linkedShipmentId || "");
+    const siNo = String(thr.linkedSiNo || "");
+    if (thr.tradeCaseId) return String(thr.tradeCaseId);
+    if (shipmentId) {
+      const tc = state.tradeCases.find((c) => c && c.shipmentEntity && String(c.shipmentEntity.id) === shipmentId) || null;
+      return tc && tc.id ? tc.id : null;
+    }
+    if (siNo) {
+      const tc = state.tradeCases.find((c) => c && c.siEntity && String(c.siEntity.siNo) === siNo) || null;
+      return tc && tc.id ? tc.id : null;
+    }
+    return null;
+  };
+
+  if (!thr || !msg || !msg.proposedAction) {
+    window.alert("(mock) Proposed action not found.");
+    return;
+  }
+
+  if (action === "edit") {
+    const current = String(msg.proposedAction.draftBody || "");
+    const next = window.prompt("Edit draft（mock）", current);
+    if (typeof next === "string") {
+      msg.proposedAction.draftBody = next;
+      msg.proposedActionState = "edited";
+      renderApp();
+    }
+    return;
+  }
+
+  if (action === "hold") {
+    msg.proposedActionState = "held";
+    thr.status = "on hold";
+    thr.action = "Hold";
+    renderApp();
+    return;
+  }
+
+  if (action === "approve") {
+    msg.proposedActionState = "sent";
+    thr.status = "sent";
+    thr.action = "Supplier push sent";
+
+    const tcId = findTcId();
+    if (tcId) {
+      recordHumanIntervention(tcId, {
+        actionType: "sendSupplierPush",
+        label: "Supplier push email sent（mock）",
+        note: `thread: ${String(thr.title || "-")}`,
+      });
+    }
+
+    renderApp();
+    return;
+  }
+}
+
+function handleRequestsAction({ action, threadId }) {
+  const raw =
+    (Array.isArray(state.rawRequests) ? state.rawRequests : []).find((r) => r && r.id === state.activeRawRequestId) || null;
+  const threads = Array.isArray(raw?.aiThreads) ? raw.aiThreads : [];
+  const thr = threads.find((t) => t && t.id === threadId) || null;
+
+  if (!thr) {
+    window.alert("Thread not found in mock data.");
+    return;
+  }
+
+  const findTcId = () => {
+    if (!thr) return null;
+    const shipmentId = String(thr.linkedShipmentId || "");
+    const siNo = String(thr.linkedSiNo || "");
+    if (thr.tradeCaseId) return String(thr.tradeCaseId);
+    if (shipmentId) {
+      const tc = state.tradeCases.find((c) => c && c.shipmentEntity && String(c.shipmentEntity.id) === shipmentId) || null;
+      return tc && tc.id ? tc.id : null;
+    }
+    if (siNo) {
+      const tc = state.tradeCases.find((c) => c && c.siEntity && String(c.siEntity.siNo) === siNo) || null;
+      return tc && tc.id ? tc.id : null;
+    }
+    return null;
+  };
+
+  if (action === "openShipment") {
+    const shipmentId = thr && thr.linkedShipmentId ? String(thr.linkedShipmentId) : "";
+    const tc = state.tradeCases.find((c) => c && c.shipmentEntity && String(c.shipmentEntity.id) === shipmentId) || null;
+    if (tc && tc.id) openShipmentWorkspace(tc.id);
+    else window.alert("No related Shipment workspace found in mock data.");
+    return;
+  }
+
+  if (action === "openSi") {
+    const siNo = thr && thr.linkedSiNo ? String(thr.linkedSiNo) : "";
+    const tc = state.tradeCases.find((c) => c && c.siEntity && String(c.siEntity.siNo) === siNo) || null;
+    if (tc && tc.id) openSiWorkspace(tc.id);
+    else window.alert("No related SI workspace found in mock data.");
+    return;
+  }
+
+  if (action === "openIssue") {
+    const tcId = findTcId();
+    if (tcId) {
+      state.topActiveTab = "issues";
+      state.activeIssueId = tcId;
+      state.isOperationalThreadModalOpen = false;
+      renderApp();
+    } else {
+      window.alert("No related Issue found in mock data.");
+    }
+    return;
+  }
+
+  if (action === "createIssue") {
+    const tcId = findTcId();
+    window.alert(`(mock) Create Issue\nthread: ${thr ? thr.title : "-"}\n${tcId ? `tradeCaseId: ${tcId}` : ""}`.trim());
+    return;
+  }
+
+  if (action === "addComment") {
+    const tcId = findTcId();
+    if (!tcId) {
+      window.alert("(mock) No related Issue to comment on.");
+      return;
+    }
+    const comment = window.prompt("Add comment（mock）", `Request: ${(raw && raw.text) || ""}`.trim());
+    if (typeof comment === "string" && comment.trim()) {
+      recordTimelineEvent(tcId, {
+        id: shortId(),
+        at: nowIso(),
+        type: "humanComment",
+        label: "Human comment",
+        actor: "ops-user",
+        message: comment.trim(),
+      });
+      state.topActiveTab = "issues";
+      state.activeIssueId = tcId;
+      state.isOperationalThreadModalOpen = false;
+      renderApp();
+    }
+    return;
+  }
+
+  if (action === "draftTeams") {
+    const draft = `（ドラフト）\n了解です。確認して折り返します。\n- 対象: ${thr ? thr.title : "-"}\n- 依頼: ${(raw && raw.text) || "-"}`.trim();
+    window.prompt("Draft Teams reply（mock）", draft);
+    return;
+  }
+
+  if (action === "draftEmail") {
+    const draft = `Subject: Urgent follow-up request\n\nHello,\nCould you please confirm the latest status?\n\nContext:\n- ${thr ? thr.title : "-"}\n- Request: ${(raw && raw.text) || "-"}`.trim();
+    window.prompt("Draft supplier push email（mock）", draft);
+    return;
+  }
 }
 
 function ensureShelvesDom() {
@@ -4518,6 +4786,11 @@ function setupModal() {
 
   document.addEventListener("keydown", (e) => {
     if (e.key !== "Escape") return;
+    if (state.isOperationalThreadModalOpen) {
+      closeOperationalThreadModal();
+      renderApp();
+      return;
+    }
     if (isAnyWorkspaceModalOpen()) {
       closeWorkspaceModal("shipment-workspace-modal");
       closeWorkspaceModal("si-workspace-modal");
@@ -4629,6 +4902,40 @@ function setupWorkspaceModals() {
 
   attach(shipment, "shipment-workspace-modal");
   attach(si, "si-workspace-modal");
+}
+
+function setupOperationalThreadModal() {
+  const modal = document.getElementById("operational-thread-modal");
+  if (!modal) return;
+  modal.addEventListener("click", (e) => {
+    const target = e.target;
+    if (!target) return;
+    const closeEl = target.closest && target.closest("[data-close-op-thread]");
+    if (closeEl) {
+      closeOperationalThreadModal();
+      renderApp();
+      return;
+    }
+
+    const opThreadActionEl = target.closest && target.closest("[data-op-thread-action]");
+    if (opThreadActionEl) {
+      if (opThreadActionEl.classList && opThreadActionEl.classList.contains("is-disabled")) return;
+      const action = opThreadActionEl.getAttribute("data-op-thread-action") || "";
+      const threadId = opThreadActionEl.getAttribute("data-op-thread-id") || "";
+      const messageId = opThreadActionEl.getAttribute("data-op-message-id") || "";
+      handleOperationalThreadAction({ action, threadId, messageId });
+      return;
+    }
+
+    const reqActionEl = target.closest && target.closest("[data-req-action]");
+    if (reqActionEl) {
+      if (reqActionEl.classList && reqActionEl.classList.contains("is-disabled")) return;
+      const action = reqActionEl.getAttribute("data-req-action") || "";
+      const threadId = reqActionEl.getAttribute("data-req-thread") || "";
+      handleRequestsAction({ action, threadId });
+      return;
+    }
+  });
 }
 
 // Manual upload modal (separate from trade case detail modal)
@@ -4842,6 +5149,7 @@ function setupNewTop() {
       if (newTopTabs.some((t) => t.key === key)) {
         state.topActiveTab = key;
         if (key !== "issues") state.activeIssueId = null;
+        if (key !== "requests") state.isOperationalThreadModalOpen = false;
         renderApp();
       }
       return;
@@ -4853,6 +5161,7 @@ function setupNewTop() {
       if (id) {
         state.activeRawRequestId = id;
         state.activeOperationalThreadId = null;
+        state.isOperationalThreadModalOpen = false;
         renderApp();
       }
       return;
@@ -4863,6 +5172,7 @@ function setupNewTop() {
       const id = thrOpenEl.getAttribute("data-operational-thread-open") || "";
       if (id) {
         state.activeOperationalThreadId = id;
+        state.isOperationalThreadModalOpen = true;
         renderApp();
       }
       return;
@@ -4873,70 +5183,8 @@ function setupNewTop() {
       const action = opThreadActionEl.getAttribute("data-op-thread-action") || "";
       const threadId = opThreadActionEl.getAttribute("data-op-thread-id") || "";
       const messageId = opThreadActionEl.getAttribute("data-op-message-id") || "";
-
-      const raw =
-        (Array.isArray(state.rawRequests) ? state.rawRequests : []).find((r) => r && r.id === state.activeRawRequestId) || null;
-      const threads = Array.isArray(raw?.aiThreads) ? raw.aiThreads : [];
-      const thr = threads.find((t) => t && t.id === threadId) || null;
-      const msg = thr && Array.isArray(thr.messages) ? thr.messages.find((m) => m && m.id === messageId) : null;
-
-      const findTcId = () => {
-        if (!thr) return null;
-        const shipmentId = String(thr.linkedShipmentId || "");
-        const siNo = String(thr.linkedSiNo || "");
-        if (thr.tradeCaseId) return String(thr.tradeCaseId);
-        if (shipmentId) {
-          const tc = state.tradeCases.find((c) => c && c.shipmentEntity && String(c.shipmentEntity.id) === shipmentId) || null;
-          return tc && tc.id ? tc.id : null;
-        }
-        if (siNo) {
-          const tc = state.tradeCases.find((c) => c && c.siEntity && String(c.siEntity.siNo) === siNo) || null;
-          return tc && tc.id ? tc.id : null;
-        }
-        return null;
-      };
-
-      if (!thr || !msg || !msg.proposedAction) {
-        window.alert("(mock) Proposed action not found.");
-        return;
-      }
-
-      if (action === "edit") {
-        const current = String(msg.proposedAction.draftBody || "");
-        const next = window.prompt("Edit draft（mock）", current);
-        if (typeof next === "string") {
-          msg.proposedAction.draftBody = next;
-          msg.proposedActionState = "edited";
-          renderApp();
-        }
-        return;
-      }
-
-      if (action === "hold") {
-        msg.proposedActionState = "held";
-        thr.status = "on hold";
-        thr.action = "Hold";
-        renderApp();
-        return;
-      }
-
-      if (action === "approve") {
-        msg.proposedActionState = "sent";
-        thr.status = "sent";
-        thr.action = "Supplier push sent";
-
-        const tcId = findTcId();
-        if (tcId) {
-          recordHumanIntervention(tcId, {
-            actionType: "sendSupplierPush",
-            label: "Supplier push email sent（mock）",
-            note: `thread: ${String(thr.title || "-")}`,
-          });
-        }
-
-        renderApp();
-        return;
-      }
+      handleOperationalThreadAction({ action, threadId, messageId });
+      return;
     }
 
     const reqAddEl = target.closest && target.closest("[data-requests-add]");
@@ -4969,94 +5217,7 @@ function setupNewTop() {
       const action = reqActionEl.getAttribute("data-req-action") || "";
       const threadId = reqActionEl.getAttribute("data-req-thread") || "";
       if (reqActionEl.classList && reqActionEl.classList.contains("is-disabled")) return;
-
-      const raw = (Array.isArray(state.rawRequests) ? state.rawRequests : []).find((r) => r && r.id === state.activeRawRequestId) || null;
-      const threads = Array.isArray(raw?.aiThreads) ? raw.aiThreads : [];
-      const thr = threads.find((t) => t && t.id === threadId) || null;
-      const findTcId = () => {
-        if (!thr) return null;
-        const shipmentId = String(thr.linkedShipmentId || "");
-        const siNo = String(thr.linkedSiNo || "");
-        if (thr.tradeCaseId) return String(thr.tradeCaseId);
-        if (shipmentId) {
-          const tc = state.tradeCases.find((c) => c && c.shipmentEntity && String(c.shipmentEntity.id) === shipmentId) || null;
-          return tc && tc.id ? tc.id : null;
-        }
-        if (siNo) {
-          const tc = state.tradeCases.find((c) => c && c.siEntity && String(c.siEntity.siNo) === siNo) || null;
-          return tc && tc.id ? tc.id : null;
-        }
-        return null;
-      };
-
-      if (action === "openShipment") {
-        const shipmentId = thr && thr.linkedShipmentId ? String(thr.linkedShipmentId) : "";
-        const tc = state.tradeCases.find((c) => c && c.shipmentEntity && String(c.shipmentEntity.id) === shipmentId) || null;
-        if (tc && tc.id) openShipmentWorkspace(tc.id);
-        else window.alert("No related Shipment workspace found in mock data.");
-        return;
-      }
-
-      if (action === "openSi") {
-        const siNo = thr && thr.linkedSiNo ? String(thr.linkedSiNo) : "";
-        const tc = state.tradeCases.find((c) => c && c.siEntity && String(c.siEntity.siNo) === siNo) || null;
-        if (tc && tc.id) openSiWorkspace(tc.id);
-        else window.alert("No related SI workspace found in mock data.");
-        return;
-      }
-
-      if (action === "openIssue") {
-        const tcId = findTcId();
-        if (tcId) {
-          state.topActiveTab = "issues";
-          state.activeIssueId = tcId;
-          renderApp();
-        } else {
-          window.alert("No related Issue found in mock data.");
-        }
-        return;
-      }
-
-      if (action === "createIssue") {
-        const tcId = findTcId();
-        window.alert(`(mock) Create Issue\nthread: ${thr ? thr.title : "-"}\n${tcId ? `tradeCaseId: ${tcId}` : ""}`.trim());
-        return;
-      }
-
-      if (action === "addComment") {
-        const tcId = findTcId();
-        if (!tcId) {
-          window.alert("(mock) No related Issue to comment on.");
-          return;
-        }
-        const comment = window.prompt("Add comment（mock）", `Request: ${(raw && raw.text) || ""}`.trim());
-        if (typeof comment === "string" && comment.trim()) {
-          recordTimelineEvent(tcId, {
-            id: shortId(),
-            at: nowIso(),
-            type: "humanComment",
-            label: "Human comment",
-            actor: "ops-user",
-            message: comment.trim(),
-          });
-          state.topActiveTab = "issues";
-          state.activeIssueId = tcId;
-          renderApp();
-        }
-        return;
-      }
-
-      if (action === "draftTeams") {
-        const draft = `（ドラフト）\n了解です。確認して折り返します。\n- 対象: ${thr ? thr.title : "-"}\n- 依頼: ${(raw && raw.text) || "-"}`.trim();
-        window.prompt("Draft Teams reply（mock）", draft);
-        return;
-      }
-
-      if (action === "draftEmail") {
-        const draft = `Subject: Urgent follow-up request\n\nHello,\nCould you please confirm the latest status?\n\nContext:\n- ${thr ? thr.title : "-"}\n- Request: ${(raw && raw.text) || "-"}`.trim();
-        window.prompt("Draft supplier push email（mock）", draft);
-        return;
-      }
+      handleRequestsAction({ action, threadId });
       return;
     }
 
@@ -5234,6 +5395,7 @@ function setupNewTop() {
 function main() {
   setupModal();
   setupWorkspaceModals();
+  setupOperationalThreadModal();
   seed();
   setupNewTop();
   renderApp();

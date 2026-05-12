@@ -78,6 +78,17 @@
       </div>
     </div>
 
+    <div id="operational-thread-modal" class="modal modal--op-thread" aria-hidden="true">
+      <div class="modal__backdrop" data-close-op-thread></div>
+      <div class="modal__dialog" role="dialog" aria-modal="true" aria-label="Operational Thread detail">
+        <div class="modal__top">
+          <div class="modal__title">Operational Thread / 業務スレッド</div>
+          <button class="btn btn--ghost" type="button" data-close-op-thread aria-label="Close">閉じる</button>
+        </div>
+        <div id="operational-thread-modal-body" class="modal__body"></div>
+      </div>
+    </div>
+
     <script type="module" src="./app.js"></script>
   </body>
 </html>
