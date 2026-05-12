@@ -22,6 +22,21 @@ const state = {
   inboxItems: [],
   tradeCases: [],
   shelfItems: [],
+  /**
+   * 「変更・確認依頼」: raw request inbox (mock)
+   * @type {Array<any>}
+   */
+  rawRequests: [],
+  /**
+   * Active raw request id in Requests page
+   * @type {string | null}
+   */
+  activeRawRequestId: null,
+  /**
+   * Active operational thread id in Requests page
+   * @type {string | null}
+   */
+  activeOperationalThreadId: null,
   proposalApprovalStatusById: {},
   modalTradeCaseId: null,
   /**
@@ -36,7 +51,7 @@ const state = {
   issueSeqByTradeCaseId: {},
   /**
    * New TOP (GitHub-like) active tab
-   * @type {"shelf" | "issues" | "documents" | "settings"}
+   * @type {"shelf" | "issues" | "requests" | "documents" | "settings"}
    */
   topActiveTab: "shelf",
   /**
@@ -77,6 +92,7 @@ const state = {
 const newTopTabs = [
   { key: "shelf", label: "Shelf" },
   { key: "issues", label: "Issues（AI承認センター）" },
+  { key: "requests", label: "変更・確認依頼" },
   { key: "documents", label: "Documents" },
   { key: "settings", label: "Settings" },
 ];
@@ -903,11 +919,245 @@ function renderNewTop() {
     <div class="nt-muted">（mock）</div>
   </div>`;
 
+  const renderRequests = () => {
+    const list = Array.isArray(state.rawRequests) ? state.rawRequests.filter(Boolean) : [];
+    const activeRawId = state.activeRawRequestId || (list[0] && list[0].id) || null;
+    const activeRaw = list.find((r) => r && r.id === activeRawId) || null;
+    const threads = Array.isArray(activeRaw?.aiThreads) ? activeRaw.aiThreads.filter(Boolean) : [];
+    const activeThreadId = state.activeOperationalThreadId || (threads[0] && threads[0].id) || null;
+    const activeThread = threads.find((t) => t && t.id === activeThreadId) || null;
+
+    const sourceLabel = (s) => {
+      const v = String(s || "").toLowerCase();
+      if (v === "teams") return "Teams";
+      if (v === "web") return "Web";
+      if (v === "email") return "Email";
+      if (v === "manualmemo") return "Manual memo";
+      return v || "-";
+    };
+
+    const resolveTradeCaseIdForThread = (t) => {
+      if (!t) return null;
+      if (t.tradeCaseId) return String(t.tradeCaseId);
+      const shipmentId = String(t.linkedShipmentId || "");
+      const siNo = String(t.linkedSiNo || "");
+      if (shipmentId) {
+        const tc = state.tradeCases.find((c) => c && c.shipmentEntity && String(c.shipmentEntity.id) === shipmentId) || null;
+        if (tc && tc.id) return tc.id;
+      }
+      if (siNo) {
+        const tc = state.tradeCases.find((c) => c && c.siEntity && String(c.siEntity.siNo) === siNo) || null;
+        if (tc && tc.id) return tc.id;
+      }
+      return null;
+    };
+
+    const renderThreadDetail = (thr) => {
+      if (!thr) return `<div class="operational-thread-detail"><div class="nt-muted">Select a thread</div></div>`;
+
+      const title = String(thr.title || "Operational Thread");
+      const messages = Array.isArray(thr.messages) ? thr.messages.filter(Boolean) : [];
+
+      const evidenceHtml = (ev) => {
+        const list = Array.isArray(ev) ? ev.filter(Boolean) : [];
+        if (!list.length) return "";
+        return `<div class="thread-message__evidence">${list
+          .map((e) => {
+            const label = escapeHtml(String(e.label || ""));
+            const url = String(e.url || "").trim();
+            const inner = url ? `<a class="evidence-chip" href="${escapeHtml(url)}" target="_blank" rel="noreferrer">${label}</a>` : `<span class="evidence-chip">${label}</span>`;
+            return inner;
+          })
+          .join("")}</div>`;
+      };
+
+      const proposedActionHtml = (m) => {
+        if (!m || !m.proposedAction) return "";
+        const pa = m.proposedAction;
+        const stateLabel = String(m.proposedActionState || "pending");
+        const isDone = stateLabel === "sent" || stateLabel === "approved";
+
+        const draft = String(pa.draftBody || "").trim();
+        const draftHtml = draft ? `<pre class="proposed-action-card__draft">${escapeHtml(draft)}</pre>` : "";
+        const footHtml = isDone ? `<div class="proposed-action-card__status">Status: ${escapeHtml(stateLabel)}</div>` : "";
+
+        return `<div class="proposed-action-card" data-proposed-action-card="1">
+          <div class="proposed-action-card__head">
+            <div class="proposed-action-card__title">${escapeHtml(String(pa.label || "Proposed action"))}</div>
+            <div class="proposed-action-card__meta muted">${escapeHtml(String(pa.type || ""))}</div>
+          </div>
+          ${draftHtml}
+          <div class="proposed-action-card__actions">
+            <button class="btn btn--primary btn--small" type="button" data-op-thread-action="approve" data-op-thread-id="${escapeHtml(
+              String(thr.id || ""),
+            )}" data-op-message-id="${escapeHtml(String(m.id || ""))}" ${isDone ? "disabled" : ""}>Approve send</button>
+            <button class="btn btn--ghost btn--small" type="button" data-op-thread-action="edit" data-op-thread-id="${escapeHtml(
+              String(thr.id || ""),
+            )}" data-op-message-id="${escapeHtml(String(m.id || ""))}">Edit draft</button>
+            <button class="btn btn--ghost btn--small" type="button" data-op-thread-action="hold" data-op-thread-id="${escapeHtml(
+              String(thr.id || ""),
+            )}" data-op-message-id="${escapeHtml(String(m.id || ""))}">Hold</button>
+          </div>
+          ${footHtml}
+        </div>`;
+      };
+
+      const msgHtml = messages.length
+        ? messages
+            .map((m, idx) => {
+              const role = String(m.role || "");
+              const isAgent = role === "agent";
+              const who = escapeHtml(String(m.sender || ""));
+              const text = escapeHtml(String(m.text || ""));
+              const at = m.createdAt ? formatLocalTime(m.createdAt) : "";
+              const atHtml = at ? `<div class="thread-message__at">${escapeHtml(at)}</div>` : "";
+              const cls = `thread-message ${isAgent ? "thread-message--agent" : "thread-message--requester"}`;
+              const tail = idx === messages.length - 1 ? " thread-message--latest" : "";
+              return `<div class="${cls}${tail}">
+                <div class="thread-message__bubble">
+                  <div class="thread-message__sender">${who}</div>
+                  <div class="thread-message__text">${text}</div>
+                  ${evidenceHtml(m.evidence)}
+                  ${proposedActionHtml(m)}
+                </div>
+                ${atHtml}
+              </div>`;
+            })
+            .join("")
+        : `<div class="nt-muted">No conversation yet</div>`;
+
+      return `<div class="operational-thread-detail" aria-label="Operational Thread Detail">
+        <div class="operational-thread-detail__head">
+          <div class="operational-thread-detail__label">Operational Thread / 業務スレッド</div>
+          <div class="operational-thread-detail__title">${escapeHtml(title)}</div>
+        </div>
+        <div class="operational-thread-detail__body">${msgHtml}</div>
+      </div>`;
+    };
+
+    const rawCardsHtml = list
+      .map((r) => {
+        const isActive = r && r.id === activeRawId;
+        const from = String(r.from || "-");
+        const text = String(r.text || "");
+        const at = String(r.receivedAt || "");
+        const src = sourceLabel(r.source);
+        return `<button class="req-card ${isActive ? "is-active" : ""}" type="button" data-raw-request-open="${escapeHtml(r.id)}">
+          <div class="req-card__meta">
+            <div class="req-card__from">${escapeHtml(from)}</div>
+            <div class="req-card__right">
+              <span class="req-pill">${escapeHtml(src)}</span>
+              <span class="req-card__at">${escapeHtml(at)}</span>
+            </div>
+          </div>
+          <div class="req-card__text">${escapeHtml(text)}</div>
+        </button>`;
+      })
+      .join("");
+
+    const threadCardsHtml = threads
+      .map((t) => {
+        const isActive = t && t.id === activeThreadId;
+        const title = String(t.title || "Thread");
+        const status = String(t.status || "");
+        const linked = [
+          t.linkedShipmentId ? `Shipment: ${t.linkedShipmentId}` : "",
+          t.linkedSiNo ? `SI: ${t.linkedSiNo}` : "",
+          t.linkedIssueId ? `Issue: ${t.linkedIssueId}` : "",
+          t.linkedCustomer ? `Customer: ${t.linkedCustomer}` : "",
+        ].filter(Boolean);
+        const action = String(t.action || "");
+        return `<button class="op-thread ${isActive ? "is-active" : ""}" type="button" data-operational-thread-open="${escapeHtml(
+          t.id,
+        )}">
+          <div class="op-thread__h">${escapeHtml(title)}</div>
+          ${linked.length ? `<div class="op-thread__links">${linked.map((x) => `<span class="mini-chip">${escapeHtml(x)}</span>`).join("")}</div>` : ""}
+          <div class="op-thread__foot">
+            <div class="op-thread__status">${escapeHtml(status || "—")}</div>
+            <div class="op-thread__action">${escapeHtml(action)}</div>
+          </div>
+        </button>`;
+      })
+      .join("");
+
+    const tcId = resolveTradeCaseIdForThread(activeThread);
+    const canOpenIssue = Boolean(tcId);
+    const canOpenShipment = Boolean(activeThread && activeThread.linkedShipmentId);
+    const canOpenSi = Boolean(activeThread && activeThread.linkedSiNo);
+
+    const detailHtml = renderThreadDetail(activeThread);
+
+    const actionHtml = activeThread
+      ? `<div class="req-actions">
+          <div class="req-actions__head">
+            <div class="req-actions__title">Actions</div>
+            <div class="req-actions__sub muted">${escapeHtml(String(activeThread.title || ""))}</div>
+          </div>
+          <div class="req-actions__body">
+            <button class="btn btn--ghost btn--small ${canOpenIssue ? "" : "is-disabled"}" type="button" data-req-action="openIssue" data-req-thread="${escapeHtml(
+              activeThread.id,
+            )}" ${canOpenIssue ? "" : "aria-disabled=\"true\""}>Open related Issue</button>
+            <button class="btn btn--ghost btn--small ${canOpenSi ? "" : "is-disabled"}" type="button" data-req-action="openSi" data-req-thread="${escapeHtml(
+              activeThread.id,
+            )}" ${canOpenSi ? "" : "aria-disabled=\"true\""}>Open SI Workspace</button>
+            <button class="btn btn--ghost btn--small ${canOpenShipment ? "" : "is-disabled"}" type="button" data-req-action="openShipment" data-req-thread="${escapeHtml(
+              activeThread.id,
+            )}" ${canOpenShipment ? "" : "aria-disabled=\"true\""}>Open Shipment Workspace</button>
+            <div class="req-actions__divider"></div>
+            <button class="btn btn--primary btn--small" type="button" data-req-action="createIssue" data-req-thread="${escapeHtml(
+              activeThread.id,
+            )}">Create Issue</button>
+            <button class="btn btn--primary btn--small" type="button" data-req-action="addComment" data-req-thread="${escapeHtml(
+              activeThread.id,
+            )}">Add comment to existing Issue</button>
+            <button class="btn btn--primary btn--small" type="button" data-req-action="draftTeams" data-req-thread="${escapeHtml(
+              activeThread.id,
+            )}">Draft Teams reply</button>
+            <button class="btn btn--primary btn--small" type="button" data-req-action="draftEmail" data-req-thread="${escapeHtml(
+              activeThread.id,
+            )}">Draft supplier push email</button>
+          </div>
+        </div>`
+      : `<div class="req-actions"><div class="nt-muted">Select a thread</div></div>`;
+
+    return `<section class="req-page" aria-label="Change & Check Requests">
+      <div class="req-title">
+        <div class="req-title__h">変更・確認依頼</div>
+        <div class="req-title__sub">TeamsやWebからの雑な依頼を、AIが業務単位へ整理します。</div>
+      </div>
+
+      <div class="req-compose" aria-label="Request input">
+        <textarea class="req-compose__box" rows="2" placeholder="例: PLまだ？ SI-224も確認して。営業Aへ返事しておいて" data-requests-input="1"></textarea>
+        <div class="req-compose__actions">
+          <button class="btn btn--primary" type="button" data-requests-add="1">AIに整理させる</button>
+        </div>
+      </div>
+
+      <div class="req-grid" aria-label="Requests layout">
+        <div class="req-col req-col--left" aria-label="Raw requests">
+          <div class="req-col__head">Raw conversation / request inbox</div>
+          <div class="req-list">${rawCardsHtml || `<div class="nt-muted">No requests</div>`}</div>
+        </div>
+        <div class="req-col req-col--center" aria-label="Operational threads">
+          <div class="req-col__head">AIが分解した operational threads</div>
+          <div class="op-list">${threadCardsHtml || `<div class="nt-muted">Select a request</div>`}</div>
+        </div>
+        <div class="req-col req-col--right" aria-label="Linked entities / actions">
+          <div class="req-col__head">Linked entities / actions</div>
+          ${detailHtml}
+          ${actionHtml}
+        </div>
+      </div>
+    </section>`;
+  };
+
   const mainHtml =
     tab === "shelf"
       ? renderShelf()
       : tab === "issues"
         ? renderIssues()
+        : tab === "requests"
+          ? renderRequests()
         : tab === "documents"
           ? renderPlaceholder("Documents")
           : renderPlaceholder("Settings");
@@ -4426,7 +4676,156 @@ function seed() {
     .sort((a, b) => String(a).localeCompare(String(b)));
   state.issueSeqByTradeCaseId = {};
   for (let i = 0; i < sortedIds.length; i++) state.issueSeqByTradeCaseId[sortedIds[i]] = i + 1;
+  seedRequestsMock();
   renderApp();
+}
+
+function seedRequestsMock() {
+  const raw1Id = `raw-${shortId()}`;
+  const raw2Id = `raw-${shortId()}`;
+  const t11 = `thr-${shortId()}`;
+  const t12 = `thr-${shortId()}`;
+  const t21 = `thr-${shortId()}`;
+
+  state.rawRequests = [
+    {
+      id: raw1Id,
+      source: "teams",
+      from: "営業A",
+      text: "PLまだ？あとSI-224も確認して",
+      receivedAt: "2026-05-12 13:40",
+      aiThreads: [
+        {
+          id: t11,
+          title: "PL未着確認",
+          linkedShipmentId: "SHP-2026-009",
+          linkedIssueId: "ISS-0002",
+          status: "existing issue updated",
+          action: "Add comment to existing Issue",
+          messages: [
+            {
+              id: `msg-${shortId()}`,
+              role: "requester",
+              sender: "営業A",
+              text: "PLまだ？",
+              createdAt: "2026-05-12T04:40:00.000Z",
+            },
+            {
+              id: `msg-${shortId()}`,
+              role: "agent",
+              sender: "trade-shelf-agent",
+              text: "まだ未着です。5/11 14:02 に ACME Components へ催促済みです。",
+              createdAt: "2026-05-12T04:41:10.000Z",
+              evidence: [
+                { label: "Email: Re: PL pending for SHP-2026-009", type: "email", refId: "mail-pl-pending" },
+                { label: "Document status: PL missing", type: "document", refId: "PL" },
+                { label: "Shipment: SHP-2026-009", type: "shipment", refId: "SHP-2026-009" },
+                { label: "Issue: ISS-0002", type: "issue", refId: "ISS-0002" },
+              ],
+            },
+            {
+              id: `msg-${shortId()}`,
+              role: "requester",
+              sender: "営業A",
+              text: "じゃあもう一回PUSHして",
+              createdAt: "2026-05-12T04:42:00.000Z",
+            },
+            {
+              id: `msg-${shortId()}`,
+              role: "agent",
+              sender: "trade-shelf-agent",
+              text: "仕入先への再確認メール案を作成しました。送信してよいですか？",
+              createdAt: "2026-05-12T04:42:40.000Z",
+              evidence: [
+                { label: "Shipment: SHP-2026-009", type: "shipment", refId: "SHP-2026-009" },
+                { label: "Issue: ISS-0002", type: "issue", refId: "ISS-0002" },
+                { label: "Document status: PL missing", type: "document", refId: "PL" },
+              ],
+              proposedAction: {
+                label: "Draft supplier push email",
+                type: "sendSupplierPush",
+                draftBody:
+                  "Subject: PL pending for SHP-2026-009\n\nHello ACME Components,\n\nWe still haven't received the Packing List for SHP-2026-009.\nCould you please share it at your earliest convenience?\n\nBest regards,\nTrade Shelf Ops",
+              },
+            },
+          ],
+        },
+        {
+          id: t12,
+          title: "SI-224確認",
+          linkedSiNo: "SI-2026-224",
+          status: "new issue candidate",
+          action: "Create new Issue",
+        },
+      ],
+    },
+    {
+      id: raw2Id,
+      source: "teams",
+      from: "営業B",
+      text: "Customer C、AIR必要か見て",
+      receivedAt: "2026-05-12 13:45",
+      aiThreads: [
+        {
+          id: t21,
+          title: "AIR必要性確認",
+          linkedSiNo: "SI-2026-001",
+          linkedShipmentId: "SHP-2026-009",
+          linkedCustomer: "Customer C",
+          status: "needs sales confirmation",
+          action: "Draft Teams confirmation",
+        },
+      ],
+    },
+  ];
+  state.activeRawRequestId = raw1Id;
+  state.activeOperationalThreadId = t11;
+}
+
+function decomposeRawRequestMock(text) {
+  const t = String(text || "").trim();
+  const out = [];
+  const hasPL = /\bPL\b|Packing\s*List|パッキングリスト|梱包明細/i.test(t);
+  const hasAIR = /\bAIR\b|航空|air\s*freight/i.test(t);
+  const siMatch = t.match(/\bSI[- ]?\d{3,}\b/i);
+
+  if (hasPL) {
+    out.push({
+      id: `thr-${shortId()}`,
+      title: "PL未着確認",
+      linkedShipmentId: "SHP-2026-009",
+      status: "new issue candidate",
+      action: "Create new Issue",
+    });
+  }
+  if (siMatch) {
+    out.push({
+      id: `thr-${shortId()}`,
+      title: `${siMatch[0].toUpperCase().replace(" ", "-")}確認`,
+      linkedSiNo: "SI-2026-224",
+      status: "new issue candidate",
+      action: "Create new Issue",
+    });
+  }
+  if (hasAIR) {
+    out.push({
+      id: `thr-${shortId()}`,
+      title: "AIR必要性確認",
+      linkedCustomer: "Customer",
+      linkedShipmentId: "SHP-2026-009",
+      status: "needs sales confirmation",
+      action: "Draft Teams confirmation",
+    });
+  }
+  if (!out.length) {
+    out.push({
+      id: `thr-${shortId()}`,
+      title: "依頼内容の確認",
+      status: "needs clarification",
+      action: "Draft Teams reply",
+    });
+  }
+  return out;
 }
 
 function setupNewTop() {
@@ -4442,7 +4841,221 @@ function setupNewTop() {
       const key = tabEl.getAttribute("data-nt-tab") || "";
       if (newTopTabs.some((t) => t.key === key)) {
         state.topActiveTab = key;
+        if (key !== "issues") state.activeIssueId = null;
         renderApp();
+      }
+      return;
+    }
+
+    const rawOpenEl = target.closest && target.closest("[data-raw-request-open]");
+    if (rawOpenEl) {
+      const id = rawOpenEl.getAttribute("data-raw-request-open") || "";
+      if (id) {
+        state.activeRawRequestId = id;
+        state.activeOperationalThreadId = null;
+        renderApp();
+      }
+      return;
+    }
+
+    const thrOpenEl = target.closest && target.closest("[data-operational-thread-open]");
+    if (thrOpenEl) {
+      const id = thrOpenEl.getAttribute("data-operational-thread-open") || "";
+      if (id) {
+        state.activeOperationalThreadId = id;
+        renderApp();
+      }
+      return;
+    }
+
+    const opThreadActionEl = target.closest && target.closest("[data-op-thread-action]");
+    if (opThreadActionEl) {
+      const action = opThreadActionEl.getAttribute("data-op-thread-action") || "";
+      const threadId = opThreadActionEl.getAttribute("data-op-thread-id") || "";
+      const messageId = opThreadActionEl.getAttribute("data-op-message-id") || "";
+
+      const raw =
+        (Array.isArray(state.rawRequests) ? state.rawRequests : []).find((r) => r && r.id === state.activeRawRequestId) || null;
+      const threads = Array.isArray(raw?.aiThreads) ? raw.aiThreads : [];
+      const thr = threads.find((t) => t && t.id === threadId) || null;
+      const msg = thr && Array.isArray(thr.messages) ? thr.messages.find((m) => m && m.id === messageId) : null;
+
+      const findTcId = () => {
+        if (!thr) return null;
+        const shipmentId = String(thr.linkedShipmentId || "");
+        const siNo = String(thr.linkedSiNo || "");
+        if (thr.tradeCaseId) return String(thr.tradeCaseId);
+        if (shipmentId) {
+          const tc = state.tradeCases.find((c) => c && c.shipmentEntity && String(c.shipmentEntity.id) === shipmentId) || null;
+          return tc && tc.id ? tc.id : null;
+        }
+        if (siNo) {
+          const tc = state.tradeCases.find((c) => c && c.siEntity && String(c.siEntity.siNo) === siNo) || null;
+          return tc && tc.id ? tc.id : null;
+        }
+        return null;
+      };
+
+      if (!thr || !msg || !msg.proposedAction) {
+        window.alert("(mock) Proposed action not found.");
+        return;
+      }
+
+      if (action === "edit") {
+        const current = String(msg.proposedAction.draftBody || "");
+        const next = window.prompt("Edit draft（mock）", current);
+        if (typeof next === "string") {
+          msg.proposedAction.draftBody = next;
+          msg.proposedActionState = "edited";
+          renderApp();
+        }
+        return;
+      }
+
+      if (action === "hold") {
+        msg.proposedActionState = "held";
+        thr.status = "on hold";
+        thr.action = "Hold";
+        renderApp();
+        return;
+      }
+
+      if (action === "approve") {
+        msg.proposedActionState = "sent";
+        thr.status = "sent";
+        thr.action = "Supplier push sent";
+
+        const tcId = findTcId();
+        if (tcId) {
+          recordHumanIntervention(tcId, {
+            actionType: "sendSupplierPush",
+            label: "Supplier push email sent（mock）",
+            note: `thread: ${String(thr.title || "-")}`,
+          });
+        }
+
+        renderApp();
+        return;
+      }
+    }
+
+    const reqAddEl = target.closest && target.closest("[data-requests-add]");
+    if (reqAddEl) {
+      const rootPage = reqAddEl.closest && reqAddEl.closest(".req-page");
+      const box = rootPage && rootPage.querySelector ? rootPage.querySelector("[data-requests-input]") : null;
+      const text = box && typeof box.value === "string" ? box.value.trim() : "";
+      if (box) box.value = "";
+      if (text) {
+        const id = `raw-${shortId()}`;
+        const at = formatLocalTime(nowIso());
+        const item = {
+          id,
+          source: "web",
+          from: "Web UI",
+          text,
+          receivedAt: at,
+          aiThreads: decomposeRawRequestMock(text),
+        };
+        state.rawRequests = [item, ...(Array.isArray(state.rawRequests) ? state.rawRequests : [])];
+        state.activeRawRequestId = id;
+        state.activeOperationalThreadId = (item.aiThreads[0] && item.aiThreads[0].id) || null;
+        renderApp();
+      }
+      return;
+    }
+
+    const reqActionEl = target.closest && target.closest("[data-req-action]");
+    if (reqActionEl) {
+      const action = reqActionEl.getAttribute("data-req-action") || "";
+      const threadId = reqActionEl.getAttribute("data-req-thread") || "";
+      if (reqActionEl.classList && reqActionEl.classList.contains("is-disabled")) return;
+
+      const raw = (Array.isArray(state.rawRequests) ? state.rawRequests : []).find((r) => r && r.id === state.activeRawRequestId) || null;
+      const threads = Array.isArray(raw?.aiThreads) ? raw.aiThreads : [];
+      const thr = threads.find((t) => t && t.id === threadId) || null;
+      const findTcId = () => {
+        if (!thr) return null;
+        const shipmentId = String(thr.linkedShipmentId || "");
+        const siNo = String(thr.linkedSiNo || "");
+        if (thr.tradeCaseId) return String(thr.tradeCaseId);
+        if (shipmentId) {
+          const tc = state.tradeCases.find((c) => c && c.shipmentEntity && String(c.shipmentEntity.id) === shipmentId) || null;
+          return tc && tc.id ? tc.id : null;
+        }
+        if (siNo) {
+          const tc = state.tradeCases.find((c) => c && c.siEntity && String(c.siEntity.siNo) === siNo) || null;
+          return tc && tc.id ? tc.id : null;
+        }
+        return null;
+      };
+
+      if (action === "openShipment") {
+        const shipmentId = thr && thr.linkedShipmentId ? String(thr.linkedShipmentId) : "";
+        const tc = state.tradeCases.find((c) => c && c.shipmentEntity && String(c.shipmentEntity.id) === shipmentId) || null;
+        if (tc && tc.id) openShipmentWorkspace(tc.id);
+        else window.alert("No related Shipment workspace found in mock data.");
+        return;
+      }
+
+      if (action === "openSi") {
+        const siNo = thr && thr.linkedSiNo ? String(thr.linkedSiNo) : "";
+        const tc = state.tradeCases.find((c) => c && c.siEntity && String(c.siEntity.siNo) === siNo) || null;
+        if (tc && tc.id) openSiWorkspace(tc.id);
+        else window.alert("No related SI workspace found in mock data.");
+        return;
+      }
+
+      if (action === "openIssue") {
+        const tcId = findTcId();
+        if (tcId) {
+          state.topActiveTab = "issues";
+          state.activeIssueId = tcId;
+          renderApp();
+        } else {
+          window.alert("No related Issue found in mock data.");
+        }
+        return;
+      }
+
+      if (action === "createIssue") {
+        const tcId = findTcId();
+        window.alert(`(mock) Create Issue\nthread: ${thr ? thr.title : "-"}\n${tcId ? `tradeCaseId: ${tcId}` : ""}`.trim());
+        return;
+      }
+
+      if (action === "addComment") {
+        const tcId = findTcId();
+        if (!tcId) {
+          window.alert("(mock) No related Issue to comment on.");
+          return;
+        }
+        const comment = window.prompt("Add comment（mock）", `Request: ${(raw && raw.text) || ""}`.trim());
+        if (typeof comment === "string" && comment.trim()) {
+          recordTimelineEvent(tcId, {
+            id: shortId(),
+            at: nowIso(),
+            type: "humanComment",
+            label: "Human comment",
+            actor: "ops-user",
+            message: comment.trim(),
+          });
+          state.topActiveTab = "issues";
+          state.activeIssueId = tcId;
+          renderApp();
+        }
+        return;
+      }
+
+      if (action === "draftTeams") {
+        const draft = `（ドラフト）\n了解です。確認して折り返します。\n- 対象: ${thr ? thr.title : "-"}\n- 依頼: ${(raw && raw.text) || "-"}`.trim();
+        window.prompt("Draft Teams reply（mock）", draft);
+        return;
+      }
+
+      if (action === "draftEmail") {
+        const draft = `Subject: Urgent follow-up request\n\nHello,\nCould you please confirm the latest status?\n\nContext:\n- ${thr ? thr.title : "-"}\n- Request: ${(raw && raw.text) || "-"}`.trim();
+        window.prompt("Draft supplier push email（mock）", draft);
+        return;
       }
       return;
     }

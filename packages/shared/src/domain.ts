@@ -2,6 +2,56 @@ export type TradeType = "import" | "triangular";
 
 export type OperationalEntityType = "case" | "shipment" | "si";
 
+export type RawRequestSource =
+  | "teams"
+  | "web"
+  | "email"
+  | "manualMemo";
+
+export type OperationalThreadMessageRole =
+  | "requester"
+  | "agent"
+  | "system"
+  | "external";
+
+export type OperationalThreadEvidence = {
+  label: string;
+  type: "email" | "document" | "shipment" | "si" | "issue";
+  refId?: string;
+  url?: string;
+};
+
+export type OperationalThreadMessage = {
+  id: string;
+  role: OperationalThreadMessageRole;
+  sender: string;
+  text: string;
+  createdAt: string;
+  evidence?: OperationalThreadEvidence[];
+  proposedAction?: {
+    label: string;
+    type:
+      | "sendSupplierPush"
+      | "createIssue"
+      | "addCommentToIssue"
+      | "draftTeamsReply";
+    draftBody?: string;
+  };
+};
+
+export type OperationalThreadCandidate = {
+  id: string;
+  title: string;
+  status?: string;
+  action?: string;
+  tradeCaseId?: string;
+  linkedShipmentId?: string;
+  linkedSiNo?: string;
+  linkedIssueId?: string;
+  linkedCustomer?: string;
+  messages?: OperationalThreadMessage[];
+};
+
 export type ShipmentEntity = {
   id: string;
   blNo?: string;
