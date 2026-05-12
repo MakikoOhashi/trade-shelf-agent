@@ -25,10 +25,15 @@ const state = {
   proposalApprovalStatusById: {},
   modalTradeCaseId: null,
   /**
-   * Issues（AI承認センター）で開いているカード
+   * Issues（AI承認センター）で開いている Issue detail の tradeCaseId
    * @type {string | null}
    */
   activeIssueId: null,
+  /**
+   * tradeCaseId -> sequential issue number (1-based)
+   * @type {Record<string, number>}
+   */
+  issueSeqByTradeCaseId: {},
   /**
    * New TOP (GitHub-like) active tab
    * @type {"shelf" | "issues" | "documents" | "settings"}
@@ -138,6 +143,14 @@ function agentRunApproveSend(tradeCaseId) {
   current.approvedBy = "human";
   current.approvedAt = nowIso;
 
+  recordTimelineEvent(tradeCaseId, {
+    id: shortId(),
+    at: nowIso,
+    type: "sentLog",
+    label: "Sent log",
+    message: `（mock）送信済み: ${current.actionType || current.id}`,
+  });
+
   const waitStep = steps.find((s) => s && s.id === "step-wait-supplier-reply") || null;
   if (waitStep && waitStep.status === "waitingReply") {
     run.currentStepId = waitStep.id;
@@ -149,6 +162,14 @@ function agentRunApproveSend(tradeCaseId) {
     run.progressPercent = Math.max(run.progressPercent || 0, 45);
     run.nextHumanAction = undefined;
   }
+
+  recordTimelineEvent(tradeCaseId, {
+    id: shortId(),
+    at: nowIso,
+    type: "statusChange",
+    label: "Status change",
+    message: "Status: requires approval → waiting supplier reply",
+  });
 
   recordHumanIntervention(tradeCaseId, {
     actionType: "agentRunApproveSend",
@@ -168,6 +189,13 @@ function agentRunHold(tradeCaseId) {
   if (!current) return false;
   current.status = "held";
   run.status = "waitingHumanApproval";
+  recordTimelineEvent(tradeCaseId, {
+    id: shortId(),
+    at: nowIso(),
+    type: "statusChange",
+    label: "Status change",
+    message: "Status: requires approval → on hold",
+  });
   run.nextHumanAction = {
     label: "保留を解除して承認",
     description: "保留中です。内容を確認し、送信する場合は承認してください。",
@@ -188,6 +216,13 @@ function agentRunEdit(tradeCaseId) {
   if (!current || !msg) return false;
   const nextBody = window.prompt("Edit message body（mock）", String(msg.body || ""));
   if (typeof nextBody === "string") msg.body = nextBody;
+  recordTimelineEvent(tradeCaseId, {
+    id: shortId(),
+    at: nowIso(),
+    type: "draftEdit",
+    label: "Draft updated",
+    message: "Draft was edited (mock).",
+  });
   recordHumanIntervention(tradeCaseId, { actionType: "agentRunEdit", label: "Agent Run: Edit", note: `step:${current.id}` });
   log(`修正（mock）: ${current.id}`);
   return true;
@@ -396,6 +431,39 @@ function renderNewTop() {
       return best;
     };
 
+    const issueNoForCase = (tcId) => {
+      const n = state.issueSeqByTradeCaseId && typeof state.issueSeqByTradeCaseId[tcId] === "number" ? state.issueSeqByTradeCaseId[tcId] : null;
+      const nn = typeof n === "number" && Number.isFinite(n) ? n : 0;
+      return `ISS-${String(Math.max(0, nn)).padStart(4, "0")}`;
+    };
+
+    const relativeUpdatedText = (iso) => {
+      if (!iso) return "-";
+      const d = new Date(iso);
+      if (Number.isNaN(d.getTime())) return "-";
+      const diffMs = Date.now() - d.getTime();
+      const min = Math.max(0, Math.round(diffMs / 60000));
+      if (min < 60) return `updated ${min}min ago`;
+      const hr = Math.round(min / 60);
+      if (hr < 24) return `updated ${hr}h ago`;
+      const day = Math.round(hr / 24);
+      return `updated ${day}d ago`;
+    };
+
+    const computeLastUpdatedIso = (tc) => {
+      const timeline = Array.isArray(tc && tc.timeline) ? tc.timeline : [];
+      const atList = timeline.map((x) => (x && x.at ? String(x.at) : "")).filter(Boolean);
+      let best = atList.length ? atList[0] : "";
+      for (const at of atList) {
+        if (!best) best = at;
+        if (String(at) > String(best)) best = at;
+      }
+      if (best) return best;
+      const eta = tc?.shipmentEntity?.eta ? String(tc.shipmentEntity.eta) : "";
+      if (eta && /^\d{4}-\d{2}-\d{2}$/.test(eta)) return `${eta}T00:00:00.000Z`;
+      return "";
+    };
+
     const buildIssueForCase = (tc) => {
       if (!tc) return null;
       const incidents = Array.isArray(tc?.incidents) ? tc.incidents : detectIncidents(tc);
@@ -409,7 +477,7 @@ function renderNewTop() {
         ? tc.decisionContext.documentStatus.filter((d) => d && String(d.status || "").toLowerCase().includes("missing"))
         : [];
 
-      const title = tc?.siEntity?.siNo || tc?.shipmentEntity?.id || `Case ${tc.id}`;
+      const title = tc?.title || tc?.siEntity?.siNo || tc?.shipmentEntity?.id || `Case ${tc.id}`;
       const severity = maxSeverity(activeIncidents);
 
       // Status bucket
@@ -453,111 +521,232 @@ function renderNewTop() {
         why = "異常検知（インシデント）があります。";
       }
 
+      const updatedAt = computeLastUpdatedIso(tc);
       return {
-        id: `issue:${tc.id}`,
+        id: tc.id,
         tradeCaseId: tc.id,
+        issueNo: issueNoForCase(tc.id),
         title,
         severity,
         statusKey,
         aiProposal,
         why,
         draft,
+        siNo: tc?.siEntity?.siNo || (Array.isArray(tc?.siNumbers) ? tc.siNumbers[0] : ""),
+        shipmentId: tc?.shipmentEntity?.id || (Array.isArray(tc?.shipmentRefs) ? tc.shipmentRefs[0] : ""),
+        updatedAt,
+        updatedText: relativeUpdatedText(updatedAt),
+        commentCount: Array.isArray(tc?.timeline) ? tc.timeline.length : 0,
       };
     };
 
-    const issues = shipments.map(buildIssueForCase).filter(Boolean);
-    const statusOrder = ["requiresApproval", "waitingExternal", "blocked", "completed"];
-    const statusLabel = (k) => {
-      if (k === "requiresApproval") return "Requires approval";
-      if (k === "waitingExternal") return "Waiting external reply";
-      if (k === "blocked") return "Blocked";
-      if (k === "completed") return "Completed";
-      return k;
+    const allCases = Array.isArray(state.tradeCases) ? state.tradeCases.filter(Boolean) : [];
+    const issues = allCases.map(buildIssueForCase).filter(Boolean);
+
+    const statusTextByKey = {
+      requiresApproval: "requires approval",
+      blocked: "blocked",
+      waitingExternal: "waiting supplier",
+      completed: "completed",
     };
 
-    const grouped = Object.fromEntries(statusOrder.map((k) => [k, []]));
-    for (const it of issues) grouped[it.statusKey]?.push(it);
-    for (const k of statusOrder) {
-      grouped[k].sort((a, b) => (severityScore[b.severity] || 0) - (severityScore[a.severity] || 0));
-    }
+    const statusIcon = (k) => {
+      const map = { requiresApproval: "○", blocked: "●", waitingExternal: "◑", completed: "✓" };
+      return map[k] || "○";
+    };
 
-    const renderCard = (it) => {
+    const issueRow = (it) => {
       const sev = String(it.severity || "low").toLowerCase();
       const sevClass = sev === "critical" || sev === "high" ? "is-high" : sev === "medium" ? "is-medium" : "is-low";
-      const isOpen = state.activeIssueId === it.id;
-      const statusText = statusLabel(it.statusKey);
-
-      const links = `
-        <div class="issue-links">
-          <button class="btn btn--small btn--ghost" type="button" data-issue-open-shipment="${escapeHtml(it.tradeCaseId)}">Open Shipment Workspace</button>
-          <button class="btn btn--small btn--ghost" type="button" data-issue-open-si="${escapeHtml(it.tradeCaseId)}">Open SI Workspace</button>
-          <button class="btn btn--small btn--ghost" type="button" data-issue-open-case="${escapeHtml(it.tradeCaseId)}">Open Case detail</button>
+      const statusText = statusTextByKey[it.statusKey] || it.statusKey;
+      const linkText = [it.siNo, it.shipmentId].filter(Boolean).join(" / ") || "-";
+      const cc = typeof it.commentCount === "number" ? it.commentCount : 0;
+      return `<div class="issue-row" role="button" tabindex="0" data-issue-open="${escapeHtml(it.tradeCaseId)}">
+        <div class="issue-row__left">
+          <div class="issue-row__icon" aria-hidden="true">${escapeHtml(statusIcon(it.statusKey))}</div>
+          <div class="issue-row__title">${escapeHtml(it.title)}</div>
         </div>
-      `;
-
-      const draftHtml =
-        it.draft && it.draft.body
-          ? `<div class="issue-draft">
-              <div class="issue-draft__title">Draft preview</div>
-              <div class="kv">
-                <span class="muted">channel</span> ${escapeHtml(String(it.draft.channel || "-"))}
-                <span class="muted">to</span> ${escapeHtml((it.draft.to || []).join(", ") || "-")}
-                ${it.draft.subject ? `<span class="muted">subject</span> ${escapeHtml(String(it.draft.subject))}` : ""}
-              </div>
-              <pre class="pre pre--compact">${escapeHtml(String(it.draft.body || ""))}</pre>
-            </div>`
-          : "";
-
-      const actionHtml =
-        it.statusKey === "requiresApproval" && it.draft
-          ? `<div class="issue-actions">
-              <button class="btn btn--primary btn--small" type="button" data-issue-approve="${escapeHtml(it.tradeCaseId)}">Approve</button>
-              <button class="btn btn--small" type="button" data-issue-edit="${escapeHtml(it.tradeCaseId)}">Edit draft</button>
-              <button class="btn btn--small" type="button" data-issue-hold="${escapeHtml(it.tradeCaseId)}">Hold</button>
-              <button class="btn btn--small btn--ghost" type="button" data-issue-escalate="${escapeHtml(it.tradeCaseId)}">Escalate</button>
-            </div>`
-          : "";
-
-      return `<article class="issue-card ${sevClass} ${isOpen ? "is-open" : ""}" data-issue-id="${escapeHtml(it.id)}">
-        <div class="issue-card__head" role="button" tabindex="0" data-issue-toggle="${escapeHtml(it.id)}">
-          <div class="issue-card__title">${escapeHtml(it.title)}</div>
-          <div class="issue-card__meta">
-            <span class="nt-badge ${sevClass}">${escapeHtml(sev.toUpperCase())}</span>
-            <span class="nt-badge">${escapeHtml(statusText)}</span>
-            <span class="nt-badge nt-mono">${escapeHtml(it.tradeCaseId)}</span>
+        <div class="issue-row__right">
+          <div class="issue-row__meta">
+            <span class="issue-pill nt-mono">#${escapeHtml(it.issueNo)}</span>
+            <span class="issue-pill ${sevClass}">${escapeHtml(sev.toUpperCase())}</span>
+            <span class="issue-pill">${escapeHtml(statusText)}</span>
+            <span class="issue-pill">${escapeHtml(linkText)}</span>
+            <span class="issue-pill">${escapeHtml(it.updatedText || "-")}</span>
+            <span class="issue-pill nt-mono">${escapeHtml(String(cc))} comments</span>
           </div>
         </div>
-        <div class="issue-card__body" ${isOpen ? "" : "hidden"}>
-          <div class="issue-block">
-            <div class="issue-block__label">AI proposal</div>
-            <div>${escapeHtml(it.aiProposal)}</div>
-          </div>
-          <div class="issue-block">
-            <div class="issue-block__label">Why</div>
-            <div class="muted">${escapeHtml(it.why)}</div>
-          </div>
-          <div class="issue-block">
-            <div class="issue-block__label">Related workspace links</div>
-            ${links}
-          </div>
-          ${draftHtml}
-          ${actionHtml}
-        </div>
-      </article>`;
+      </div>`;
     };
 
-    const sections = statusOrder
-      .map((k) => {
-        const list = grouped[k] || [];
-        const cards = list.length ? list.map(renderCard).join("") : `<div class="nt-muted">No items</div>`;
-        return `<section class="issue-group" aria-label="${escapeHtml(statusLabel(k))}">
-          <div class="issue-group__head">${escapeHtml(statusLabel(k))} <span class="stage-count">${list.length}</span></div>
-          <div class="issue-group__body">${cards}</div>
-        </section>`;
-      })
-      .join("");
+    const renderIssueList = () => {
+      const sorted = issues
+        .slice()
+        .sort((a, b) => {
+          const sa = severityScore[String(a?.severity || "low").toLowerCase()] || 0;
+          const sb = severityScore[String(b?.severity || "low").toLowerCase()] || 0;
+          if (sb !== sa) return sb - sa;
+          const ua = String(a?.updatedAt || "");
+          const ub = String(b?.updatedAt || "");
+          if (ub !== ua) return ub > ua ? 1 : -1;
+          return String(a?.issueNo || "").localeCompare(String(b?.issueNo || ""));
+        });
+      const body = sorted.length ? sorted.map(issueRow).join("") : `<div class="nt-muted">No items</div>`;
+      return `<section class="issue-list" aria-label="Issues list">${body}</section>`;
+    };
 
-    return `<section class="issues-center" aria-label="Issues Center">${sections}</section>`;
+    const renderTimelineItem = (item) => {
+      const t = String(item?.type || "");
+      const at = item?.at ? formatLocalTime(item.at) : "";
+      const label = item?.label ? String(item.label) : t || "comment";
+      const body = item?.bodyHtml ? String(item.bodyHtml) : escapeHtml(String(item?.message || ""));
+      const actor = item?.actor ? String(item.actor) : "";
+      const meta = [label, actor].filter(Boolean).join(" ・ ");
+      return `<div class="issue-timeline-item ${escapeHtml(`tl-${t || "comment"}`)}">
+        <div class="issue-timeline-item__dot" aria-hidden="true"></div>
+        <div class="issue-timeline-item__card">
+          <div class="issue-timeline-item__meta">
+            <span class="issue-timeline-item__label">${escapeHtml(meta || "-")}</span>
+            ${at ? `<span class="issue-timeline-item__at">${escapeHtml(at)}</span>` : ""}
+          </div>
+          <div class="issue-timeline-item__body">${body}</div>
+        </div>
+      </div>`;
+    };
+
+    const renderIssueDetail = (tradeCaseId) => {
+      const tc = tradeCaseId ? getTradeCaseById(tradeCaseId) : null;
+      const it = issues.find((x) => x && x.tradeCaseId === tradeCaseId) || null;
+      if (!tc || !it) return `<div class="nt-muted">Issue not found</div>`;
+
+      const statusText = statusTextByKey[it.statusKey] || it.statusKey;
+      const sev = String(it.severity || "low").toLowerCase();
+      const sevClass = sev === "critical" || sev === "high" ? "is-high" : sev === "medium" ? "is-medium" : "is-low";
+
+      const rawTimeline = Array.isArray(tc.timeline) ? tc.timeline.slice().reverse() : [];
+
+      const derived = [];
+      derived.push({
+        id: `ai-class:${tradeCaseId}`,
+        at: it.updatedAt || nowIso(),
+        type: "aiClassification",
+        label: "AI comment",
+        actor: "trade-shelf-agent",
+        message: it.why || "classified",
+      });
+
+      if (it.statusKey === "requiresApproval" && it.draft && it.draft.body) {
+        derived.push({
+          id: `draft-prop:${tradeCaseId}`,
+          at: nowIso(),
+          type: "draftProposal",
+          label: "Draft proposal",
+          actor: "trade-shelf-agent",
+          message: it.aiProposal || "Draft proposal ready.",
+        });
+        derived.push({
+          id: `email-draft:${tradeCaseId}`,
+          at: nowIso(),
+          type: "emailDraft",
+          label: "Email draft",
+          actor: "trade-shelf-agent",
+          bodyHtml: `<div class="issue-email-draft">
+            <div class="kv">
+              <span class="muted">channel</span> ${escapeHtml(String(it.draft.channel || "-"))}
+              <span class="muted">to</span> ${escapeHtml((it.draft.to || []).join(", ") || "-")}
+              ${it.draft.subject ? `<span class="muted">subject</span> ${escapeHtml(String(it.draft.subject))}` : ""}
+            </div>
+            <pre class="pre pre--compact">${escapeHtml(String(it.draft.body || ""))}</pre>
+            <div class="issue-actions">
+              <button class="btn btn--primary btn--small" type="button" data-issue-approve="${escapeHtml(it.tradeCaseId)}">Approve send</button>
+              <button class="btn btn--small" type="button" data-issue-edit="${escapeHtml(it.tradeCaseId)}">Edit draft</button>
+              <button class="btn btn--small" type="button" data-issue-hold="${escapeHtml(it.tradeCaseId)}">Hold</button>
+            </div>
+          </div>`,
+        });
+      }
+
+      const allTimeline = derived.concat(
+        rawTimeline.map((x) => ({
+          id: x?.id || shortId(),
+          at: x?.at || "",
+          type: x?.type || "comment",
+          label: x?.label || x?.type || "comment",
+          actor: x?.actor || "",
+          message: x?.message || "",
+        })),
+      );
+
+      allTimeline.sort((a, b) => String(a?.at || "").localeCompare(String(b?.at || "")));
+      const timelineHtml = allTimeline.length ? allTimeline.map(renderTimelineItem).join("") : `<div class="nt-muted">No timeline yet</div>`;
+
+      const labels = [];
+      const incs = Array.isArray(tc.incidents) ? tc.incidents : [];
+      for (const i of incs) {
+        const type = String(i?.type || "");
+        if (type === "invoiceQuantityMismatch") labels.push("quantity mismatch");
+        if (type === "missingDocument") labels.push("missing document");
+        if (type === "deliveryRisk") labels.push("delivery risk");
+      }
+      const labelHtml = labels.length ? labels.slice(0, 5).map((x) => `<span class="issue-label">${escapeHtml(x)}</span>`).join("") : `<span class="nt-muted">-</span>`;
+
+      const assignee = it.statusKey === "waitingExternal" ? "Supplier waiting" : it.statusKey === "requiresApproval" ? "Ops user" : "AI Agent";
+
+      const dueDate = tc?.siEntity?.requestedDeliveryDate ? String(tc.siEntity.requestedDeliveryDate) : "";
+      const overdue = dueDate && new Date(dueDate).getTime() < new Date().setHours(0, 0, 0, 0);
+      const dueHtml = dueDate
+        ? `<div class="issue-sidebar-row"><div class="issue-sidebar__k">Deadline / SLA</div><div class="issue-sidebar__v">${escapeHtml(dueDate)} ${
+            overdue ? `<span class="issue-overdue">OVERDUE</span>` : ""
+          }</div></div>`
+        : `<div class="issue-sidebar-row"><div class="issue-sidebar__k">Deadline / SLA</div><div class="issue-sidebar__v">-</div></div>`;
+
+      const relatedLinksHtml = `<div class="issue-sidebar-row">
+        <div class="issue-sidebar__k">Related links</div>
+        <div class="issue-sidebar__v issue-sidebar-links">
+          <button class="btn btn--small btn--ghost" type="button" data-issue-open-si="${escapeHtml(it.tradeCaseId)}">Open SI Workspace</button>
+          <button class="btn btn--small btn--ghost" type="button" data-issue-open-shipment="${escapeHtml(it.tradeCaseId)}">Open Shipment Workspace</button>
+          <button class="btn btn--small btn--ghost" type="button" data-issue-open-case="${escapeHtml(it.tradeCaseId)}">Open Case detail</button>
+        </div>
+      </div>`;
+
+      const externalStatus = it.statusKey === "waitingExternal" ? "waiting supplier" : it.statusKey === "requiresApproval" ? "email draft" : "—";
+
+      return `<section class="issue-detail" aria-label="Issue detail">
+        <div class="issue-detail__top">
+          <button class="btn btn--small btn--ghost" type="button" data-issue-back="1">← Back</button>
+          <div class="issue-detail__title">
+            <div class="issue-detail__h">${escapeHtml(it.title)}</div>
+            <div class="issue-detail__sub">
+              <span class="issue-pill nt-mono">#${escapeHtml(it.issueNo)}</span>
+              <span class="issue-pill ${sevClass}">${escapeHtml(sev.toUpperCase())}</span>
+              <span class="issue-pill">${escapeHtml(statusText)}</span>
+            </div>
+          </div>
+        </div>
+        <div class="issue-detail__grid">
+          <div class="issue-detail__main">
+            <div class="issue-timeline">${timelineHtml}</div>
+            <div class="issue-comment">
+              <div class="issue-comment__label">Comment</div>
+              <textarea class="issue-comment__box" rows="3" placeholder="手動メモ・補足・判断理由を残す" data-issue-comment-box="1"></textarea>
+              <div class="issue-comment__actions">
+                <button class="btn btn--primary btn--small" type="button" data-issue-add-comment="${escapeHtml(it.tradeCaseId)}">Add comment</button>
+              </div>
+            </div>
+          </div>
+          <aside class="issue-sidebar" aria-label="Metadata sidebar">
+            <div class="issue-sidebar-row"><div class="issue-sidebar__k">Assignee / Owner</div><div class="issue-sidebar__v">${escapeHtml(assignee)}</div></div>
+            <div class="issue-sidebar-row"><div class="issue-sidebar__k">Labels</div><div class="issue-sidebar__v">${labelHtml}</div></div>
+            ${relatedLinksHtml}
+            <div class="issue-sidebar-row"><div class="issue-sidebar__k">External status</div><div class="issue-sidebar__v">${escapeHtml(externalStatus)}</div></div>
+            ${dueHtml}
+          </aside>
+        </div>
+      </section>`;
+    };
+
+    if (state.activeIssueId) return renderIssueDetail(state.activeIssueId);
+    return renderIssueList();
   };
 
   const renderPlaceholder = (title) => `<div class="nt-placeholder">
@@ -4081,6 +4270,13 @@ function seed() {
     const proposals = proposeActions(c, incidents);
     return { ...c, incidents, nextActions: proposals };
   });
+  const sortedIds = state.tradeCases
+    .map((c) => (c && c.id ? c.id : ""))
+    .filter(Boolean)
+    .slice()
+    .sort((a, b) => String(a).localeCompare(String(b)));
+  state.issueSeqByTradeCaseId = {};
+  for (let i = 0; i < sortedIds.length; i++) state.issueSeqByTradeCaseId[sortedIds[i]] = i + 1;
   renderApp();
 }
 
@@ -4129,10 +4325,38 @@ function setupNewTop() {
       return;
     }
 
-    const issueToggleEl = target.closest && target.closest("[data-issue-toggle]");
-    if (issueToggleEl) {
-      const id = issueToggleEl.getAttribute("data-issue-toggle") || "";
-      state.activeIssueId = state.activeIssueId === id ? null : id;
+    const issueOpenEl = target.closest && target.closest("[data-issue-open]");
+    if (issueOpenEl) {
+      const id = issueOpenEl.getAttribute("data-issue-open") || "";
+      state.activeIssueId = id || null;
+      renderApp();
+      return;
+    }
+
+    const issueBackEl = target.closest && target.closest("[data-issue-back]");
+    if (issueBackEl) {
+      state.activeIssueId = null;
+      renderApp();
+      return;
+    }
+
+    const issueAddCommentEl = target.closest && target.closest("[data-issue-add-comment]");
+    if (issueAddCommentEl) {
+      const id = issueAddCommentEl.getAttribute("data-issue-add-comment") || "";
+      const rootEl = issueAddCommentEl.closest && issueAddCommentEl.closest(".issue-detail");
+      const box = rootEl && rootEl.querySelector ? rootEl.querySelector("[data-issue-comment-box]") : null;
+      const text = box && typeof box.value === "string" ? box.value.trim() : "";
+      if (id && text) {
+        recordTimelineEvent(id, {
+          id: shortId(),
+          at: nowIso(),
+          type: "humanComment",
+          label: "Human comment",
+          actor: "ops-user",
+          message: text,
+        });
+        if (box) box.value = "";
+      }
       renderApp();
       return;
     }
@@ -4219,10 +4443,10 @@ function setupNewTop() {
       return;
     }
 
-    const issueToggleEl = target.closest && target.closest("[data-issue-toggle]");
-    if (issueToggleEl) {
-      const id = issueToggleEl.getAttribute("data-issue-toggle") || "";
-      state.activeIssueId = state.activeIssueId === id ? null : id;
+    const issueOpenEl = target.closest && target.closest("[data-issue-open]");
+    if (issueOpenEl) {
+      const id = issueOpenEl.getAttribute("data-issue-open") || "";
+      state.activeIssueId = id || null;
       renderApp();
       return;
     }
