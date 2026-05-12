@@ -28,7 +28,7 @@ const state = {
    * New TOP (GitHub-like) active tab
    * @type {"shipments" | "si" | "issues" | "documents" | "settings"}
    */
-  topActiveTab: "shipments",
+  topActiveTab: "si",
   /**
    * Resolution Decision Tree の branch 選択状態（branch.value）
    * @type {string | null}
@@ -60,9 +60,9 @@ const state = {
 };
 
 const newTopTabs = [
-  { key: "shipments", label: "Shipments" },
-  { key: "si", label: "SI" },
-  { key: "issues", label: "Issues" },
+  { key: "si", label: "SI（出荷指図）" },
+  { key: "shipments", label: "Shipments（船積）" },
+  { key: "issues", label: "Issues（インシデント）" },
   { key: "documents", label: "Documents" },
   { key: "settings", label: "Settings" },
 ];
@@ -144,15 +144,16 @@ function renderNewTop() {
           const sh = tc && tc.shipmentEntity ? tc.shipmentEntity : null;
           const percent = Math.round(((stageIdx + 1) / shipmentStageLabels.length) * 100);
           
-          const blNo = sh?.blNo || "BL -";
+          const title = sh?.id || "Planned Shipment";
           const supplierName = tc?.supplier?.name || "ACME Components";
-          const subtitle = `${blNo} ・ ${supplierName}`;
+          const subtitle = `${supplierName} ・ ${stageLabel}`;
 
-          const bookingNo = sh?.bookingNo || "Booking -";
-          const eta = sh?.eta || "-";
+          const bookingNo = sh?.bookingNo;
+          const eta = sh?.eta;
+          const blNo = sh?.blNo;
           
           const invs = Array.isArray(tc?.invoiceNumbers) ? tc.invoiceNumbers.map(i => i.invoiceNo).filter(Boolean) : [];
-          const invText = invs.length ? invs[0] : "";
+          const invText = invs.length ? invs[0] : null;
 
           const incidents = Array.isArray(tc?.incidents) ? tc.incidents : [];
           const movementStage = deriveMovementStageFromShipmentState(sh?.shipmentState);
@@ -160,13 +161,18 @@ function renderNewTop() {
 
           const alertBadgesHtml = alerts.map(a => `<span class="nt-badge">${escapeHtml(a.label)}</span>`).join("");
 
+          const chipsHtml = [
+            blNo ? blNo : "BL待ち",
+            bookingNo ? `Booking ${bookingNo}` : "Booking待ち",
+            eta ? `ETA ${eta}` : "ETA未定",
+            invText ? invText : "INV待ち"
+          ].map(c => `<span class="nt-chip">${escapeHtml(c)}</span>`).join("");
+
           return `<article class="shipment-card" role="button" tabindex="0" data-open-shipment="${escapeHtml(tc.id)}">
-            <div class="shipment-card-title">${escapeHtml(sh?.id || "-")}</div>
+            <div class="shipment-card-title">${escapeHtml(title)}</div>
             <div class="shipment-card-subtitle">${escapeHtml(subtitle)}</div>
             <div class="shipment-card-meta">
-              <span class="nt-chip">${escapeHtml(bookingNo)}</span>
-              <span class="nt-chip">ETA ${escapeHtml(eta)}</span>
-              ${invText ? `<span class="nt-chip">${escapeHtml(invText)}</span>` : ""}
+              ${chipsHtml}
             </div>
             ${alertBadgesHtml ? `<div class="shipment-card-alerts">${alertBadgesHtml}</div>` : ""}
             <div class="nt-progress">
