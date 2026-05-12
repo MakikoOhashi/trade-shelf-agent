@@ -92,6 +92,16 @@ const state = {
    * @type {Record<string, { activeDocId: string | null, activePageByDocId: Record<string, number> }>}
    */
   workspaceUiByModalId: {},
+  /**
+   * Documents / Evidence Archive filter chip key
+   * @type {"all" | "documents" | "emails" | "teams" | "issues" | "sentLogs" | "decisions" | "aiLogs"}
+   */
+  evidenceFilterKey: "all",
+  /**
+   * Documents / Evidence Archive search query
+   * @type {string}
+   */
+  evidenceSearchQuery: "",
 };
 
 const newTopTabs = [
@@ -159,6 +169,119 @@ function closeIngestionModal() {
   if (!modal) return;
   modal.classList.remove("is-open");
   modal.setAttribute("aria-hidden", "true");
+}
+
+function getMockEvidenceArchiveItems() {
+  const tcBySi = (siNo) =>
+    (Array.isArray(state.tradeCases) ? state.tradeCases : []).find((c) => c && c.siEntity && String(c.siEntity.siNo) === String(siNo)) || null;
+
+  const tc1 = tcBySi("SI-2026-001");
+  const tc1Id = tc1 && tc1.id ? String(tc1.id) : "";
+
+  return [
+    {
+      id: "ev-doc-inv-1122",
+      type: "Document",
+      title: "INV-1122 Commercial Invoice",
+      linked: [
+        { kind: "si", label: "SI-2026-001", tradeCaseId: tc1Id },
+        { kind: "shipment", label: "SHP-2026-009", tradeCaseId: tc1Id },
+      ],
+      source: "Workspace",
+      date: "2026-05-12",
+      tags: ["invoice", "quantity mismatch"],
+      preview: {
+        kind: "document",
+        body: "（mock）Commercial invoice preview\n- Supplier: ACME Components (Shenzhen)\n- Qty: 400pcs\n- Note: SI指図 1000pcs と差異あり",
+      },
+    },
+    {
+      id: "ev-email-pl-pending",
+      type: "Email",
+      title: "Re: PL pending for SHP-2026-009",
+      linked: [{ kind: "shipment", label: "SHP-2026-009", tradeCaseId: tc1Id }],
+      source: "Outlook",
+      date: "2026-05-11",
+      tags: ["supplier", "PL missing"],
+      preview: {
+        kind: "message",
+        from: "sales@acme-components.example",
+        to: "ops@your-company.example",
+        subject: "Re: PL pending for SHP-2026-009",
+        body: "（mock）PL is being updated. We will send the revised Packing List within 24 hours.",
+      },
+    },
+    {
+      id: "ev-teams-sales-a",
+      type: "Teams",
+      title: "営業A: PLまだ？",
+      linked: [{ kind: "issue", label: "ISS-0002", tradeCaseId: tc1Id }],
+      source: "Teams",
+      date: "2026-05-11",
+      tags: ["sales request"],
+      preview: {
+        kind: "message",
+        from: "営業A",
+        subject: "Teams message",
+        body: "（mock）PLまだ？顧客から急かされてます。いつ頃になりそう？",
+      },
+    },
+    {
+      id: "ev-issue-0001",
+      type: "Issue",
+      title: "ISS-0001 INV数量差異",
+      linked: [{ kind: "si", label: "SI-2026-001", tradeCaseId: tc1Id }],
+      source: "Issues",
+      date: "2026-05-10",
+      tags: ["issue", "approval"],
+      tradeCaseId: tc1Id,
+    },
+    {
+      id: "ev-sent-supplier-confirm",
+      type: "Sent log",
+      title: "Supplier confirmation email sent",
+      linked: [{ kind: "issue", label: "ISS-0001", tradeCaseId: tc1Id }],
+      source: "Email (sent)",
+      date: "2026-05-10",
+      tags: ["sent", "supplier"],
+      preview: {
+        kind: "message",
+        from: "ops@your-company.example",
+        subject: "Sent log",
+        body: "（mock）Sent confirmation request to supplier regarding invoice/SI quantity mismatch.",
+      },
+    },
+    {
+      id: "ev-decision-split-shipment",
+      type: "Decision log",
+      title: "分納として記録し次便確認",
+      linked: [{ kind: "si", label: "SI-2026-001", tradeCaseId: tc1Id }],
+      source: "Decision log",
+      date: "2026-05-10",
+      tags: ["decision"],
+      preview: {
+        kind: "message",
+        from: "ops-user",
+        subject: "Decision record",
+        body: "（mock）分納として記録。残600pcsは次便での補充可否を確認し、営業へ暫定共有。",
+      },
+    },
+    {
+      id: "ev-ai-classification-split",
+      type: "AI classification",
+      title: "Supplier reply classified as split shipment",
+      linked: [{ kind: "shipment", label: "SHP-2026-009", tradeCaseId: tc1Id }],
+      source: "AI agent",
+      date: "2026-05-10",
+      tags: ["AI classification"],
+      preview: {
+        kind: "message",
+        from: "trade-shelf-agent",
+        subject: "Classification result",
+        body: "（mock）Classified supplier reply as: split shipment (partial invoice). Confidence: 0.82",
+      },
+    },
+  ];
 }
 
 function getActiveOperationalThread() {
@@ -1107,6 +1230,127 @@ function renderNewTop() {
     <div class="nt-muted">（mock）</div>
   </div>`;
 
+  const renderDocumentsEvidenceArchive = () => {
+    const filterDefs = [
+      { key: "all", label: "All" },
+      { key: "documents", label: "Documents" },
+      { key: "emails", label: "Emails" },
+      { key: "teams", label: "Teams" },
+      { key: "issues", label: "Issues" },
+      { key: "sentLogs", label: "Sent logs" },
+      { key: "decisions", label: "Decisions" },
+      { key: "aiLogs", label: "AI logs" },
+    ];
+    const evidenceItems = getMockEvidenceArchiveItems();
+
+    const filterKey = state.evidenceFilterKey || "all";
+    const q = String(state.evidenceSearchQuery || "").trim().toLowerCase();
+
+    const matchesFilter = (item) => {
+      if (!item) return false;
+      const t = String(item.type || "");
+      if (filterKey === "documents") return t === "Document";
+      if (filterKey === "emails") return t === "Email";
+      if (filterKey === "teams") return t === "Teams";
+      if (filterKey === "issues") return t === "Issue";
+      if (filterKey === "sentLogs") return t === "Sent log";
+      if (filterKey === "decisions") return t === "Decision log";
+      if (filterKey === "aiLogs") return t === "AI classification";
+      return true;
+    };
+
+    const matchesQuery = (item) => {
+      if (!q) return true;
+      const linkedText = Array.isArray(item.linked) ? item.linked.map((x) => String(x.label || "")).join(" ") : "";
+      const tagText = Array.isArray(item.tags) ? item.tags.join(" ") : "";
+      const hay = `${item.type || ""} ${item.title || ""} ${linkedText} ${item.source || ""} ${item.date || ""} ${tagText}`.toLowerCase();
+      return hay.includes(q);
+    };
+
+    const filtered = evidenceItems.filter((it) => matchesFilter(it) && matchesQuery(it));
+
+    const chipHtml = filterDefs
+      .map((d) => {
+        const active = String(d.key) === String(filterKey);
+        return `<button class="evidence-filter-chip ${active ? "is-active" : ""}" type="button" data-evidence-filter="${escapeHtml(
+          String(d.key),
+        )}">${escapeHtml(String(d.label))}</button>`;
+      })
+      .join("");
+
+    const rowsHtml = filtered
+      .map((it) => {
+        const type = String(it.type || "");
+        const typeSlug = type.toLowerCase().replace(/\s+/g, "-");
+        const linkedHtml = (Array.isArray(it.linked) ? it.linked : [])
+          .map((x) => {
+            const label = String(x && x.label ? x.label : "");
+            const tcId = String(x && x.tradeCaseId ? x.tradeCaseId : "");
+            const kind = String(x && x.kind ? x.kind : "");
+            if (kind === "shipment" && tcId) {
+              return `<button class="evidence-linked-chip" type="button" data-open-shipment="${escapeHtml(tcId)}">${escapeHtml(label)}</button>`;
+            }
+            if (kind === "si" && tcId) {
+              return `<button class="evidence-linked-chip" type="button" data-open-si="${escapeHtml(tcId)}">${escapeHtml(label)}</button>`;
+            }
+            if (kind === "issue" && tcId) {
+              return `<button class="evidence-linked-chip" type="button" data-evidence-open-issue="${escapeHtml(tcId)}">${escapeHtml(label)}</button>`;
+            }
+            return `<span class="evidence-linked-chip is-static">${escapeHtml(label || "—")}</span>`;
+          })
+          .join("");
+
+        const tagsHtml = (Array.isArray(it.tags) ? it.tags : [])
+          .map((t) => `<span class="evidence-tag">${escapeHtml(String(t))}</span>`)
+          .join("");
+
+        return `<div class="evidence-row" role="row" data-evidence-row="1">
+          <div class="evidence-col evidence-col--type" role="cell">
+            <span class="evidence-type-badge evidence-type-badge--${escapeHtml(typeSlug)}">${escapeHtml(type)}</span>
+          </div>
+          <div class="evidence-col evidence-col--title" role="cell">${escapeHtml(String(it.title || "—"))}</div>
+          <div class="evidence-col evidence-col--linked" role="cell">${linkedHtml || `<span class="muted">—</span>`}</div>
+          <div class="evidence-col evidence-col--source" role="cell">${escapeHtml(String(it.source || "—"))}</div>
+          <div class="evidence-col evidence-col--date" role="cell">${escapeHtml(String(it.date || "—"))}</div>
+          <div class="evidence-col evidence-col--tags evidence-tags" role="cell">${tagsHtml || `<span class="muted">—</span>`}</div>
+          <div class="evidence-col evidence-col--open" role="cell">
+            <button class="btn btn--ghost btn--small" type="button" data-evidence-open="${escapeHtml(String(it.id || ""))}">Open</button>
+          </div>
+        </div>`;
+      })
+      .join("");
+
+    const emptyHtml = `<div class="evidence-empty">No evidence found.</div>`;
+
+    return `<section class="evidence-archive" aria-label="Documents Evidence Archive">
+      <div class="evidence-archive__head">
+        <div class="evidence-archive__title">Documents / Evidence Archive</div>
+        <div class="evidence-archive__desc muted">書類・メール・会話・Issue履歴・送信ログを横断的に参照します。</div>
+      </div>
+      <div class="evidence-archive__controls">
+        <div class="evidence-filters" role="toolbar" aria-label="Evidence filters">${chipHtml}</div>
+        <div class="evidence-search">
+          <input class="evidence-search__input" type="search" value="${escapeHtml(
+            String(state.evidenceSearchQuery || ""),
+          )}" placeholder="Search documents, emails, issues, shipments, SI..." data-evidence-search="1" />
+        </div>
+      </div>
+
+      <div class="evidence-table" role="table" aria-label="Evidence list">
+        <div class="evidence-row evidence-row--head" role="row">
+          <div class="evidence-col evidence-col--type" role="columnheader">Type</div>
+          <div class="evidence-col evidence-col--title" role="columnheader">Title</div>
+          <div class="evidence-col evidence-col--linked" role="columnheader">Linked entity</div>
+          <div class="evidence-col evidence-col--source" role="columnheader">Source</div>
+          <div class="evidence-col evidence-col--date" role="columnheader">Date</div>
+          <div class="evidence-col evidence-col--tags" role="columnheader">Tags</div>
+          <div class="evidence-col evidence-col--open" role="columnheader"></div>
+        </div>
+        ${rowsHtml || emptyHtml}
+      </div>
+    </section>`;
+  };
+
   const renderRequests = () => {
     const list = Array.isArray(state.rawRequests) ? state.rawRequests.filter(Boolean) : [];
     const activeRawId = state.activeRawRequestId || (list[0] && list[0].id) || null;
@@ -1261,7 +1505,7 @@ function renderNewTop() {
         : tab === "requests"
           ? renderRequests()
         : tab === "documents"
-          ? renderPlaceholder("Documents")
+          ? renderDocumentsEvidenceArchive()
           : renderPlaceholder("Settings");
 
   return `
@@ -5345,10 +5589,94 @@ function setupNewTop() {
       return;
     }
 
+    const evidenceFilterEl = target.closest && target.closest("[data-evidence-filter]");
+    if (evidenceFilterEl) {
+      const key = evidenceFilterEl.getAttribute("data-evidence-filter") || "all";
+      const allowed = ["all", "documents", "emails", "teams", "issues", "sentLogs", "decisions", "aiLogs"];
+      state.evidenceFilterKey = allowed.includes(key) ? key : "all";
+      renderApp();
+      return;
+    }
+
+    const evidenceOpenIssueEl = target.closest && target.closest("[data-evidence-open-issue]");
+    if (evidenceOpenIssueEl) {
+      const tradeCaseId = evidenceOpenIssueEl.getAttribute("data-evidence-open-issue") || "";
+      if (tradeCaseId) {
+        state.topActiveTab = "issues";
+        state.activeIssueId = tradeCaseId;
+        renderApp();
+      }
+      return;
+    }
+
+    const evidenceOpenEl = target.closest && target.closest("[data-evidence-open]");
+    if (evidenceOpenEl) {
+      const id = evidenceOpenEl.getAttribute("data-evidence-open") || "";
+      const item = (getMockEvidenceArchiveItems() || []).find((x) => x && String(x.id) === String(id)) || null;
+      if (!item) {
+        window.alert("(mock) Evidence not found.");
+        return;
+      }
+      if (String(item.type) === "Issue") {
+        if (item.tradeCaseId) {
+          state.topActiveTab = "issues";
+          state.activeIssueId = String(item.tradeCaseId);
+          renderApp();
+        } else {
+          window.alert("(mock) Issue link is missing.");
+        }
+        return;
+      }
+
+      const preview = item.preview || null;
+      const title = String(item.title || "Evidence preview");
+      if (preview && preview.kind === "document") {
+        const body = String(preview.body || "");
+        openModal({ title: title || "Document", bodyHtml: `<div class="evidence-preview-modal">
+          <div class="evidence-preview-modal__kind">Document viewer（mock）</div>
+          <pre class="evidence-preview-modal__pre">${escapeHtml(body)}</pre>
+        </div>` });
+        return;
+      }
+
+      if (preview && preview.kind === "message") {
+        const from = String(preview.from || "—");
+        const to = String(preview.to || "");
+        const subject = String(preview.subject || "");
+        const body = String(preview.body || "");
+        openModal({
+          title: title || "Message",
+          bodyHtml: `<div class="evidence-preview-modal">
+            <div class="evidence-preview-modal__kind">Message preview（mock）</div>
+            <div class="evidence-preview-meta">
+              <div class="evidence-preview-meta__row"><div class="evidence-preview-meta__k">From</div><div class="evidence-preview-meta__v">${escapeHtml(from)}</div></div>
+              ${to ? `<div class="evidence-preview-meta__row"><div class="evidence-preview-meta__k">To</div><div class="evidence-preview-meta__v">${escapeHtml(to)}</div></div>` : ""}
+              ${subject ? `<div class="evidence-preview-meta__row"><div class="evidence-preview-meta__k">Subject</div><div class="evidence-preview-meta__v">${escapeHtml(subject)}</div></div>` : ""}
+            </div>
+            <pre class="evidence-preview-modal__pre">${escapeHtml(body)}</pre>
+          </div>`,
+        });
+        return;
+      }
+
+      openModal({ title, bodyText: "(mock) Preview is not available." });
+      return;
+    }
+
     const ingestionEl = target.closest && target.closest("[data-open-ingestion]");
     if (ingestionEl) {
       openIngestionModal();
       return;
+    }
+  });
+
+  root.addEventListener("input", (e) => {
+    const target = e.target;
+    if (!target) return;
+    const searchEl = target.closest && target.closest("[data-evidence-search]");
+    if (searchEl) {
+      state.evidenceSearchQuery = typeof searchEl.value === "string" ? searchEl.value : "";
+      renderApp();
     }
   });
 
