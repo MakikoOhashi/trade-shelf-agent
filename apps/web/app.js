@@ -68,13 +68,13 @@ const newTopTabs = [
 ];
 
 const shipmentStageLabels = [
-  "1 出荷指図",
-  "2 仕入先出発〜仕入先港着",
-  "3 輸出通関手続き",
-  "4 船積輸送中（洋上）",
-  "5 港着〜輸入通関手続き",
-  "6 営業倉庫へ輸送中",
-  "7 営業倉庫着（在庫化）",
+  "出荷指図",
+  "仕入先出発〜仕入先港着",
+  "輸出通関手続き",
+  "船積輸送中（洋上）",
+  "港着〜輸入通関手続き",
+  "営業倉庫へ輸送中",
+  "営業倉庫着（在庫化）",
 ];
 
 function shipmentStageIndexFromState(shipmentState) {
@@ -131,42 +131,63 @@ function renderNewTop() {
   const shipments = Array.isArray(state.tradeCases) ? state.tradeCases.filter(Boolean) : [];
 
   const renderShipments = () => {
-    const cards = shipments
-      .slice()
-      .sort((a, b) => String(a?.shipmentEntity?.eta || "").localeCompare(String(b?.shipmentEntity?.eta || "")))
-      .map((tc) => {
-        const sh = tc && tc.shipmentEntity ? tc.shipmentEntity : null;
-        const stageIdx = shipmentStageIndexFromState(sh?.shipmentState);
-        const percent = Math.round(((stageIdx + 1) / shipmentStageLabels.length) * 100);
-        const blockers = Array.isArray(tc?.caseProgress?.blockingSummary) ? tc.caseProgress.blockingSummary : [];
-        return `<article class="nt-card nt-card--shipment" role="button" tabindex="0" data-open-shipment="${escapeHtml(
-          tc.id,
-        )}">
-          <div class="nt-card__head">
-            <div class="nt-card__title"><span class="nt-mono">${escapeHtml(sh?.id || "-")}</span></div>
-            <div class="nt-card__meta">
-              <span class="nt-chip">${escapeHtml(sh?.bookingNo || "Booking -")}</span>
-              <span class="nt-chip">${escapeHtml(sh?.blNo || "BL -")}</span>
-              <span class="nt-chip">ETA ${escapeHtml(sh?.eta || "-")}</span>
-            </div>
-          </div>
-          <div class="nt-progress">
-            <div class="nt-progress__bar" aria-hidden="true"><div class="nt-progress__fill" style="width:${percent}%"></div></div>
-            <div class="nt-progress__label">${escapeHtml(shipmentStageLabels[stageIdx] || shipmentStageLabels[0])}</div>
-          </div>
-          <ol class="nt-stages" aria-label="Stages">
-            ${shipmentStageLabels
-              .map((label, i) => `<li class="nt-stage ${i < stageIdx ? "is-done" : i === stageIdx ? "is-current" : ""}">${escapeHtml(label)}</li>`)
-              .join("")}
-          </ol>
-          <div class="nt-card__footer">
-            <div class="nt-muted">Blockers: ${blockers.length ? escapeHtml(String(blockers.length)) : "0"}</div>
-          </div>
-        </article>`;
-      })
-      .join("");
+    const columnsHtml = shipmentStageLabels.map((stageLabel, stageIdx) => {
+      const stageShipments = shipments
+        .filter((tc) => {
+          const sh = tc && tc.shipmentEntity ? tc.shipmentEntity : null;
+          return shipmentStageIndexFromState(sh?.shipmentState) === stageIdx;
+        })
+        .sort((a, b) => String(a?.shipmentEntity?.eta || "").localeCompare(String(b?.shipmentEntity?.eta || "")));
 
-    return `<section class="nt-grid" aria-label="Shipments">${cards || `<div class="nt-muted">No shipments</div>`}</section>`;
+      const cardsHtml = stageShipments
+        .map((tc) => {
+          const sh = tc && tc.shipmentEntity ? tc.shipmentEntity : null;
+          const percent = Math.round(((stageIdx + 1) / shipmentStageLabels.length) * 100);
+          
+          const blNo = sh?.blNo || "BL -";
+          const supplierName = tc?.supplier?.name || "ACME Components";
+          const subtitle = `${blNo} ・ ${supplierName}`;
+
+          const bookingNo = sh?.bookingNo || "Booking -";
+          const eta = sh?.eta || "-";
+          
+          const invs = Array.isArray(tc?.invoiceNumbers) ? tc.invoiceNumbers.map(i => i.invoiceNo).filter(Boolean) : [];
+          const invText = invs.length ? invs[0] : "";
+
+          const incidents = Array.isArray(tc?.incidents) ? tc.incidents : [];
+          const movementStage = deriveMovementStageFromShipmentState(sh?.shipmentState);
+          const alerts = deriveAlerts(incidents, movementStage);
+
+          const alertBadgesHtml = alerts.map(a => `<span class="nt-badge">${escapeHtml(a.label)}</span>`).join("");
+
+          return `<article class="shipment-card" role="button" tabindex="0" data-open-shipment="${escapeHtml(tc.id)}">
+            <div class="shipment-card-title">${escapeHtml(sh?.id || "-")}</div>
+            <div class="shipment-card-subtitle">${escapeHtml(subtitle)}</div>
+            <div class="shipment-card-meta">
+              <span class="nt-chip">${escapeHtml(bookingNo)}</span>
+              <span class="nt-chip">ETA ${escapeHtml(eta)}</span>
+              ${invText ? `<span class="nt-chip">${escapeHtml(invText)}</span>` : ""}
+            </div>
+            ${alertBadgesHtml ? `<div class="shipment-card-alerts">${alertBadgesHtml}</div>` : ""}
+            <div class="nt-progress">
+              <div class="nt-progress__bar" aria-hidden="true"><div class="nt-progress__fill" style="width:${percent}%"></div></div>
+              <div class="nt-progress__label">${percent}%</div>
+            </div>
+          </article>`;
+        })
+        .join("");
+
+      return `<div class="stage-column">
+        <div class="stage-column-header">
+          ${escapeHtml(stageLabel)} <span class="stage-count">${stageShipments.length}</span>
+        </div>
+        <div class="stage-column-body">
+          ${cardsHtml || `<div class="nt-muted">No shipments</div>`}
+        </div>
+      </div>`;
+    }).join("");
+
+    return `<section class="stage-board" aria-label="Shipments Board">${columnsHtml}</section>`;
   };
 
   const renderSi = () => {
