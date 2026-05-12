@@ -191,37 +191,77 @@ function renderNewTop() {
   };
 
   const renderSi = () => {
-    const cards = shipments
-      .slice()
-      .sort((a, b) => String(a?.siEntity?.requestedDeliveryDate || "").localeCompare(String(b?.siEntity?.requestedDeliveryDate || "")))
-      .map((tc) => {
-        const si = tc && tc.siEntity ? tc.siEntity : null;
-        const percentRaw = typeof tc?.caseProgress?.overallPercent === "number" ? tc.caseProgress.overallPercent : 0;
-        const percent = Math.max(0, Math.min(100, Math.round(percentRaw)));
-        const stageIdx = Math.min(shipmentStageLabels.length - 1, Math.floor((percent / 100) * shipmentStageLabels.length));
-        return `<article class="nt-card nt-card--si" role="button" tabindex="0" data-open-si="${escapeHtml(tc.id)}">
-          <div class="nt-card__head">
-            <div class="nt-card__title"><span class="nt-mono">${escapeHtml(si?.siNo || "-")}</span></div>
-            <div class="nt-card__meta">
-              <span class="nt-chip">Delivery ${escapeHtml(si?.requestedDeliveryDate || "-")}</span>
-              <span class="nt-chip">Shipments ${escapeHtml(String((si?.relatedShipmentIds || []).length || 0))}</span>
-              <span class="nt-chip">Invoices ${escapeHtml(String((si?.relatedInvoiceNos || []).length || 0))}</span>
-            </div>
-          </div>
-          <div class="nt-progress">
-            <div class="nt-progress__bar" aria-hidden="true"><div class="nt-progress__fill" style="width:${percent}%"></div></div>
-            <div class="nt-progress__label">Progress ${percent}%</div>
-          </div>
-          <ol class="nt-stages" aria-label="Stages">
-            ${shipmentStageLabels
-              .map((label, i) => `<li class="nt-stage ${i < stageIdx ? "is-done" : i === stageIdx ? "is-current" : ""}">${escapeHtml(label)}</li>`)
-              .join("")}
-          </ol>
-        </article>`;
-      })
-      .join("");
+    const siCases = shipments.filter((tc) => tc && tc.siEntity);
 
-    return `<section class="nt-grid" aria-label="SI">${cards || `<div class="nt-muted">No SI</div>`}</section>`;
+    const columnsHtml = shipmentStageLabels.map((stageLabel, stageIdx) => {
+      const stageSiCases = siCases
+        .filter((tc) => {
+          const si = tc.siEntity;
+          let sIdx = 0;
+          const relIds = si.relatedShipmentIds || [];
+          if (relIds.length > 0) {
+            const relStageIndices = relIds.map((id) => {
+              const shTc = shipments.find((x) => x?.shipmentEntity?.id === id);
+              return shTc ? shipmentStageIndexFromState(shTc.shipmentEntity.shipmentState) : 0;
+            });
+            sIdx = Math.min(...relStageIndices);
+          }
+          return sIdx === stageIdx;
+        })
+        .sort((a, b) => String(a?.siEntity?.requestedDeliveryDate || "").localeCompare(String(b?.siEntity?.requestedDeliveryDate || "")));
+
+      const cardsHtml = stageSiCases
+        .map((tc) => {
+          const si = tc.siEntity;
+          const relIds = si.relatedShipmentIds || [];
+          const invNos = si.relatedInvoiceNos || [];
+          
+          const title = si.siNo || "-";
+          
+          const salesCommitments = Array.isArray(tc?.decisionContext?.salesCommitments) ? tc.decisionContext.salesCommitments : [];
+          const customerName = salesCommitments[0]?.customerName || tc.customerName || tc.supplier?.name || "Customer";
+          const reqDate = si.requestedDeliveryDate || "-";
+          const subtitle = `${customerName} ・ requested ${reqDate}`;
+
+          const incidents = Array.isArray(tc.incidents) ? tc.incidents : [];
+          const stageToMovement = [
+            "notArranged", "preparingShipment", "exportCustoms", "inTransit", "importCustoms", "waitingWarehouseReceipt", "warehouseReceived"
+          ];
+          const movementStage = stageToMovement[stageIdx] || "notArranged";
+          const alerts = deriveAlerts(incidents, movementStage);
+          const alertBadgesHtml = alerts.map(a => `<span class="nt-badge">${escapeHtml(a.label)}</span>`).join("");
+          
+          const percentRaw = typeof tc?.caseProgress?.overallPercent === "number" ? tc.caseProgress.overallPercent : 0;
+          const percent = Math.max(0, Math.min(100, Math.round(percentRaw)));
+
+          return `<article class="shipment-card nt-card--si" role="button" tabindex="0" data-open-si="${escapeHtml(tc.id)}">
+            <div class="shipment-card-title">${escapeHtml(title)}</div>
+            <div class="shipment-card-subtitle">${escapeHtml(subtitle)}</div>
+            <div class="shipment-card-meta">
+              <span class="nt-chip">Shipments ${escapeHtml(String(relIds.length))}</span>
+              <span class="nt-chip">Invoices ${escapeHtml(String(invNos.length))}</span>
+              <span class="nt-chip">Delivery ${escapeHtml(reqDate)}</span>
+            </div>
+            ${alertBadgesHtml ? `<div class="shipment-card-alerts">${alertBadgesHtml}</div>` : ""}
+            <div class="nt-progress">
+              <div class="nt-progress__bar" aria-hidden="true"><div class="nt-progress__fill" style="width:${percent}%"></div></div>
+              <div class="nt-progress__label">${percent}%</div>
+            </div>
+          </article>`;
+        })
+        .join("");
+
+      return `<div class="stage-column">
+        <div class="stage-column-header">
+          ${escapeHtml(stageLabel)} <span class="stage-count">${stageSiCases.length}</span>
+        </div>
+        <div class="stage-column-body">
+          ${cardsHtml || `<div class="nt-muted">No SI records</div>`}
+        </div>
+      </div>`;
+    }).join("");
+
+    return `<section class="stage-board" aria-label="SI Board">${columnsHtml}</section>`;
   };
 
   const renderIssues = () => {
