@@ -479,6 +479,95 @@ body {
   border-bottom: 1px solid #d0d7de;
 }
 
+#app .issue-current-status {
+  margin-top: 12px;
+  border: 1px solid #d0d7de;
+  border-radius: 12px;
+  background: #ffffff;
+  padding: 12px;
+}
+
+#app .issue-current-status.is-high {
+  border-color: color-mix(in srgb, #cf222e 28%, #d0d7de);
+  background: color-mix(in srgb, #ffebe9 45%, #ffffff);
+}
+
+#app .issue-current-status.is-medium {
+  border-color: color-mix(in srgb, #bf8700 24%, #d0d7de);
+  background: color-mix(in srgb, #fff8c5 55%, #ffffff);
+}
+
+#app .issue-current-grid {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 12px;
+  align-items: start;
+}
+
+@media (max-width: 920px) {
+  #app .issue-current-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+#app .issue-current-title {
+  font-weight: 800;
+  color: #24292f;
+}
+
+#app .issue-current-rows {
+  margin-top: 8px;
+  display: grid;
+  gap: 6px;
+}
+
+#app .issue-current-row {
+  display: grid;
+  grid-template-columns: 140px 1fr;
+  gap: 10px;
+  align-items: baseline;
+  font-size: 13px;
+}
+
+#app .issue-current-row .k {
+  color: #57606a;
+  font-weight: 700;
+  font-size: 12px;
+}
+
+#app .issue-current-row .v {
+  color: #24292f;
+  min-width: 0;
+  word-break: break-word;
+}
+
+#app .issue-current-row--pending .v {
+  font-weight: 800;
+}
+
+#app .issue-current-actions {
+  margin-top: 10px;
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+#app .issue-current-deadline {
+  text-align: right;
+  font-size: 12px;
+  color: #57606a;
+}
+
+#app .issue-current-deadline .k {
+  font-weight: 700;
+}
+
+#app .issue-current-deadline .v {
+  margin-top: 4px;
+  color: #24292f;
+  font-size: 12px;
+}
+
 #app .issue-detail__title {
   min-width: 0;
 }

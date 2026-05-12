@@ -614,44 +614,51 @@ function renderNewTop() {
       </div>`;
     };
 
-    const renderIssueDetail = (tradeCaseId) => {
-      const tc = tradeCaseId ? getTradeCaseById(tradeCaseId) : null;
-      const it = issues.find((x) => x && x.tradeCaseId === tradeCaseId) || null;
-      if (!tc || !it) return `<div class="nt-muted">Issue not found</div>`;
+	    const renderIssueDetail = (tradeCaseId) => {
+	      const tc = tradeCaseId ? getTradeCaseById(tradeCaseId) : null;
+	      const it = issues.find((x) => x && x.tradeCaseId === tradeCaseId) || null;
+	      if (!tc || !it) return `<div class="nt-muted">Issue not found</div>`;
 
-      const statusText = statusTextByKey[it.statusKey] || it.statusKey;
-      const sev = String(it.severity || "low").toLowerCase();
-      const sevClass = sev === "critical" || sev === "high" ? "is-high" : sev === "medium" ? "is-medium" : "is-low";
+	      const statusText = statusTextByKey[it.statusKey] || it.statusKey;
+	      const statusJaByKey = {
+	        requiresApproval: "人間承認待ち",
+	        blocked: "ブロック中",
+	        waitingExternal: "外部回答待ち",
+	        completed: "完了",
+	      };
+	      const sev = String(it.severity || "low").toLowerCase();
+	      const sevClass = sev === "critical" || sev === "high" ? "is-high" : sev === "medium" ? "is-medium" : "is-low";
 
-      const rawTimeline = Array.isArray(tc.timeline) ? tc.timeline.slice().reverse() : [];
+	      const rawTimeline = Array.isArray(tc.timeline) ? tc.timeline.slice() : [];
 
-      const derived = [];
-      derived.push({
-        id: `ai-class:${tradeCaseId}`,
-        at: it.updatedAt || nowIso(),
+	      const derived = [];
+	      derived.push({
+	        id: `ai-class:${tradeCaseId}`,
+	        at: it.updatedAt || nowIso(),
         type: "aiClassification",
         label: "AI comment",
         actor: "trade-shelf-agent",
         message: it.why || "classified",
       });
 
-      if (it.statusKey === "requiresApproval" && it.draft && it.draft.body) {
-        derived.push({
-          id: `draft-prop:${tradeCaseId}`,
-          at: nowIso(),
-          type: "draftProposal",
-          label: "Draft proposal",
-          actor: "trade-shelf-agent",
-          message: it.aiProposal || "Draft proposal ready.",
-        });
-        derived.push({
-          id: `email-draft:${tradeCaseId}`,
-          at: nowIso(),
-          type: "emailDraft",
-          label: "Email draft",
-          actor: "trade-shelf-agent",
-          bodyHtml: `<div class="issue-email-draft">
-            <div class="kv">
+	      if (it.statusKey === "requiresApproval" && it.draft && it.draft.body) {
+	        const derivedAt = it.updatedAt || nowIso();
+	        derived.push({
+	          id: `draft-prop:${tradeCaseId}`,
+	          at: derivedAt,
+	          type: "draftProposal",
+	          label: "Draft proposal",
+	          actor: "trade-shelf-agent",
+	          message: it.aiProposal || "Draft proposal ready.",
+	        });
+	        derived.push({
+	          id: `email-draft:${tradeCaseId}`,
+	          at: derivedAt,
+	          type: "emailDraft",
+	          label: "Email draft",
+	          actor: "trade-shelf-agent",
+	          bodyHtml: `<div class="issue-email-draft">
+	            <div class="kv">
               <span class="muted">channel</span> ${escapeHtml(String(it.draft.channel || "-"))}
               <span class="muted">to</span> ${escapeHtml((it.draft.to || []).join(", ") || "-")}
               ${it.draft.subject ? `<span class="muted">subject</span> ${escapeHtml(String(it.draft.subject))}` : ""}
@@ -677,23 +684,26 @@ function renderNewTop() {
         })),
       );
 
-      allTimeline.sort((a, b) => String(a?.at || "").localeCompare(String(b?.at || "")));
-      const timelineHtml = allTimeline.length ? allTimeline.map(renderTimelineItem).join("") : `<div class="nt-muted">No timeline yet</div>`;
+	      allTimeline.sort((a, b) => String(a?.at || "").localeCompare(String(b?.at || "")));
+	      const timelineHtml = allTimeline.length ? allTimeline.map(renderTimelineItem).join("") : `<div class="nt-muted">No timeline yet</div>`;
 
-      const labels = [];
-      const incs = Array.isArray(tc.incidents) ? tc.incidents : [];
-      for (const i of incs) {
-        const type = String(i?.type || "");
+	      const lastAtRaw = allTimeline.length ? String(allTimeline[allTimeline.length - 1]?.at || "") : "";
+	      const lastAtText = lastAtRaw ? formatLocalTime(lastAtRaw) : it.updatedAt ? formatLocalTime(it.updatedAt) : "-";
+
+	      const labels = [];
+	      const incs = Array.isArray(tc.incidents) ? tc.incidents : [];
+	      for (const i of incs) {
+	        const type = String(i?.type || "");
         if (type === "invoiceQuantityMismatch") labels.push("quantity mismatch");
         if (type === "missingDocument") labels.push("missing document");
         if (type === "deliveryRisk") labels.push("delivery risk");
       }
       const labelHtml = labels.length ? labels.slice(0, 5).map((x) => `<span class="issue-label">${escapeHtml(x)}</span>`).join("") : `<span class="nt-muted">-</span>`;
 
-      const assignee = it.statusKey === "waitingExternal" ? "Supplier waiting" : it.statusKey === "requiresApproval" ? "Ops user" : "AI Agent";
+	      const assignee = it.statusKey === "waitingExternal" ? "Supplier waiting" : it.statusKey === "requiresApproval" ? "Ops user" : "AI Agent";
 
-      const dueDate = tc?.siEntity?.requestedDeliveryDate ? String(tc.siEntity.requestedDeliveryDate) : "";
-      const overdue = dueDate && new Date(dueDate).getTime() < new Date().setHours(0, 0, 0, 0);
+	      const dueDate = tc?.siEntity?.requestedDeliveryDate ? String(tc.siEntity.requestedDeliveryDate) : "";
+	      const overdue = dueDate && new Date(dueDate).getTime() < new Date().setHours(0, 0, 0, 0);
       const dueHtml = dueDate
         ? `<div class="issue-sidebar-row"><div class="issue-sidebar__k">Deadline / SLA</div><div class="issue-sidebar__v">${escapeHtml(dueDate)} ${
             overdue ? `<span class="issue-overdue">OVERDUE</span>` : ""
@@ -709,28 +719,76 @@ function renderNewTop() {
         </div>
       </div>`;
 
-      const externalStatus = it.statusKey === "waitingExternal" ? "waiting supplier" : it.statusKey === "requiresApproval" ? "email draft" : "—";
+	      const externalStatus = it.statusKey === "waitingExternal" ? "waiting supplier" : it.statusKey === "requiresApproval" ? "email draft" : "—";
 
-      return `<section class="issue-detail" aria-label="Issue detail">
-        <div class="issue-detail__top">
-          <button class="btn btn--small btn--ghost" type="button" data-issue-back="1">← Back</button>
-          <div class="issue-detail__title">
+	      const statusJa = statusJaByKey[it.statusKey] || String(statusText || it.statusKey || "-");
+	      const canAct = it.statusKey === "requiresApproval" && it.draft && it.draft.body;
+	      const pendingApprovalText = canAct
+	        ? String(it.draft.channel || "").toLowerCase() === "email"
+	          ? "仕入先確認メールの送信"
+	          : "外部送信の承認"
+	        : "-";
+	      const currentProposalText = it.aiProposal || "-";
+	      const nextActionText =
+	        it.statusKey === "requiresApproval"
+	          ? "Approve / Edit / Hold"
+	          : it.statusKey === "waitingExternal"
+	            ? "待機（外部回答）"
+	            : it.statusKey === "blocked"
+	              ? "ブロック解除の確認"
+	              : "—";
+
+	      const currentStatusHtml = `<section class="issue-current-status ${sevClass}" aria-label="Current Status">
+	        <div class="issue-current-grid">
+	          <div class="issue-current-left">
+	            <div class="issue-current-title">Current Status</div>
+	            <div class="issue-current-rows">
+	              <div class="issue-current-row"><span class="k">Status</span><span class="v">${escapeHtml(statusJa)}</span></div>
+	              <div class="issue-current-row"><span class="k">Last activity</span><span class="v nt-mono">${escapeHtml(lastAtText)}</span></div>
+	              <div class="issue-current-row issue-current-row--pending"><span class="k">Pending approval</span><span class="v">${escapeHtml(pendingApprovalText)}</span></div>
+	              <div class="issue-current-row"><span class="k">Current proposal</span><span class="v">${escapeHtml(currentProposalText)}</span></div>
+	              <div class="issue-current-row"><span class="k">Next action</span><span class="v">${escapeHtml(nextActionText)}</span></div>
+	            </div>
+	            <div class="issue-current-actions">
+	              <button class="btn btn--primary btn--small" type="button" data-issue-approve="${escapeHtml(it.tradeCaseId)}" ${canAct ? "" : "disabled"}>Approve</button>
+	              <button class="btn btn--small" type="button" data-issue-edit="${escapeHtml(it.tradeCaseId)}" ${canAct ? "" : "disabled"}>Edit draft</button>
+	              <button class="btn btn--small" type="button" data-issue-hold="${escapeHtml(it.tradeCaseId)}">Hold</button>
+	            </div>
+	          </div>
+	          <div class="issue-current-right">
+	            <div class="issue-current-deadline">
+	              <div class="k">Deadline / SLA</div>
+	              <div class="v nt-mono">${escapeHtml(dueDate || "-")} ${overdue ? `<span class="issue-overdue">OVERDUE</span>` : ""}</div>
+	            </div>
+	          </div>
+	        </div>
+	      </section>`;
+
+	      return `<section class="issue-detail" aria-label="Issue detail">
+	        <div class="issue-detail__top">
+	          <button class="btn btn--small btn--ghost" type="button" data-issue-back="1">← Back</button>
+	          <div class="issue-detail__title">
             <div class="issue-detail__h">${escapeHtml(it.title)}</div>
             <div class="issue-detail__sub">
               <span class="issue-pill nt-mono">#${escapeHtml(it.issueNo)}</span>
-              <span class="issue-pill ${sevClass}">${escapeHtml(sev.toUpperCase())}</span>
-              <span class="issue-pill">${escapeHtml(statusText)}</span>
-            </div>
-          </div>
-        </div>
-        <div class="issue-detail__grid">
-          <div class="issue-detail__main">
-            <div class="issue-timeline">${timelineHtml}</div>
-            <div class="issue-comment">
-              <div class="issue-comment__label">Comment</div>
-              <textarea class="issue-comment__box" rows="3" placeholder="手動メモ・補足・判断理由を残す" data-issue-comment-box="1"></textarea>
-              <div class="issue-comment__actions">
-                <button class="btn btn--primary btn--small" type="button" data-issue-add-comment="${escapeHtml(it.tradeCaseId)}">Add comment</button>
+	              <span class="issue-pill ${sevClass}">${escapeHtml(sev.toUpperCase())}</span>
+	              <span class="issue-pill">${escapeHtml(statusText)}</span>
+	            </div>
+	          </div>
+	        </div>
+	        ${currentStatusHtml}
+	        <div class="issue-detail__grid">
+	          <div class="issue-detail__main">
+	            <section class="detail-section">
+	              <h3 class="detail-section__title">Timeline / 対応履歴</h3>
+	              <div class="nt-muted">古い順に記録。現在の対応は上部の Current Status を確認。</div>
+	              <div class="issue-timeline">${timelineHtml}</div>
+	            </section>
+	            <div class="issue-comment">
+	              <div class="issue-comment__label">Comment</div>
+	              <textarea class="issue-comment__box" rows="3" placeholder="手動メモ・補足・判断理由を残す" data-issue-comment-box="1"></textarea>
+	              <div class="issue-comment__actions">
+	                <button class="btn btn--primary btn--small" type="button" data-issue-add-comment="${escapeHtml(it.tradeCaseId)}">Add comment</button>
               </div>
             </div>
           </div>
