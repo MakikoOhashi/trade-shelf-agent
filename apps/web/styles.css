@@ -1059,17 +1059,17 @@ body {
 }
 
 .paper-document {
-  background: rgba(235, 223, 196, 0.32);
-  border: 1px solid rgba(72, 55, 30, 0.1);
+  background: transparent;
+  border: none;
   border-radius: 14px;
   padding: 18px;
 }
 
 .paper-page {
-  background: rgba(255, 255, 255, 0.98);
-  border: 1px solid rgba(20, 20, 20, 0.06);
-  border-radius: 12px;
-  box-shadow: 0 18px 50px rgba(20, 20, 20, 0.12);
+  background: var(--paper);
+  border: 1px solid var(--wood);
+  border-radius: 10px;
+  box-shadow: 0 4px 12px rgba(141, 110, 99, 0.08);
   padding: 18px 18px 14px;
   min-height: 520px;
 }
@@ -1836,8 +1836,8 @@ body {
 }
 
 .status-pending {
-  border-color: rgba(251, 191, 36, 0.6);
-  background: rgba(251, 191, 36, 0.12);
+  border-color: rgba(253, 224, 71, 0.6);
+  background: rgba(253, 224, 71, 0.12);
 }
 
 .status-approved {
@@ -1958,24 +1958,24 @@ body {
 :root {
   color-scheme: light;
 
-  /* warm / organic / wood / beige */
-  --bg: #f7f1e7;         /* desk */
-  --paper: #fffdf7;      /* paper */
-  --surface: #fffaf0;    /* card */
-  --surface-2: #efe1c8;  /* shelf */
+  /* light workspace with warm paper */
+  --bg: #f8fafc;         /* workspace / desk */
+  --paper: #f6f1e8;      /* paper (only the document area should feel warm) */
+  --surface: #ffffff;    /* cards / panes */
+  --surface-2: #ffffff;  /* secondary surface */
 
-  --wood: #7a4f2a;
-  --wood-dark: #4f321c;
+  --wood: #bcaaa4;
+  --wood-dark: #8d6e63;
 
-  --text: #2f261d;
-  --muted: #7b6a58;
-  --border: #d8c4a5;
-  --shadow: 0 16px 44px rgba(79, 50, 28, 0.18);
+  --text: #1e293b;
+  --muted: #64748b;
+  --border: #e2e8f0;
+  --shadow: 0 2px 10px rgba(15, 23, 42, 0.06);
 
-  --accent: #8a6f3d; /* warm accent */
-  --accent-2: #7a8060; /* muted olive */
-  --danger: #b94b4b;
-  --warning: #a8792c;
+  --accent: #7c6a3a; /* warm accent (subtle) */
+  --accent-2: #94a3b8; /* neutral */
+  --danger: #ef4444;
+  --warning: #fef9c3; /* softer yellow */
 
   /* compatibility: reuse existing tokens */
   --panel: var(--surface);
@@ -1989,7 +1989,7 @@ body {
 
 .topbar {
   border-bottom-color: var(--border);
-  background: color-mix(in srgb, var(--paper) 86%, transparent);
+  background: rgba(255, 255, 255, 0.78);
   backdrop-filter: blur(10px);
 }
 
@@ -2001,14 +2001,14 @@ body {
 
 .pane__header {
   border-bottom-color: var(--border);
-  background: color-mix(in srgb, var(--paper) 90%, transparent);
+  background: var(--surface);
 }
 
 .badge,
 .pill,
 .status-badge {
   border-color: var(--border);
-  background: color-mix(in srgb, var(--paper) 88%, transparent);
+  background: color-mix(in srgb, var(--surface) 92%, var(--bg));
   color: var(--text);
 }
 
@@ -2020,54 +2020,46 @@ body {
 
 .btn {
   border-color: var(--border);
-  background: color-mix(in srgb, var(--paper) 70%, transparent);
+  background: var(--surface);
   color: var(--text);
 }
 
 .btn:hover {
-  background: color-mix(in srgb, var(--paper) 80%, transparent);
+  background: color-mix(in srgb, var(--surface) 88%, var(--bg));
 }
 
 .btn--primary {
   border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
-  background: color-mix(in srgb, var(--accent) 14%, var(--paper));
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface));
 }
 
 .view-lens__btn {
   border-color: var(--border);
-  background: color-mix(in srgb, var(--paper) 78%, transparent);
+  background: var(--surface);
 }
 
 .view-lens__btn:hover {
-  background: color-mix(in srgb, var(--paper) 86%, transparent);
+  background: color-mix(in srgb, var(--surface) 88%, var(--bg));
 }
 
 .view-lens__btn.is-active {
   border-color: color-mix(in srgb, var(--accent-2) 55%, var(--border));
-  background: color-mix(in srgb, var(--accent-2) 14%, var(--paper));
+  background: color-mix(in srgb, var(--accent-2) 12%, var(--surface));
 }
 
 .dropzone {
   border-color: color-mix(in srgb, var(--accent-2) 65%, var(--border));
-  background: linear-gradient(
-    180deg,
-    color-mix(in srgb, var(--accent) 12%, var(--paper)),
-    color-mix(in srgb, var(--accent-2) 10%, var(--paper))
-  );
+  background: linear-gradient(180deg, #fff, color-mix(in srgb, var(--surface) 90%, var(--bg)));
 }
 
 .dropzone.is-dragover {
   border-color: color-mix(in srgb, var(--accent-2) 80%, var(--border));
-  background: linear-gradient(
-    180deg,
-    color-mix(in srgb, var(--accent-2) 14%, var(--paper)),
-    color-mix(in srgb, var(--accent) 10%, var(--paper))
-  );
+  background: linear-gradient(180deg, #fff, color-mix(in srgb, var(--accent-2) 8%, var(--bg)));
 }
 
 .textarea {
   border-color: var(--border);
-  background: var(--paper);
+  background: var(--surface);
   color: var(--text);
 }
 
@@ -2086,7 +2078,7 @@ body {
 .detail-block,
 .case-cover {
   border-color: var(--border);
-  background: var(--paper);
+  background: var(--surface);
 }
 
 .card:hover {
@@ -2110,7 +2102,7 @@ body {
 
 .modal__body {
   border-color: var(--border);
-  background: var(--paper);
+  background: var(--surface);
   color: var(--muted);
 }
 
@@ -2120,15 +2112,99 @@ body {
 }
 
 .modal--tradecase .modal__top {
-  background: linear-gradient(
-    180deg,
-    color-mix(in srgb, var(--wood) 16%, var(--surface-2)),
-    color-mix(in srgb, var(--wood-dark) 10%, var(--paper))
-  );
+  background: linear-gradient(180deg, var(--surface), color-mix(in srgb, var(--surface) 88%, var(--bg)));
 }
 
 .modal--tradecase .modal__title {
-  color: var(--wood-dark);
+  color: var(--text);
+}
+
+/* whitespace + radius tweaks (lower density, less rounded) */
+.layout {
+  gap: 14px;
+  padding: 14px;
+}
+
+.pane {
+  border-radius: 12px;
+}
+
+.dropzone {
+  border-radius: 12px;
+  margin: 16px;
+}
+
+.pane__header {
+  padding: 16px 16px 12px;
+}
+
+.btn {
+  border-radius: 9px;
+  padding: 10px 12px;
+}
+
+.view-lens__btn {
+  border-radius: 10px;
+  padding: 9px 11px;
+}
+
+.item,
+.card,
+.log__item,
+.detail-section,
+.accordion__item,
+.decision-option,
+.action-group,
+.impact,
+.detail-block,
+.case-cover {
+  border-radius: 12px;
+}
+
+/* slightly airier cards without changing layout structure */
+.item,
+.card,
+.log__item {
+  padding: 12px;
+}
+
+.inbox-list {
+  padding: 0 16px 16px;
+  gap: 10px;
+}
+
+.shelves {
+  padding: 16px;
+  gap: 12px;
+}
+
+.shelf {
+  border-radius: 12px;
+}
+
+.shelf__head {
+  padding: 12px 12px 10px;
+}
+
+/* reduce yellow emphasis */
+.pill--warn,
+.pill--medium {
+  border-color: color-mix(in srgb, var(--warning) 55%, var(--border));
+  background: color-mix(in srgb, var(--warning) 18%, transparent);
+}
+
+/* typography: slightly calmer long text */
+.card__body,
+.log__text,
+.impact__rec,
+.proposal__meta {
+  line-height: 1.45;
+}
+
+/* paper stays warm; reduce "yellow box" intensity inside paper */
+.paper-annotation {
+  border-left-color: color-mix(in srgb, var(--warning) 55%, var(--border));
+  background: color-mix(in srgb, var(--warning) 28%, var(--paper));
 }
 
 /* Resolution Decision Tree (branching confirmation flow) */
@@ -2700,4 +2776,3 @@ body {
   color: #57606a;
   border-color: transparent;
 }
-
