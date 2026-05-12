@@ -31,9 +31,14 @@ const state = {
   activeIssueId: null,
   /**
    * New TOP (GitHub-like) active tab
-   * @type {"shipments" | "si" | "issues" | "documents" | "settings"}
+   * @type {"shelf" | "issues" | "documents" | "settings"}
    */
-  topActiveTab: "si",
+  topActiveTab: "shelf",
+  /**
+   * Shelf view mode toggle state
+   * @type {"si" | "shipments"}
+   */
+  shelfViewMode: "si",
   /**
    * Resolution Decision Tree の branch 選択状態（branch.value）
    * @type {string | null}
@@ -65,8 +70,7 @@ const state = {
 };
 
 const newTopTabs = [
-  { key: "si", label: "SI（出荷指図）" },
-  { key: "shipments", label: "Shipments（船積）" },
+  { key: "shelf", label: "Shelf" },
   { key: "issues", label: "Issues（AI承認センター）" },
   { key: "documents", label: "Documents" },
   { key: "settings", label: "Settings" },
@@ -190,7 +194,7 @@ function agentRunEdit(tradeCaseId) {
 }
 
 function renderNewTop() {
-  const tab = state.topActiveTab || "shipments";
+  const tab = state.topActiveTab || "shelf";
 
   const navHtml = `<nav class="nt-nav" aria-label="Primary">
     ${newTopTabs
@@ -355,6 +359,29 @@ function renderNewTop() {
     }).join("");
 
     return `<section class="stage-board" aria-label="SI Board">${columnsHtml}</section>`;
+  };
+
+  const renderShelf = () => {
+    const mode = state.shelfViewMode === "shipments" ? "shipments" : "si";
+    const toggleHtml = `<div class="nt-seg" role="tablist" aria-label="Shelf view mode">
+      <button class="nt-seg__btn ${mode === "si" ? "is-active" : ""}" type="button" data-shelf-view="si" role="tab" aria-selected="${
+        mode === "si" ? "true" : "false"
+      }">SI View（出荷指図）</button>
+      <button class="nt-seg__btn ${mode === "shipments" ? "is-active" : ""}" type="button" data-shelf-view="shipments" role="tab" aria-selected="${
+        mode === "shipments" ? "true" : "false"
+      }">Shipment View（船積）</button>
+    </div>`;
+
+    const descriptionHtml = `<div class="nt-shelf-desc nt-muted">同じオペレーション棚を、出荷指図単位または船積単位で切り替えて確認します。</div>`;
+
+    const boardHtml = mode === "si" ? renderSi() : renderShipments();
+    return `<section class="nt-shelf" aria-label="Shelf">
+      <div class="nt-shelf-top">
+        ${toggleHtml}
+        ${descriptionHtml}
+      </div>
+      ${boardHtml}
+    </section>`;
   };
 
   const renderIssues = () => {
@@ -539,15 +566,13 @@ function renderNewTop() {
   </div>`;
 
   const mainHtml =
-    tab === "shipments"
-      ? renderShipments()
-      : tab === "si"
-        ? renderSi()
-        : tab === "issues"
-          ? renderIssues()
-          : tab === "documents"
-            ? renderPlaceholder("Documents")
-            : renderPlaceholder("Settings");
+    tab === "shelf"
+      ? renderShelf()
+      : tab === "issues"
+        ? renderIssues()
+        : tab === "documents"
+          ? renderPlaceholder("Documents")
+          : renderPlaceholder("Settings");
 
   return `
     <div class="new-top">
@@ -4074,6 +4099,14 @@ function setupNewTop() {
         state.topActiveTab = key;
         renderApp();
       }
+      return;
+    }
+
+    const shelfViewEl = target.closest && target.closest("[data-shelf-view]");
+    if (shelfViewEl) {
+      const nextMode = shelfViewEl.getAttribute("data-shelf-view") || "si";
+      state.shelfViewMode = nextMode === "shipments" ? "shipments" : "si";
+      renderApp();
       return;
     }
 

@@ -105,6 +105,53 @@ body {
   background: #ffffff;
 }
 
+#app .nt-shelf-top {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+#app .nt-seg {
+  display: inline-flex;
+  align-items: stretch;
+  border: 1px solid #d0d7de;
+  background: #f6f8fa;
+  border-radius: 10px;
+  overflow: hidden;
+  width: fit-content;
+  box-shadow: 0 1px 0 rgba(31, 35, 40, 0.04);
+}
+
+#app .nt-seg__btn {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: #24292f;
+  padding: 7px 12px;
+  font-size: 13px;
+  cursor: pointer;
+  line-height: 1.2;
+  border-right: 1px solid #d0d7de;
+}
+
+#app .nt-seg__btn:last-child {
+  border-right: 0;
+}
+
+#app .nt-seg__btn:hover {
+  background: rgba(208, 215, 222, 0.35);
+}
+
+#app .nt-seg__btn.is-active {
+  background: #ffffff;
+  font-weight: 600;
+}
+
+#app .nt-seg__btn:focus-visible {
+  outline: 2px solid rgba(9, 105, 218, 0.45);
+  outline-offset: -2px;
+}
+
 #app .nt-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
