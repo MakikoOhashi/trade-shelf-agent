@@ -3368,3 +3368,163 @@ body {
   color: #57606a;
   border-color: transparent;
 }
+
+/* Shelf Board (horizontal shelves) */
+.shelf-board {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px 0 18px;
+}
+
+.shelf-row {
+  background: #f6f8fa;
+  border: 1px solid #d0d7de;
+  border-radius: 10px;
+}
+
+.shelf-row__header {
+  padding: 10px 14px;
+  border-bottom: 1px solid #d0d7de;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.shelf-row__title {
+  font-weight: 650;
+  font-size: 14px;
+  color: #24292f;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.shelf-row__meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.shelf-row__pill {
+  font-size: 12px;
+  border-radius: 999px;
+  padding: 3px 10px;
+  border: 1px solid rgba(31, 35, 40, 0.18);
+  background: rgba(31, 35, 40, 0.04);
+  color: #57606a;
+  white-space: nowrap;
+}
+
+.shelf-row__pill.is-blocker {
+  border-color: color-mix(in srgb, #cf222e 35%, #d0d7de);
+  background: color-mix(in srgb, #cf222e 8%, #f6f8fa);
+  color: #8a1f24;
+}
+
+.shelf-row__pill.is-overdue {
+  border-color: color-mix(in srgb, #cf222e 35%, #d0d7de);
+  background: color-mix(in srgb, #cf222e 6%, #f6f8fa);
+  color: #8a1f24;
+}
+
+.shelf-row__body {
+  height: 170px;
+  overflow: hidden;
+}
+
+.shelf-row__rail {
+  height: 100%;
+  display: flex;
+  gap: 10px;
+  padding: 10px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  align-items: stretch;
+}
+
+.shelf-row__empty {
+  padding: 18px 8px;
+}
+
+.shelf-card {
+  flex: 0 0 240px;
+  padding: 10px 10px 8px;
+  background: #ffffff;
+  border: 1px solid #d0d7de;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: transform 0.16s ease, border-color 0.16s ease, box-shadow 0.16s ease;
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.shelf-card:hover {
+  border-color: #0969da;
+  box-shadow: 0 6px 14px rgba(31, 35, 40, 0.12);
+  transform: translateY(-1px);
+}
+
+.shelf-card:focus {
+  outline: 2px solid rgba(9, 105, 218, 0.45);
+  outline-offset: 2px;
+}
+
+.shelf-card.is-overdue {
+  border-color: #cf222e;
+}
+
+.shelf-card.is-blocked {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, #cf222e 25%, transparent);
+}
+
+.shelf-card.is-high {
+  border-left: 4px solid #cf222e;
+}
+
+.shelf-card__top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.shelf-card__id {
+  font-weight: 750;
+  font-size: 13px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  color: #24292f;
+}
+
+.shelf-card__party {
+  font-size: 12px;
+  line-height: 1.25;
+  color: #57606a;
+}
+
+.shelf-card__meta {
+  font-size: 12px;
+  color: #57606a;
+}
+
+.shelf-card__tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.shelf-card .nt-progress {
+  margin-top: auto;
+  padding-top: 8px;
+}
+
+.nt-badge.is-blocker {
+  border-color: color-mix(in srgb, #cf222e 30%, #d0d7de);
+  background: color-mix(in srgb, #cf222e 10%, #ffffff);
+  color: #8a1f24;
+}

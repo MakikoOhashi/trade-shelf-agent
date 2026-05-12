@@ -244,156 +244,180 @@ function renderNewTop() {
 
   const shipments = Array.isArray(state.tradeCases) ? state.tradeCases.filter(Boolean) : [];
 
+  const todayYmd = () => new Date().toISOString().slice(0, 10);
+
+  const isOverdueYmd = (ymd) => {
+    if (!ymd || !/^\d{4}-\d{2}-\d{2}$/.test(String(ymd))) return false;
+    return String(ymd) < todayYmd();
+  };
+
+  const deriveBlockerLabels = (tc) => {
+    const out = [];
+    const blockingSummary = Array.isArray(tc?.caseProgress?.blockingSummary) ? tc.caseProgress.blockingSummary.filter(Boolean) : [];
+    for (const s of blockingSummary) out.push(String(s));
+
+    const docs = Array.isArray(tc?.caseProgress?.documents) ? tc.caseProgress.documents : [];
+    for (const d of docs) {
+      if (!d || !d.blocking) continue;
+      const label = String(d.label || d.id || "doc");
+      const status = String(d.status || "");
+      if (status.includes("missing")) out.push(`${label} missing`);
+      else if (status.includes("needsFix")) out.push(`${label} needs fix`);
+      else if (status) out.push(`${label} ${status}`);
+      else out.push(label);
+    }
+
+    const uniq = [];
+    const seen = new Set();
+    for (const x of out) {
+      const k = String(x).trim();
+      if (!k || seen.has(k)) continue;
+      seen.add(k);
+      uniq.push(k);
+    }
+    return uniq;
+  };
+
+  const hasHighIssues = (tc) => {
+    const incidents = Array.isArray(tc?.incidents) ? tc.incidents : [];
+    for (const i of incidents) {
+      if (!i || i.status === "resolved") continue;
+      const s = String(i.severity || "").toLowerCase();
+      if (s === "critical" || s === "high") return true;
+    }
+    return false;
+  };
+
+  const renderShelfCard = (viewType, tc, opts = {}) => {
+    const isShipment = viewType === "shipments";
+    const sh = tc && tc.shipmentEntity ? tc.shipmentEntity : null;
+    const si = tc && tc.siEntity ? tc.siEntity : null;
+
+    const idText = isShipment ? String(sh?.id || "Planned Shipment") : String(si?.siNo || "-");
+
+    const salesCommitments = Array.isArray(tc?.decisionContext?.salesCommitments) ? tc.decisionContext.salesCommitments : [];
+    const partyName = isShipment
+      ? String(tc?.supplier?.name || "Supplier")
+      : String(salesCommitments[0]?.customerName || tc?.customer?.name || tc?.supplier?.name || "Customer");
+
+    const dueYmd = isShipment ? String(sh?.eta || "") : String(si?.requestedDeliveryDate || "");
+    const dueLabel = isShipment ? (dueYmd ? `ETA ${dueYmd}` : "ETA未定") : dueYmd ? `delivery ${dueYmd}` : "delivery未定";
+
+    const blockers = deriveBlockerLabels(tc);
+    const blockerCount = blockers.length;
+    const maxTags = 3;
+    const tagList = blockers.slice(0, maxTags);
+    const moreCount = Math.max(0, blockerCount - tagList.length);
+    const tagsHtml = [
+      ...tagList.map((t) => `<span class="nt-badge is-blocker">${escapeHtml(t)}</span>`),
+      ...(moreCount > 0 ? [`<span class="nt-badge is-more">+${moreCount} more</span>`] : []),
+    ].join("");
+
+    const percentRaw = typeof tc?.caseProgress?.overallPercent === "number" ? tc.caseProgress.overallPercent : 0;
+    const percent = Math.max(0, Math.min(100, Math.round(percentRaw)));
+
+    const overdue = isOverdueYmd(dueYmd);
+    const blocked = blockerCount > 0;
+    const high = hasHighIssues(tc);
+
+    const cardClass = ["shelf-card", overdue ? "is-overdue" : "", blocked ? "is-blocked" : "", high ? "is-high" : ""]
+      .filter(Boolean)
+      .join(" ");
+
+    const openAttr = isShipment ? `data-open-shipment="${escapeHtml(tc.id)}"` : `data-open-si="${escapeHtml(tc.id)}"`;
+
+    return `<article class="${cardClass}" role="button" tabindex="0" ${openAttr}>
+      <div class="shelf-card__top">
+        <div class="shelf-card__id">${escapeHtml(idText)}</div>
+      </div>
+      <div class="shelf-card__party nt-muted">${escapeHtml(partyName)}</div>
+      <div class="shelf-card__meta nt-muted">${escapeHtml(dueLabel)}</div>
+      ${tagsHtml ? `<div class="shelf-card__tags">${tagsHtml}</div>` : ""}
+      <div class="nt-progress">
+        <div class="nt-progress__bar" aria-hidden="true"><div class="nt-progress__fill" style="width:${percent}%"></div></div>
+        <div class="nt-progress__label">${percent}%</div>
+      </div>
+    </article>`;
+  };
+
+  const renderShelfRow = (row) => {
+    const { stageLabel, cardsHtml, count, overdueCount, blockerCount } = row;
+    const metaBits = [
+      blockerCount > 0 ? `<span class="shelf-row__pill is-blocker">⚠ blocker ${blockerCount}</span>` : `<span class="shelf-row__pill">blocker 0</span>`,
+      overdueCount > 0 ? `<span class="shelf-row__pill is-overdue">⏰ overdue ${overdueCount}</span>` : `<span class="shelf-row__pill">overdue 0</span>`,
+    ].join("");
+
+    return `<div class="shelf-row">
+      <div class="shelf-row__header">
+        <div class="shelf-row__title">
+          ${escapeHtml(stageLabel)} <span class="stage-count">${count}</span>
+        </div>
+        <div class="shelf-row__meta">${metaBits}</div>
+      </div>
+      <div class="shelf-row__body" role="region" aria-label="${escapeHtml(stageLabel)} shelf">
+        <div class="shelf-row__rail">
+          ${cardsHtml || `<div class="nt-muted shelf-row__empty">No records</div>`}
+        </div>
+      </div>
+    </div>`;
+  };
+
+  const renderShelfBoard = (viewType) => {
+    const isShipment = viewType === "shipments";
+    const stages = shipmentStageLabels.map((label, idx) => ({ label, idx }));
+
+    const rowsHtml = stages
+      .map(({ label, idx }) => {
+        const stageItems = shipments
+          .filter((tc) => {
+            if (!tc) return false;
+            if (isShipment) {
+              const sh = tc.shipmentEntity;
+              return shipmentStageIndexFromState(sh?.shipmentState) === idx;
+            }
+
+            if (!tc.siEntity) return false;
+            const si = tc.siEntity;
+            let sIdx = 0;
+            const relIds = si.relatedShipmentIds || [];
+            if (relIds.length > 0) {
+              const relStageIndices = relIds.map((id) => {
+                const shTc = shipments.find((x) => x?.shipmentEntity?.id === id);
+                return shTc ? shipmentStageIndexFromState(shTc.shipmentEntity.shipmentState) : 0;
+              });
+              sIdx = Math.min(...relStageIndices);
+            }
+            return sIdx === idx;
+          })
+          .sort((a, b) => {
+            const da = isShipment ? String(a?.shipmentEntity?.eta || "") : String(a?.siEntity?.requestedDeliveryDate || "");
+            const db = isShipment ? String(b?.shipmentEntity?.eta || "") : String(b?.siEntity?.requestedDeliveryDate || "");
+            return da.localeCompare(db);
+          });
+
+        let overdueCount = 0;
+        let blockerCount = 0;
+        for (const tc of stageItems) {
+          const blockers = deriveBlockerLabels(tc);
+          if (blockers.length) blockerCount += 1;
+          const due = isShipment ? tc?.shipmentEntity?.eta : tc?.siEntity?.requestedDeliveryDate;
+          if (isOverdueYmd(due)) overdueCount += 1;
+        }
+
+        const cardsHtml = stageItems.map((tc) => renderShelfCard(viewType, tc, { stageIndex: idx })).join("");
+        return renderShelfRow({ stageLabel: label, cardsHtml, count: stageItems.length, overdueCount, blockerCount });
+      })
+      .join("");
+
+    return `<section class="shelf-board" aria-label="${isShipment ? "Shipments Shelf" : "SI Shelf"}">${rowsHtml}</section>`;
+  };
+
   const renderShipments = () => {
-    const columnsHtml = shipmentStageLabels.map((stageLabel, stageIdx) => {
-      const stageShipments = shipments
-        .filter((tc) => {
-          const sh = tc && tc.shipmentEntity ? tc.shipmentEntity : null;
-          return shipmentStageIndexFromState(sh?.shipmentState) === stageIdx;
-        })
-        .sort((a, b) => String(a?.shipmentEntity?.eta || "").localeCompare(String(b?.shipmentEntity?.eta || "")));
-
-      const cardsHtml = stageShipments
-        .map((tc) => {
-          const sh = tc && tc.shipmentEntity ? tc.shipmentEntity : null;
-          const percent = Math.round(((stageIdx + 1) / shipmentStageLabels.length) * 100);
-          
-          const title = sh?.id || "Planned Shipment";
-          const supplierName = tc?.supplier?.name || "ACME Components";
-          const subtitle = supplierName;
-
-          const eta = sh?.eta;
-          const metaText = eta ? `ETA ${eta}` : "ETA未定";
-
-          const incidents = Array.isArray(tc?.incidents) ? tc.incidents : [];
-          const movementStage = deriveMovementStageFromShipmentState(sh?.shipmentState);
-          const alerts = deriveAlerts(incidents, movementStage);
-
-          const severityScore = { critical: 4, high: 3, medium: 2, low: 1 };
-          const sortedAlerts = [...alerts].sort((a, b) => (severityScore[b.severity] || 0) - (severityScore[a.severity] || 0));
-          const maxBadges = 3;
-          let displayedAlerts = sortedAlerts;
-          let hiddenCount = 0;
-          if (sortedAlerts.length > maxBadges) {
-            displayedAlerts = sortedAlerts.slice(0, 2);
-            hiddenCount = sortedAlerts.length - 2;
-          }
-          const alertBadgesHtml = displayedAlerts.map(a => `<span class="nt-badge ${a.severity === 'critical' || a.severity === 'high' ? 'is-high' : ''}">${escapeHtml(a.label)}</span>`).join("");
-          const moreBadgeHtml = hiddenCount > 0 ? `<span class="nt-badge is-more">+${hiddenCount} more</span>` : "";
-          const allBadgesHtml = alertBadgesHtml + moreBadgeHtml;
-
-          return `<article class="shipment-card" role="button" tabindex="0" data-open-shipment="${escapeHtml(tc.id)}">
-            <div class="shipment-card-title">${escapeHtml(title)}</div>
-            <div class="shipment-card-subtitle">${escapeHtml(subtitle)}</div>
-            <div class="shipment-card-meta">
-              <span class="nt-muted" style="font-size: 11px;">${escapeHtml(metaText)}</span>
-            </div>
-            ${allBadgesHtml ? `<div class="shipment-card-alerts">${allBadgesHtml}</div>` : ""}
-            <div class="nt-progress">
-              <div class="nt-progress__bar" aria-hidden="true"><div class="nt-progress__fill" style="width:${percent}%"></div></div>
-              <div class="nt-progress__label">${percent}%</div>
-            </div>
-          </article>`;
-        })
-        .join("");
-
-      return `<div class="stage-column">
-        <div class="stage-column-header">
-          ${escapeHtml(stageLabel)} <span class="stage-count">${stageShipments.length}</span>
-        </div>
-        <div class="stage-column-body">
-          ${cardsHtml || `<div class="nt-muted">No shipments</div>`}
-        </div>
-      </div>`;
-    }).join("");
-
-    return `<section class="stage-board" aria-label="Shipments Board">${columnsHtml}</section>`;
+    return renderShelfBoard("shipments");
   };
 
   const renderSi = () => {
-    const siCases = shipments.filter((tc) => tc && tc.siEntity);
-
-    const columnsHtml = shipmentStageLabels.map((stageLabel, stageIdx) => {
-      const stageSiCases = siCases
-        .filter((tc) => {
-          const si = tc.siEntity;
-          let sIdx = 0;
-          const relIds = si.relatedShipmentIds || [];
-          if (relIds.length > 0) {
-            const relStageIndices = relIds.map((id) => {
-              const shTc = shipments.find((x) => x?.shipmentEntity?.id === id);
-              return shTc ? shipmentStageIndexFromState(shTc.shipmentEntity.shipmentState) : 0;
-            });
-            sIdx = Math.min(...relStageIndices);
-          }
-          return sIdx === stageIdx;
-        })
-        .sort((a, b) => String(a?.siEntity?.requestedDeliveryDate || "").localeCompare(String(b?.siEntity?.requestedDeliveryDate || "")));
-
-      const cardsHtml = stageSiCases
-        .map((tc) => {
-          const si = tc.siEntity;
-          const relIds = si.relatedShipmentIds || [];
-          const invNos = si.relatedInvoiceNos || [];
-          
-          const title = si.siNo || "-";
-          
-          const salesCommitments = Array.isArray(tc?.decisionContext?.salesCommitments) ? tc.decisionContext.salesCommitments : [];
-          const customerName = salesCommitments[0]?.customerName || tc.customerName || tc.supplier?.name || "Customer";
-          const reqDate = si.requestedDeliveryDate || "-";
-          const subtitle = customerName;
-
-          const metaText = `delivery ${reqDate}`;
-
-          const incidents = Array.isArray(tc.incidents) ? tc.incidents : [];
-          const stageToMovement = [
-            "notArranged", "preparingShipment", "exportCustoms", "inTransit", "importCustoms", "waitingWarehouseReceipt", "warehouseReceived"
-          ];
-          const movementStage = stageToMovement[stageIdx] || "notArranged";
-          const alerts = deriveAlerts(incidents, movementStage);
-          
-          const severityScore = { critical: 4, high: 3, medium: 2, low: 1 };
-          const sortedAlerts = [...alerts].sort((a, b) => (severityScore[b.severity] || 0) - (severityScore[a.severity] || 0));
-          const maxBadges = 3;
-          let displayedAlerts = sortedAlerts;
-          let hiddenCount = 0;
-          if (sortedAlerts.length > maxBadges) {
-            displayedAlerts = sortedAlerts.slice(0, 2);
-            hiddenCount = sortedAlerts.length - 2;
-          }
-          const alertBadgesHtml = displayedAlerts.map(a => `<span class="nt-badge ${a.severity === 'critical' || a.severity === 'high' ? 'is-high' : ''}">${escapeHtml(a.label)}</span>`).join("");
-          const moreBadgeHtml = hiddenCount > 0 ? `<span class="nt-badge is-more">+${hiddenCount} more</span>` : "";
-          const allBadgesHtml = alertBadgesHtml + moreBadgeHtml;
-          
-          const percentRaw = typeof tc?.caseProgress?.overallPercent === "number" ? tc.caseProgress.overallPercent : 0;
-          const percent = Math.max(0, Math.min(100, Math.round(percentRaw)));
-
-          return `<article class="shipment-card nt-card--si" role="button" tabindex="0" data-open-si="${escapeHtml(tc.id)}">
-            <div class="shipment-card-title">${escapeHtml(title)}</div>
-            <div class="shipment-card-subtitle">${escapeHtml(subtitle)}</div>
-            <div class="shipment-card-meta">
-              <span class="nt-muted" style="font-size: 11px;">${escapeHtml(metaText)}</span>
-            </div>
-            ${allBadgesHtml ? `<div class="shipment-card-alerts">${allBadgesHtml}</div>` : ""}
-            <div class="nt-progress">
-              <div class="nt-progress__bar" aria-hidden="true"><div class="nt-progress__fill" style="width:${percent}%"></div></div>
-              <div class="nt-progress__label">${percent}%</div>
-            </div>
-          </article>`;
-        })
-        .join("");
-
-      return `<div class="stage-column">
-        <div class="stage-column-header">
-          ${escapeHtml(stageLabel)} <span class="stage-count">${stageSiCases.length}</span>
-        </div>
-        <div class="stage-column-body">
-          ${cardsHtml || `<div class="nt-muted">No SI records</div>`}
-        </div>
-      </div>`;
-    }).join("");
-
-    return `<section class="stage-board" aria-label="SI Board">${columnsHtml}</section>`;
+    return renderShelfBoard("si");
   };
 
   const renderShelf = () => {
