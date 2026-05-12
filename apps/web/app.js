@@ -146,35 +146,35 @@ function renderNewTop() {
           
           const title = sh?.id || "Planned Shipment";
           const supplierName = tc?.supplier?.name || "ACME Components";
-          const subtitle = `${supplierName} ・ ${stageLabel}`;
+          const subtitle = supplierName;
 
-          const bookingNo = sh?.bookingNo;
           const eta = sh?.eta;
-          const blNo = sh?.blNo;
-          
-          const invs = Array.isArray(tc?.invoiceNumbers) ? tc.invoiceNumbers.map(i => i.invoiceNo).filter(Boolean) : [];
-          const invText = invs.length ? invs[0] : null;
+          const metaText = eta ? `ETA ${eta}` : "ETA未定";
 
           const incidents = Array.isArray(tc?.incidents) ? tc.incidents : [];
           const movementStage = deriveMovementStageFromShipmentState(sh?.shipmentState);
           const alerts = deriveAlerts(incidents, movementStage);
 
-          const alertBadgesHtml = alerts.map(a => `<span class="nt-badge">${escapeHtml(a.label)}</span>`).join("");
-
-          const chipsHtml = [
-            blNo ? blNo : "BL待ち",
-            bookingNo ? `Booking ${bookingNo}` : "Booking待ち",
-            eta ? `ETA ${eta}` : "ETA未定",
-            invText ? invText : "INV待ち"
-          ].map(c => `<span class="nt-chip">${escapeHtml(c)}</span>`).join("");
+          const severityScore = { critical: 4, high: 3, medium: 2, low: 1 };
+          const sortedAlerts = [...alerts].sort((a, b) => (severityScore[b.severity] || 0) - (severityScore[a.severity] || 0));
+          const maxBadges = 3;
+          let displayedAlerts = sortedAlerts;
+          let hiddenCount = 0;
+          if (sortedAlerts.length > maxBadges) {
+            displayedAlerts = sortedAlerts.slice(0, 2);
+            hiddenCount = sortedAlerts.length - 2;
+          }
+          const alertBadgesHtml = displayedAlerts.map(a => `<span class="nt-badge ${a.severity === 'critical' || a.severity === 'high' ? 'is-high' : ''}">${escapeHtml(a.label)}</span>`).join("");
+          const moreBadgeHtml = hiddenCount > 0 ? `<span class="nt-badge is-more">+${hiddenCount} more</span>` : "";
+          const allBadgesHtml = alertBadgesHtml + moreBadgeHtml;
 
           return `<article class="shipment-card" role="button" tabindex="0" data-open-shipment="${escapeHtml(tc.id)}">
             <div class="shipment-card-title">${escapeHtml(title)}</div>
             <div class="shipment-card-subtitle">${escapeHtml(subtitle)}</div>
             <div class="shipment-card-meta">
-              ${chipsHtml}
+              <span class="nt-muted" style="font-size: 11px;">${escapeHtml(metaText)}</span>
             </div>
-            ${alertBadgesHtml ? `<div class="shipment-card-alerts">${alertBadgesHtml}</div>` : ""}
+            ${allBadgesHtml ? `<div class="shipment-card-alerts">${allBadgesHtml}</div>` : ""}
             <div class="nt-progress">
               <div class="nt-progress__bar" aria-hidden="true"><div class="nt-progress__fill" style="width:${percent}%"></div></div>
               <div class="nt-progress__label">${percent}%</div>
@@ -227,7 +227,9 @@ function renderNewTop() {
           const salesCommitments = Array.isArray(tc?.decisionContext?.salesCommitments) ? tc.decisionContext.salesCommitments : [];
           const customerName = salesCommitments[0]?.customerName || tc.customerName || tc.supplier?.name || "Customer";
           const reqDate = si.requestedDeliveryDate || "-";
-          const subtitle = `${customerName} ・ requested ${reqDate}`;
+          const subtitle = customerName;
+
+          const metaText = `delivery ${reqDate}`;
 
           const incidents = Array.isArray(tc.incidents) ? tc.incidents : [];
           const stageToMovement = [
@@ -235,7 +237,19 @@ function renderNewTop() {
           ];
           const movementStage = stageToMovement[stageIdx] || "notArranged";
           const alerts = deriveAlerts(incidents, movementStage);
-          const alertBadgesHtml = alerts.map(a => `<span class="nt-badge">${escapeHtml(a.label)}</span>`).join("");
+          
+          const severityScore = { critical: 4, high: 3, medium: 2, low: 1 };
+          const sortedAlerts = [...alerts].sort((a, b) => (severityScore[b.severity] || 0) - (severityScore[a.severity] || 0));
+          const maxBadges = 3;
+          let displayedAlerts = sortedAlerts;
+          let hiddenCount = 0;
+          if (sortedAlerts.length > maxBadges) {
+            displayedAlerts = sortedAlerts.slice(0, 2);
+            hiddenCount = sortedAlerts.length - 2;
+          }
+          const alertBadgesHtml = displayedAlerts.map(a => `<span class="nt-badge ${a.severity === 'critical' || a.severity === 'high' ? 'is-high' : ''}">${escapeHtml(a.label)}</span>`).join("");
+          const moreBadgeHtml = hiddenCount > 0 ? `<span class="nt-badge is-more">+${hiddenCount} more</span>` : "";
+          const allBadgesHtml = alertBadgesHtml + moreBadgeHtml;
           
           const percentRaw = typeof tc?.caseProgress?.overallPercent === "number" ? tc.caseProgress.overallPercent : 0;
           const percent = Math.max(0, Math.min(100, Math.round(percentRaw)));
@@ -244,11 +258,9 @@ function renderNewTop() {
             <div class="shipment-card-title">${escapeHtml(title)}</div>
             <div class="shipment-card-subtitle">${escapeHtml(subtitle)}</div>
             <div class="shipment-card-meta">
-              <span class="nt-chip">Shipments ${escapeHtml(String(relIds.length))}</span>
-              <span class="nt-chip">Invoices ${escapeHtml(String(invNos.length))}</span>
-              <span class="nt-chip">Delivery ${escapeHtml(reqDate)}</span>
+              <span class="nt-muted" style="font-size: 11px;">${escapeHtml(metaText)}</span>
             </div>
-            ${alertBadgesHtml ? `<div class="shipment-card-alerts">${alertBadgesHtml}</div>` : ""}
+            ${allBadgesHtml ? `<div class="shipment-card-alerts">${allBadgesHtml}</div>` : ""}
             <div class="nt-progress">
               <div class="nt-progress__bar" aria-hidden="true"><div class="nt-progress__fill" style="width:${percent}%"></div></div>
               <div class="nt-progress__label">${percent}%</div>

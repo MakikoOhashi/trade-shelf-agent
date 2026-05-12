@@ -2640,18 +2640,21 @@ body {
 }
 
 .shipment-card {
-  padding: 12px;
+  padding: 8px 10px;
   background: #ffffff;
   border: 1px solid #d0d7de;
   border-radius: 6px;
   cursor: pointer;
-  transition: border-color 0.2s, box-shadow 0.2s;
+  transition: transform 0.2s, border-color 0.2s, box-shadow 0.2s;
   text-align: left;
+  display: flex;
+  flex-direction: column;
 }
 
 .shipment-card:hover {
   border-color: #0969da;
-  box-shadow: 0 1px 3px rgba(31, 35, 40, 0.12);
+  box-shadow: 0 4px 10px rgba(31, 35, 40, 0.12);
+  transform: translateY(-2px);
 }
 
 .shipment-card:focus {
@@ -2688,6 +2691,13 @@ body {
 }
 
 .shipment-card .nt-progress {
-  margin-top: 4px;
+  margin-top: auto;
+  padding-top: 8px;
+}
+
+.nt-badge.is-more {
+  background: rgba(31, 35, 40, 0.08);
+  color: #57606a;
+  border-color: transparent;
 }
 
