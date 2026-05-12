@@ -25,6 +25,11 @@ const state = {
   proposalApprovalStatusById: {},
   modalTradeCaseId: null,
   /**
+   * New TOP (GitHub-like) active tab
+   * @type {"shipments" | "si" | "issues" | "documents" | "settings"}
+   */
+  topActiveTab: "shipments",
+  /**
    * Resolution Decision Tree の branch 選択状態（branch.value）
    * @type {string | null}
    */
@@ -53,6 +58,235 @@ const state = {
    */
   workspaceUiByModalId: {},
 };
+
+const newTopTabs = [
+  { key: "shipments", label: "Shipments" },
+  { key: "si", label: "SI" },
+  { key: "issues", label: "Issues" },
+  { key: "documents", label: "Documents" },
+  { key: "settings", label: "Settings" },
+];
+
+const shipmentStageLabels = [
+  "1 出荷指図",
+  "2 仕入先出発〜仕入先港着",
+  "3 輸出通関手続き",
+  "4 船積輸送中（洋上）",
+  "5 港着〜輸入通関手続き",
+  "6 営業倉庫へ輸送中",
+  "7 営業倉庫着（在庫化）",
+];
+
+function shipmentStageIndexFromState(shipmentState) {
+  const s = String(shipmentState || "");
+  if (s === "warehouseReceived" || s === "completed") return 6;
+  if (s === "waitingWarehouseReceipt") return 5;
+  if (s === "customsCleared" || s === "arrived" || s === "importCustoms") return 4;
+  if (s === "inTransit") return 3;
+  if (s === "exportCustoms") return 2;
+  if (s === "shipped") return 1;
+  return 0;
+}
+
+function openShipmentWorkspace(tradeCaseId) {
+  const tc = tradeCaseId ? getTradeCaseById(tradeCaseId) : null;
+  if (!tc) return;
+  openWorkspaceModal("shipment-workspace-modal", { title: "Shipment Workspace", bodyHtml: renderShipmentWorkspace(tc) });
+}
+
+function openSiWorkspace(tradeCaseId) {
+  const tc = tradeCaseId ? getTradeCaseById(tradeCaseId) : null;
+  if (!tc) return;
+  openWorkspaceModal("si-workspace-modal", { title: "SI Workspace", bodyHtml: renderSiWorkspace(tc) });
+}
+
+function openIngestionModal() {
+  const modal = document.getElementById("ingestion-modal");
+  if (!modal) return;
+  modal.classList.add("is-open");
+  modal.setAttribute("aria-hidden", "false");
+}
+
+function closeIngestionModal() {
+  const modal = document.getElementById("ingestion-modal");
+  if (!modal) return;
+  modal.classList.remove("is-open");
+  modal.setAttribute("aria-hidden", "true");
+}
+
+function renderNewTop() {
+  const tab = state.topActiveTab || "shipments";
+
+  const navHtml = `<nav class="nt-nav" aria-label="Primary">
+    ${newTopTabs
+      .map((t) => {
+        const active = t.key === tab;
+        return `<button class="nt-tab ${active ? "is-active" : ""}" type="button" data-nt-tab="${escapeHtml(
+          t.key,
+        )}" aria-current="${active ? "page" : "false"}">${escapeHtml(t.label)}</button>`;
+      })
+      .join("")}
+  </nav>`;
+
+  const shipments = Array.isArray(state.tradeCases) ? state.tradeCases.filter(Boolean) : [];
+
+  const renderShipments = () => {
+    const cards = shipments
+      .slice()
+      .sort((a, b) => String(a?.shipmentEntity?.eta || "").localeCompare(String(b?.shipmentEntity?.eta || "")))
+      .map((tc) => {
+        const sh = tc && tc.shipmentEntity ? tc.shipmentEntity : null;
+        const stageIdx = shipmentStageIndexFromState(sh?.shipmentState);
+        const percent = Math.round(((stageIdx + 1) / shipmentStageLabels.length) * 100);
+        const blockers = Array.isArray(tc?.caseProgress?.blockingSummary) ? tc.caseProgress.blockingSummary : [];
+        return `<article class="nt-card nt-card--shipment" role="button" tabindex="0" data-open-shipment="${escapeHtml(
+          tc.id,
+        )}">
+          <div class="nt-card__head">
+            <div class="nt-card__title"><span class="nt-mono">${escapeHtml(sh?.id || "-")}</span></div>
+            <div class="nt-card__meta">
+              <span class="nt-chip">${escapeHtml(sh?.bookingNo || "Booking -")}</span>
+              <span class="nt-chip">${escapeHtml(sh?.blNo || "BL -")}</span>
+              <span class="nt-chip">ETA ${escapeHtml(sh?.eta || "-")}</span>
+            </div>
+          </div>
+          <div class="nt-progress">
+            <div class="nt-progress__bar" aria-hidden="true"><div class="nt-progress__fill" style="width:${percent}%"></div></div>
+            <div class="nt-progress__label">${escapeHtml(shipmentStageLabels[stageIdx] || shipmentStageLabels[0])}</div>
+          </div>
+          <ol class="nt-stages" aria-label="Stages">
+            ${shipmentStageLabels
+              .map((label, i) => `<li class="nt-stage ${i < stageIdx ? "is-done" : i === stageIdx ? "is-current" : ""}">${escapeHtml(label)}</li>`)
+              .join("")}
+          </ol>
+          <div class="nt-card__footer">
+            <div class="nt-muted">Blockers: ${blockers.length ? escapeHtml(String(blockers.length)) : "0"}</div>
+          </div>
+        </article>`;
+      })
+      .join("");
+
+    return `<section class="nt-grid" aria-label="Shipments">${cards || `<div class="nt-muted">No shipments</div>`}</section>`;
+  };
+
+  const renderSi = () => {
+    const cards = shipments
+      .slice()
+      .sort((a, b) => String(a?.siEntity?.requestedDeliveryDate || "").localeCompare(String(b?.siEntity?.requestedDeliveryDate || "")))
+      .map((tc) => {
+        const si = tc && tc.siEntity ? tc.siEntity : null;
+        const percentRaw = typeof tc?.caseProgress?.overallPercent === "number" ? tc.caseProgress.overallPercent : 0;
+        const percent = Math.max(0, Math.min(100, Math.round(percentRaw)));
+        const stageIdx = Math.min(shipmentStageLabels.length - 1, Math.floor((percent / 100) * shipmentStageLabels.length));
+        return `<article class="nt-card nt-card--si" role="button" tabindex="0" data-open-si="${escapeHtml(tc.id)}">
+          <div class="nt-card__head">
+            <div class="nt-card__title"><span class="nt-mono">${escapeHtml(si?.siNo || "-")}</span></div>
+            <div class="nt-card__meta">
+              <span class="nt-chip">Delivery ${escapeHtml(si?.requestedDeliveryDate || "-")}</span>
+              <span class="nt-chip">Shipments ${escapeHtml(String((si?.relatedShipmentIds || []).length || 0))}</span>
+              <span class="nt-chip">Invoices ${escapeHtml(String((si?.relatedInvoiceNos || []).length || 0))}</span>
+            </div>
+          </div>
+          <div class="nt-progress">
+            <div class="nt-progress__bar" aria-hidden="true"><div class="nt-progress__fill" style="width:${percent}%"></div></div>
+            <div class="nt-progress__label">Progress ${percent}%</div>
+          </div>
+          <ol class="nt-stages" aria-label="Stages">
+            ${shipmentStageLabels
+              .map((label, i) => `<li class="nt-stage ${i < stageIdx ? "is-done" : i === stageIdx ? "is-current" : ""}">${escapeHtml(label)}</li>`)
+              .join("")}
+          </ol>
+        </article>`;
+      })
+      .join("");
+
+    return `<section class="nt-grid" aria-label="SI">${cards || `<div class="nt-muted">No SI</div>`}</section>`;
+  };
+
+  const renderIssues = () => {
+    const rows = [];
+    for (const tc of shipments) {
+      const incidents = Array.isArray(tc?.incidents) ? tc.incidents : detectIncidents(tc);
+      const blocking = Array.isArray(tc?.caseProgress?.blockingSummary) ? tc.caseProgress.blockingSummary : [];
+      for (const i of incidents) {
+        if (!i) continue;
+        rows.push({
+          kind: "incident",
+          tradeCaseId: tc.id,
+          severity: i.severity || "medium",
+          title: i.title || i.type || "Incident",
+          body: i.summary || "",
+        });
+      }
+      for (const b of blocking) {
+        if (!b) continue;
+        rows.push({
+          kind: "blocker",
+          tradeCaseId: tc.id,
+          severity: "high",
+          title: String(b),
+          body: "",
+        });
+      }
+    }
+
+    const items = rows.length
+      ? rows
+          .map((r) => {
+            const sev = String(r.severity || "").toLowerCase();
+            const sevClass = sev === "critical" || sev === "high" ? "is-high" : sev === "medium" ? "is-medium" : "is-low";
+            const kind = r.kind === "incident" ? "Incident" : "Blocker";
+            return `<div class="nt-issue ${sevClass}" role="button" tabindex="0" data-open-issue="${escapeHtml(r.tradeCaseId)}">
+              <div class="nt-issue__title">${escapeHtml(r.title)}</div>
+              <div class="nt-issue__meta">
+                <span class="nt-badge">${escapeHtml(kind)}</span>
+                <span class="nt-badge">${escapeHtml(String(r.severity || "-").toUpperCase())}</span>
+                <span class="nt-badge nt-mono">${escapeHtml(r.tradeCaseId)}</span>
+              </div>
+              ${r.body ? `<div class="nt-issue__body">${escapeHtml(r.body)}</div>` : ""}
+            </div>`;
+          })
+          .join("")
+      : `<div class="nt-muted">No issues</div>`;
+
+    return `<section class="nt-issues" aria-label="Issues">${items}</section>`;
+  };
+
+  const renderPlaceholder = (title) => `<div class="nt-placeholder">
+    <div class="nt-placeholder__title">${escapeHtml(title)}</div>
+    <div class="nt-muted">（mock）</div>
+  </div>`;
+
+  const mainHtml =
+    tab === "shipments"
+      ? renderShipments()
+      : tab === "si"
+        ? renderSi()
+        : tab === "issues"
+          ? renderIssues()
+          : tab === "documents"
+            ? renderPlaceholder("Documents")
+            : renderPlaceholder("Settings");
+
+  return `
+    <div class="new-top">
+      <header class="nt-header">
+        <div class="nt-brand">Trade Shelf Agent</div>
+        <div class="nt-actions">
+          <button class="nt-gear" type="button" data-open-ingestion="1" aria-label="Ingestion settings">⚙️ Ingestion</button>
+        </div>
+      </header>
+      ${navHtml}
+      <main class="nt-main" aria-label="Main">${mainHtml}</main>
+    </div>
+  `;
+}
+
+function renderApp() {
+  const root = document.getElementById("app");
+  if (!root) return;
+  root.innerHTML = renderNewTop();
+}
 
 function ensureShelvesDom() {
   const root = document.getElementById("shelves");
@@ -3515,69 +3749,90 @@ function seed() {
     const proposals = proposeActions(c, incidents);
     return { ...c, incidents, nextActions: proposals };
   });
-  updateCounts();
-  renderShelfHeader();
-  renderShelves();
-  log(`サンプル: mockTradeCases ${state.tradeCases.length} 件を棚に表示（${state.currentViewLens} view）`);
+  renderApp();
 }
 
-function clearAll() {
-  state.inboxItems = [];
-  state.tradeCases = [];
-  document.getElementById("inbox-items").innerHTML = "";
-  ensureShelvesDom();
-  for (const shelfName of shelves) {
-    const body = document.querySelector(`.shelf[data-shelf="${shelfName}"] [data-body]`);
-    if (body) body.innerHTML = "";
-  }
-  document.getElementById("log-items").innerHTML = "";
-  updateCounts();
-  log("クリア: 全ての棚/Inbox を空にしました");
-}
-
-function setupTopActions() {
-  document.getElementById("btn-seed").addEventListener("click", seed);
-  document.getElementById("btn-clear").addEventListener("click", clearAll);
-  document.getElementById("btn-incident").addEventListener("click", () => {
-    addItem({
-      kind: "text",
-      text: "INCIDENT: expected 1000 / invoiced 400 mismatch\n影響: 出荷・通関遅延の可能性。\n対応案を出して承認を取りたい。",
-    });
-  });
-}
-
-function setupViewLens() {
-  const root = document.getElementById("view-lens");
+function setupNewTop() {
+  const root = document.getElementById("app");
   if (!root) return;
 
   root.addEventListener("click", (e) => {
     const target = e.target;
     if (!target) return;
-    const btn = target.closest && target.closest("[data-view-lens]");
-    if (!btn) return;
-    const lens = btn.getAttribute("data-view-lens");
-    if (!lens) return;
-    state.currentViewLens = lens;
-    renderShelfHeader();
-    updateCounts();
-    renderShelves();
-    log(`View Lens: ${lens} に切替`);
+
+    const tabEl = target.closest && target.closest("[data-nt-tab]");
+    if (tabEl) {
+      const key = tabEl.getAttribute("data-nt-tab") || "";
+      if (newTopTabs.some((t) => t.key === key)) {
+        state.topActiveTab = key;
+        renderApp();
+      }
+      return;
+    }
+
+    const openShipmentEl = target.closest && target.closest("[data-open-shipment]");
+    if (openShipmentEl) {
+      openShipmentWorkspace(openShipmentEl.getAttribute("data-open-shipment") || "");
+      return;
+    }
+
+    const openSiEl = target.closest && target.closest("[data-open-si]");
+    if (openSiEl) {
+      openSiWorkspace(openSiEl.getAttribute("data-open-si") || "");
+      return;
+    }
+
+    const openIssueEl = target.closest && target.closest("[data-open-issue]");
+    if (openIssueEl) {
+      openShipmentWorkspace(openIssueEl.getAttribute("data-open-issue") || "");
+      return;
+    }
+
+    const ingestionEl = target.closest && target.closest("[data-open-ingestion]");
+    if (ingestionEl) {
+      openIngestionModal();
+      return;
+    }
   });
 
-  renderShelfHeader();
+  root.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter") return;
+    const target = e.target;
+    if (!target) return;
+    const openShipmentEl = target.closest && target.closest("[data-open-shipment]");
+    if (openShipmentEl) {
+      openShipmentWorkspace(openShipmentEl.getAttribute("data-open-shipment") || "");
+      return;
+    }
+    const openSiEl = target.closest && target.closest("[data-open-si]");
+    if (openSiEl) {
+      openSiWorkspace(openSiEl.getAttribute("data-open-si") || "");
+      return;
+    }
+    const openIssueEl = target.closest && target.closest("[data-open-issue]");
+    if (openIssueEl) {
+      openShipmentWorkspace(openIssueEl.getAttribute("data-open-issue") || "");
+      return;
+    }
+  });
+
+  const modal = document.getElementById("ingestion-modal");
+  if (modal) {
+    modal.addEventListener("click", (e) => {
+      const t = e.target;
+      if (!t) return;
+      const closeEl = t.closest && t.closest("[data-close]");
+      if (closeEl) closeIngestionModal();
+    });
+  }
 }
 
 function main() {
-  setupDropzone();
-  setupTextAdd();
   setupModal();
   setupWorkspaceModals();
-  setupManualModal();
-  setupTopActions();
-  setupViewLens();
   seed();
-  updateCounts();
-  log("起動: UI mock を開始");
+  setupNewTop();
+  renderApp();
 }
 
 main();

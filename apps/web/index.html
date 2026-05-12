@@ -14,123 +14,21 @@
     </script>
   </head>
   <body>
-    <header class="topbar">
-      <div class="topbar__title">Trade Shelf Agent</div>
-      <div class="topbar__subtitle">UI mock: 左 Inbox / 右 Shelf</div>
-      <div class="topbar__actions">
-        <button id="btn-seed" class="btn btn--ghost" type="button">サンプル投入</button>
-        <button id="btn-clear" class="btn btn--ghost" type="button">クリア</button>
-      </div>
-    </header>
+    <div id="app"></div>
 
-    <main class="layout">
-      <section class="pane pane--inbox pane--ingestion" aria-label="Ingestion">
-        <div class="pane__header">
-          <h2 class="pane__title">Auto Ingestion</h2>
-          <div class="pane__meta">
-            <span id="inbox-count" class="badge">0 items</span>
-          </div>
+    <!-- Ingestion settings (mock) -->
+    <div id="ingestion-modal" class="modal modal--ingestion" aria-hidden="true">
+      <div class="modal__backdrop" data-close></div>
+      <div class="modal__dialog" role="dialog" aria-modal="true" aria-label="Ingestion settings">
+        <div class="modal__top">
+          <div class="modal__title">Ingestion</div>
+          <button class="btn btn--ghost" type="button" data-close aria-label="Close">閉じる</button>
         </div>
-
-        <div class="ingestion-card" style="padding:14px;">
-          <div class="kv">
-            <div><strong>Synced</strong><div id="synced-count" class="muted">0</div></div>
-            <div><strong>Pending / Unstructured</strong><div id="pending-count" class="muted">0</div></div>
-            <div><strong>Needs review</strong><div id="needs-review-count" class="muted">0</div></div>
-          </div>
-          <div class="row" style="margin-top:12px;">
-            <div class="muted">通常はメール・ドライブ連携から自動で取り込みます。追加情報がある場合のみ手動で投入してください。</div>
-            <button id="btn-manual-add" class="btn btn--primary" type="button">+ 手動で追加</button>
-          </div>
-          <div class="muted" style="margin-top:8px">Last synced: <span id="last-synced">-</span></div>
-        </div>
-      </section>
-
-      <!-- Manual input modal for Inbox (manual upload / exception intake) -->
-      <div id="manual-modal" class="modal" aria-hidden="true">
-        <div class="modal__backdrop" data-close></div>
-        <div class="modal__dialog" role="dialog" aria-modal="true" aria-label="Manual Upload">
-          <div class="modal__title">Manual Upload / 手動投入</div>
-          <div id="manual-modal-body" class="modal__body">
-            <div id="dropzone" class="dropzone" tabindex="0" role="button" aria-label="Drag and drop files here">
-              <div class="dropzone__title">ドラッグ＆ドロップ</div>
-              <div class="dropzone__hint">ファイルでも、テキストでも、とにかく放り込む</div>
-              <input id="file-input" class="dropzone__file" type="file" multiple />
-              <button id="btn-pick" class="btn" type="button">ファイルを選ぶ</button>
-            </div>
-
-            <div class="inbox-compose">
-              <label class="label" for="text-input">テキスト投入（メール本文 / メモ / OCR など）</label>
-              <textarea
-                id="text-input"
-                class="textarea"
-                placeholder="例: SI 1000 / INV 400 の差異が発生。仕入先へ確認したい。"
-                rows="6"
-              ></textarea>
-              <div class="row">
-                <button id="btn-add-text" class="btn" type="button">追加</button>
-                <div class="muted">※ 手動投入は例外的な導線です。通常は自動取り込みを使用してください。</div>
-              </div>
-            </div>
-
-            <div class="inbox-list">
-              <div class="label">投入済み</div>
-              <div id="inbox-items" class="items"></div>
-            </div>
-          </div>
-          <div class="modal__actions">
-            <button id="btn-manual-close" class="btn btn--primary" type="button" data-close>閉じる</button>
-          </div>
+        <div class="modal__body">
+          <div class="muted">（mock）メール/Drive連携、同期状況、例外投入などの設定パネルをここに置く</div>
         </div>
       </div>
-
-      <section class="pane pane--shelf" aria-label="Shelves">
-        <div class="pane__header">
-          <div class="pane__header-left">
-            <h2 id="shelf-title" class="pane__title">Shelf（案件別）</h2>
-            <div id="view-lens" class="view-lens" role="tablist" aria-label="View Lens">
-              <button class="view-lens__btn is-active" type="button" data-view-lens="case" role="tab" aria-selected="true">
-                <div class="view-lens__en">Case view</div>
-                <div class="view-lens__ja">案件別</div>
-              </button>
-              <button class="view-lens__btn" type="button" data-view-lens="si" role="tab" aria-selected="false">
-                <div class="view-lens__en">SI view</div>
-                <div class="view-lens__ja">SI別</div>
-              </button>
-              <button class="view-lens__btn" type="button" data-view-lens="invoice" role="tab" aria-selected="false">
-                <div class="view-lens__en">Invoice view</div>
-                <div class="view-lens__ja">INV別</div>
-              </button>
-              <button class="view-lens__btn" type="button" data-view-lens="bl" role="tab" aria-selected="false">
-                <div class="view-lens__en">BL view</div>
-                <div class="view-lens__ja">BL別</div>
-              </button>
-              <button class="view-lens__btn" type="button" data-view-lens="supplier" role="tab" aria-selected="false">
-                <div class="view-lens__en">Supplier view</div>
-                <div class="view-lens__ja">仕入先別</div>
-              </button>
-              <button class="view-lens__btn" type="button" data-view-lens="incident" role="tab" aria-selected="false">
-                <div class="view-lens__en">Incident view</div>
-                <div class="view-lens__ja">インシデント別</div>
-              </button>
-            </div>
-          </div>
-          <div class="pane__meta">
-            <span class="muted">クリックで詳細（source case / mockTradeCases）</span>
-          </div>
-        </div>
-
-        <div class="shelves" id="shelves"></div>
-
-        <div class="log">
-          <div class="log__head">
-            <div class="pane__title pane__title--small">Activity log（対応ログ）</div>
-            <button id="btn-incident" class="btn btn--ghost" type="button">インシデント発生（ダミー）</button>
-          </div>
-          <div id="log-items" class="log__items"></div>
-        </div>
-      </section>
-    </main>
+    </div>
 
     <div id="modal" class="modal modal--tradecase" aria-hidden="true">
       <div class="modal__backdrop" data-close></div>
