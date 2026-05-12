@@ -730,6 +730,79 @@ body {
   gap: 6px;
 }
 
+#app .issue-related-links {
+  gap: 4px;
+}
+
+#app .issue-related-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+#app .issue-related-item {
+  width: 100%;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid #d0d7de;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #0969da;
+  font-size: 13px;
+  line-height: 1.2;
+  cursor: pointer;
+  text-align: left;
+}
+
+#app .issue-related-item:hover {
+  background: #f6f8fa;
+}
+
+#app .issue-related-item:active {
+  background: #eef1f4;
+}
+
+#app .issue-related-label {
+  flex: 1;
+  color: #0969da;
+}
+
+#app .issue-related-ext {
+  margin-left: auto;
+  color: #57606a;
+  font-size: 12px;
+}
+
+#app .issue-related-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid #d0d7de;
+  background: #f6f8fa;
+  color: #57606a;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+#app .issue-related-here {
+  flex: none;
+  padding: 6px 8px;
+  border: 1px solid #d0d7de;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #57606a;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+#app .issue-related-here:hover {
+  background: #f6f8fa;
+}
+
 #app .issue-label {
   display: inline-flex;
   align-items: center;

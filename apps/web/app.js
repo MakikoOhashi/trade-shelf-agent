@@ -116,6 +116,16 @@ function openSiWorkspace(tradeCaseId) {
   openWorkspaceModal("si-workspace-modal", { title: "SI Workspace", bodyHtml: renderSiWorkspace(tc), tradeCaseId: tc.id });
 }
 
+function openNewWindow(url) {
+  const u = String(url || "").trim();
+  if (!u) return;
+  try {
+    window.open(u, "_blank", "noopener,noreferrer");
+  } catch {
+    window.open(u, "_blank");
+  }
+}
+
 function openIngestionModal() {
   const modal = document.getElementById("ingestion-modal");
   if (!modal) return;
@@ -734,12 +744,77 @@ function renderNewTop() {
           }</div></div>`
         : `<div class="issue-sidebar-row"><div class="issue-sidebar__k">Deadline / SLA</div><div class="issue-sidebar__v">-</div></div>`;
 
+      const siNo = String(tc?.siEntity?.siNo || (Array.isArray(tc?.siNumbers) ? tc.siNumbers[0] : "") || "SI-2026-001");
+      const shipmentId = String(tc?.shipmentEntity?.id || (Array.isArray(tc?.shipmentRefs) ? tc.shipmentRefs[0] : "") || "SHP-2026-009");
+      const invoiceNo = String(tc?.invoiceNumbers?.[0]?.invoiceNo || (Array.isArray(tc?.shipmentEntity?.supplierInvoices) ? tc.shipmentEntity.supplierInvoices[0] : "") || "INV-1122");
+
+      const relatedItems = [
+        {
+          key: "siWorkspace",
+          label: "SI Workspace",
+          badge: "SI",
+          newUrl: `/mock/workspace/si/${encodeURIComponent(siNo)}`,
+          hereDataAttr: `data-issue-open-si="${escapeHtml(it.tradeCaseId)}"`,
+        },
+        {
+          key: "shipmentWorkspace",
+          label: "Shipment Workspace",
+          badge: "SHP",
+          newUrl: `/mock/workspace/shipment/${encodeURIComponent(shipmentId)}`,
+          hereDataAttr: `data-issue-open-shipment="${escapeHtml(it.tradeCaseId)}"`,
+        },
+        {
+          key: "salesInventoryBalance",
+          label: "Sales / Inventory Balance",
+          badge: "BI",
+          newUrl: `/mock/sales-inventory-balance/${encodeURIComponent(siNo)}`,
+        },
+        {
+          key: "inboundSchedule",
+          label: "Inbound Schedule",
+          badge: "SHP",
+          newUrl: `/mock/inbound-schedule/${encodeURIComponent(shipmentId)}`,
+        },
+        {
+          key: "relatedInvoice",
+          label: "Related Invoice",
+          badge: "INV",
+          newUrl: `/mock/documents/invoice/${encodeURIComponent(invoiceNo)}`,
+        },
+        {
+          key: "relatedDocuments",
+          label: "Related Documents",
+          badge: "DOC",
+          newUrl: `/mock/documents?shipment=${encodeURIComponent(shipmentId)}`,
+        },
+        {
+          key: "caseDetail",
+          label: "Case detail",
+          badge: "CASE",
+          newUrl: `/mock/case/${encodeURIComponent(it.tradeCaseId)}`,
+          hereDataAttr: `data-issue-open-case="${escapeHtml(it.tradeCaseId)}"`,
+        },
+      ];
+
       const relatedLinksHtml = `<div class="issue-sidebar-row">
         <div class="issue-sidebar__k">Related links</div>
-        <div class="issue-sidebar__v issue-sidebar-links">
-          <button class="btn btn--small btn--ghost" type="button" data-issue-open-si="${escapeHtml(it.tradeCaseId)}">Open SI Workspace</button>
-          <button class="btn btn--small btn--ghost" type="button" data-issue-open-shipment="${escapeHtml(it.tradeCaseId)}">Open Shipment Workspace</button>
-          <button class="btn btn--small btn--ghost" type="button" data-issue-open-case="${escapeHtml(it.tradeCaseId)}">Open Case detail</button>
+        <div class="issue-sidebar__v issue-sidebar-links issue-related-links">
+          ${relatedItems
+            .map((x) => {
+              const badge = x.badge ? `<span class="issue-related-badge">${escapeHtml(x.badge)}</span>` : "";
+              const openHere = x.hereDataAttr
+                ? `<button class="issue-related-here" type="button" ${x.hereDataAttr} aria-label="Open here (modal)">Open here</button>`
+                : "";
+              return `<div class="issue-related-row">
+                <button class="issue-related-item" type="button" data-issue-open-new="${escapeHtml(x.newUrl)}" aria-label="Open in new tab">
+                  <span class="issue-related-label">${escapeHtml(x.label)}</span>
+                  ${badge}
+                  <span class="issue-related-ext" aria-hidden="true">↗</span>
+                </button>
+                ${openHere}
+              </div>`;
+            })
+            .join("")}
         </div>
       </div>`;
 
@@ -4454,6 +4529,12 @@ function setupNewTop() {
       if (tc) {
         openTradeCaseDetail(tc);
       }
+      return;
+    }
+
+    const openNewFromIssueEl = target.closest && target.closest("[data-issue-open-new]");
+    if (openNewFromIssueEl) {
+      openNewWindow(openNewFromIssueEl.getAttribute("data-issue-open-new") || "");
       return;
     }
 
