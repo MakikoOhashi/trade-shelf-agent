@@ -217,6 +217,131 @@ body {
   gap: 10px;
 }
 
+#app .issues-center {
+  display: grid;
+  gap: 14px;
+}
+
+#app .issue-group {
+  border: 1px solid #d0d7de;
+  border-radius: 12px;
+  background: #ffffff;
+  overflow: hidden;
+}
+
+#app .issue-group__head {
+  padding: 10px 12px;
+  border-bottom: 1px solid #d0d7de;
+  background: #f6f8fa;
+  font-weight: 700;
+  color: #24292f;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+#app .issue-group__body {
+  padding: 10px 12px;
+  display: grid;
+  gap: 10px;
+}
+
+#app .issue-card {
+  border: 1px solid #d0d7de;
+  border-radius: 12px;
+  background: #ffffff;
+}
+
+#app .issue-card.is-high {
+  border-color: color-mix(in srgb, #cf222e 35%, #d0d7de);
+}
+
+#app .issue-card.is-medium {
+  border-color: color-mix(in srgb, #bf8700 26%, #d0d7de);
+}
+
+#app .issue-card__head {
+  padding: 12px;
+  cursor: pointer;
+}
+
+#app .issue-card__head:focus {
+  outline: 2px solid rgba(9, 105, 218, 0.45);
+  outline-offset: 2px;
+}
+
+#app .issue-card__title {
+  font-weight: 700;
+  color: #24292f;
+}
+
+#app .issue-card__meta {
+  margin-top: 6px;
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+#app .issue-card__body {
+  padding: 0 12px 12px;
+}
+
+#app .issue-block {
+  margin-top: 10px;
+}
+
+#app .issue-block__label {
+  font-size: 12px;
+  color: #57606a;
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+
+#app .issue-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+#app .issue-draft {
+  margin-top: 12px;
+  border: 1px solid #d0d7de;
+  background: #f6f8fa;
+  border-radius: 12px;
+  padding: 10px;
+}
+
+#app .issue-draft__title {
+  font-size: 12px;
+  font-weight: 700;
+  color: #24292f;
+  margin-bottom: 6px;
+}
+
+#app .issue-actions {
+  margin-top: 12px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+#app .nt-badge.is-high {
+  border-color: color-mix(in srgb, #cf222e 28%, #d0d7de);
+  background: #ffebe9;
+  color: #82071e;
+}
+
+#app .nt-badge.is-medium {
+  border-color: color-mix(in srgb, #bf8700 24%, #d0d7de);
+  background: #fff8c5;
+  color: #7a4d00;
+}
+
+#app .nt-badge.is-low {
+  background: #f6f8fa;
+  color: #24292f;
+}
+
 #app .nt-issue {
   border: 1px solid #d0d7de;
   border-radius: 12px;

@@ -25,6 +25,11 @@ const state = {
   proposalApprovalStatusById: {},
   modalTradeCaseId: null,
   /**
+   * Issues（AI承認センター）で開いているカード
+   * @type {string | null}
+   */
+  activeIssueId: null,
+  /**
    * New TOP (GitHub-like) active tab
    * @type {"shipments" | "si" | "issues" | "documents" | "settings"}
    */
@@ -62,7 +67,7 @@ const state = {
 const newTopTabs = [
   { key: "si", label: "SI（出荷指図）" },
   { key: "shipments", label: "Shipments（船積）" },
-  { key: "issues", label: "Issues（インシデント）" },
+  { key: "issues", label: "Issues（AI承認センター）" },
   { key: "documents", label: "Documents" },
   { key: "settings", label: "Settings" },
 ];
@@ -91,13 +96,15 @@ function shipmentStageIndexFromState(shipmentState) {
 function openShipmentWorkspace(tradeCaseId) {
   const tc = tradeCaseId ? getTradeCaseById(tradeCaseId) : null;
   if (!tc) return;
-  openWorkspaceModal("shipment-workspace-modal", { title: "Shipment Workspace", bodyHtml: renderShipmentWorkspace(tc) });
+  state.modalTradeCaseId = tc.id;
+  openWorkspaceModal("shipment-workspace-modal", { title: "Shipment Workspace", bodyHtml: renderShipmentWorkspace(tc), tradeCaseId: tc.id });
 }
 
 function openSiWorkspace(tradeCaseId) {
   const tc = tradeCaseId ? getTradeCaseById(tradeCaseId) : null;
   if (!tc) return;
-  openWorkspaceModal("si-workspace-modal", { title: "SI Workspace", bodyHtml: renderSiWorkspace(tc) });
+  state.modalTradeCaseId = tc.id;
+  openWorkspaceModal("si-workspace-modal", { title: "SI Workspace", bodyHtml: renderSiWorkspace(tc), tradeCaseId: tc.id });
 }
 
 function openIngestionModal() {
@@ -112,6 +119,74 @@ function closeIngestionModal() {
   if (!modal) return;
   modal.classList.remove("is-open");
   modal.setAttribute("aria-hidden", "true");
+}
+
+function agentRunApproveSend(tradeCaseId) {
+  const tc = tradeCaseId ? getTradeCaseById(tradeCaseId) : null;
+  const run = tc && tc.resolutionAgentRun ? tc.resolutionAgentRun : null;
+  if (!tc || !run) return false;
+  const steps = Array.isArray(run.steps) ? run.steps : [];
+  const current = steps.find((s) => s && s.id === run.currentStepId) || null;
+  if (!current || !current.requiresHumanApproval) return false;
+
+  const nowIso = new Date().toISOString();
+  current.status = "sent";
+  current.approvedBy = "human";
+  current.approvedAt = nowIso;
+
+  const waitStep = steps.find((s) => s && s.id === "step-wait-supplier-reply") || null;
+  if (waitStep && waitStep.status === "waitingReply") {
+    run.currentStepId = waitStep.id;
+    run.status = "waitingExternalReply";
+    run.progressPercent = Math.max(run.progressPercent || 0, 45);
+    run.nextHumanAction = undefined;
+  } else {
+    run.status = "waitingExternalReply";
+    run.progressPercent = Math.max(run.progressPercent || 0, 45);
+    run.nextHumanAction = undefined;
+  }
+
+  recordHumanIntervention(tradeCaseId, {
+    actionType: "agentRunApproveSend",
+    label: "Agent Run: Approve & Send",
+    note: `step:${current.id}`,
+  });
+  log(`送信（mock）: ${current.id}`);
+  return true;
+}
+
+function agentRunHold(tradeCaseId) {
+  const tc = tradeCaseId ? getTradeCaseById(tradeCaseId) : null;
+  const run = tc && tc.resolutionAgentRun ? tc.resolutionAgentRun : null;
+  if (!tc || !run) return false;
+  const steps = Array.isArray(run.steps) ? run.steps : [];
+  const current = steps.find((s) => s && s.id === run.currentStepId) || null;
+  if (!current) return false;
+  current.status = "held";
+  run.status = "waitingHumanApproval";
+  run.nextHumanAction = {
+    label: "保留を解除して承認",
+    description: "保留中です。内容を確認し、送信する場合は承認してください。",
+    actionType: current.actionType || "humanApproval",
+  };
+  recordHumanIntervention(tradeCaseId, { actionType: "agentRunHold", label: "Agent Run: Hold", note: `step:${current.id}` });
+  log(`保留: ${current.id}`);
+  return true;
+}
+
+function agentRunEdit(tradeCaseId) {
+  const tc = tradeCaseId ? getTradeCaseById(tradeCaseId) : null;
+  const run = tc && tc.resolutionAgentRun ? tc.resolutionAgentRun : null;
+  if (!tc || !run) return false;
+  const steps = Array.isArray(run.steps) ? run.steps : [];
+  const current = steps.find((s) => s && s.id === run.currentStepId) || null;
+  const msg = current && current.proposedMessage ? current.proposedMessage : null;
+  if (!current || !msg) return false;
+  const nextBody = window.prompt("Edit message body（mock）", String(msg.body || ""));
+  if (typeof nextBody === "string") msg.body = nextBody;
+  recordHumanIntervention(tradeCaseId, { actionType: "agentRunEdit", label: "Agent Run: Edit", note: `step:${current.id}` });
+  log(`修正（mock）: ${current.id}`);
+  return true;
 }
 
 function renderNewTop() {
@@ -283,52 +358,179 @@ function renderNewTop() {
   };
 
   const renderIssues = () => {
-    const rows = [];
-    for (const tc of shipments) {
+    const severityScore = { critical: 4, high: 3, medium: 2, low: 1 };
+    const maxSeverity = (list) => {
+      const incs = Array.isArray(list) ? list : [];
+      let best = "low";
+      for (const i of incs) {
+        const s = String(i?.severity || "low").toLowerCase();
+        if ((severityScore[s] || 0) > (severityScore[best] || 0)) best = s;
+      }
+      return best;
+    };
+
+    const buildIssueForCase = (tc) => {
+      if (!tc) return null;
       const incidents = Array.isArray(tc?.incidents) ? tc.incidents : detectIncidents(tc);
-      const blocking = Array.isArray(tc?.caseProgress?.blockingSummary) ? tc.caseProgress.blockingSummary : [];
-      for (const i of incidents) {
-        if (!i) continue;
-        rows.push({
-          kind: "incident",
-          tradeCaseId: tc.id,
-          severity: i.severity || "medium",
-          title: i.title || i.type || "Incident",
-          body: i.summary || "",
-        });
+      const activeIncidents = incidents.filter((i) => i && i.status !== "resolved");
+      const blocking = Array.isArray(tc?.caseProgress?.blockingSummary) ? tc.caseProgress.blockingSummary.filter(Boolean) : [];
+      const run = tc && tc.resolutionAgentRun ? tc.resolutionAgentRun : null;
+      const steps = run && Array.isArray(run.steps) ? run.steps : [];
+      const current = run && run.currentStepId ? steps.find((s) => s && s.id === run.currentStepId) : null;
+
+      const missingDocs = Array.isArray(tc?.decisionContext?.documentStatus)
+        ? tc.decisionContext.documentStatus.filter((d) => d && String(d.status || "").toLowerCase().includes("missing"))
+        : [];
+
+      const title = tc?.siEntity?.siNo || tc?.shipmentEntity?.id || `Case ${tc.id}`;
+      const severity = maxSeverity(activeIncidents);
+
+      // Status bucket
+      let statusKey = "completed";
+      let aiProposal = "完了（要対応なし）";
+      let why = "アクション対象がありません。";
+      let draft = null;
+
+      const requiresApproval = Boolean(current && current.requiresHumanApproval && current.proposedMessage && current.status !== "sent");
+      if (requiresApproval) {
+        statusKey = "requiresApproval";
+        const msg = current.proposedMessage;
+        draft = {
+          channel: msg.channel || "-",
+          to: Array.isArray(msg.to) ? msg.to : [],
+          subject: msg.subject || "",
+          body: msg.body || "",
+        };
+        aiProposal = run?.nextHumanAction?.description || "外部送信文面を作成しました。承認してください。";
+        const mismatch = activeIncidents.find((i) => i && i.type === "invoiceQuantityMismatch") || null;
+        if (mismatch) {
+          why = "INV と SI の数量差異を検知。顧客納期へ影響しうるため。";
+        } else if (missingDocs.length) {
+          why = "必須書類が未着。出荷/納期へ影響しうるため。";
+        } else {
+          why = "外部送信前は人間承認が必要なため。";
+        }
+      } else if (run && (run.status === "waitingExternalReply" || run.status === "waitingExternal")) {
+        statusKey = "waitingExternal";
+        aiProposal = "外部回答を待機中（仕入先/営業など）";
+        why = "前ステップの依頼に対する返答待ちです。";
+      } else if (blocking.length || missingDocs.length) {
+        statusKey = "blocked";
+        const blockText = blocking[0] || (missingDocs[0] ? `${missingDocs[0].docType} missing` : "blocked");
+        aiProposal = `ブロック解除の確認: ${blockText}`;
+        why = "期限/書類不足などにより進行が止まっています。";
+      } else if (activeIncidents.length) {
+        statusKey = "requiresApproval";
+        const top = activeIncidents.slice().sort((a, b) => (severityScore[String(b?.severity || "low")] || 0) - (severityScore[String(a?.severity || "low")] || 0))[0];
+        aiProposal = top ? `状況確認と方針決定: ${top.title || incidentTitleJa(top)}` : "状況確認と方針決定";
+        why = "異常検知（インシデント）があります。";
       }
-      for (const b of blocking) {
-        if (!b) continue;
-        rows.push({
-          kind: "blocker",
-          tradeCaseId: tc.id,
-          severity: "high",
-          title: String(b),
-          body: "",
-        });
-      }
+
+      return {
+        id: `issue:${tc.id}`,
+        tradeCaseId: tc.id,
+        title,
+        severity,
+        statusKey,
+        aiProposal,
+        why,
+        draft,
+      };
+    };
+
+    const issues = shipments.map(buildIssueForCase).filter(Boolean);
+    const statusOrder = ["requiresApproval", "waitingExternal", "blocked", "completed"];
+    const statusLabel = (k) => {
+      if (k === "requiresApproval") return "Requires approval";
+      if (k === "waitingExternal") return "Waiting external reply";
+      if (k === "blocked") return "Blocked";
+      if (k === "completed") return "Completed";
+      return k;
+    };
+
+    const grouped = Object.fromEntries(statusOrder.map((k) => [k, []]));
+    for (const it of issues) grouped[it.statusKey]?.push(it);
+    for (const k of statusOrder) {
+      grouped[k].sort((a, b) => (severityScore[b.severity] || 0) - (severityScore[a.severity] || 0));
     }
 
-    const items = rows.length
-      ? rows
-          .map((r) => {
-            const sev = String(r.severity || "").toLowerCase();
-            const sevClass = sev === "critical" || sev === "high" ? "is-high" : sev === "medium" ? "is-medium" : "is-low";
-            const kind = r.kind === "incident" ? "Incident" : "Blocker";
-            return `<div class="nt-issue ${sevClass}" role="button" tabindex="0" data-open-issue="${escapeHtml(r.tradeCaseId)}">
-              <div class="nt-issue__title">${escapeHtml(r.title)}</div>
-              <div class="nt-issue__meta">
-                <span class="nt-badge">${escapeHtml(kind)}</span>
-                <span class="nt-badge">${escapeHtml(String(r.severity || "-").toUpperCase())}</span>
-                <span class="nt-badge nt-mono">${escapeHtml(r.tradeCaseId)}</span>
-              </div>
-              ${r.body ? `<div class="nt-issue__body">${escapeHtml(r.body)}</div>` : ""}
-            </div>`;
-          })
-          .join("")
-      : `<div class="nt-muted">No issues</div>`;
+    const renderCard = (it) => {
+      const sev = String(it.severity || "low").toLowerCase();
+      const sevClass = sev === "critical" || sev === "high" ? "is-high" : sev === "medium" ? "is-medium" : "is-low";
+      const isOpen = state.activeIssueId === it.id;
+      const statusText = statusLabel(it.statusKey);
 
-    return `<section class="nt-issues" aria-label="Issues">${items}</section>`;
+      const links = `
+        <div class="issue-links">
+          <button class="btn btn--small btn--ghost" type="button" data-issue-open-shipment="${escapeHtml(it.tradeCaseId)}">Open Shipment Workspace</button>
+          <button class="btn btn--small btn--ghost" type="button" data-issue-open-si="${escapeHtml(it.tradeCaseId)}">Open SI Workspace</button>
+          <button class="btn btn--small btn--ghost" type="button" data-issue-open-case="${escapeHtml(it.tradeCaseId)}">Open Case detail</button>
+        </div>
+      `;
+
+      const draftHtml =
+        it.draft && it.draft.body
+          ? `<div class="issue-draft">
+              <div class="issue-draft__title">Draft preview</div>
+              <div class="kv">
+                <span class="muted">channel</span> ${escapeHtml(String(it.draft.channel || "-"))}
+                <span class="muted">to</span> ${escapeHtml((it.draft.to || []).join(", ") || "-")}
+                ${it.draft.subject ? `<span class="muted">subject</span> ${escapeHtml(String(it.draft.subject))}` : ""}
+              </div>
+              <pre class="pre pre--compact">${escapeHtml(String(it.draft.body || ""))}</pre>
+            </div>`
+          : "";
+
+      const actionHtml =
+        it.statusKey === "requiresApproval" && it.draft
+          ? `<div class="issue-actions">
+              <button class="btn btn--primary btn--small" type="button" data-issue-approve="${escapeHtml(it.tradeCaseId)}">Approve</button>
+              <button class="btn btn--small" type="button" data-issue-edit="${escapeHtml(it.tradeCaseId)}">Edit draft</button>
+              <button class="btn btn--small" type="button" data-issue-hold="${escapeHtml(it.tradeCaseId)}">Hold</button>
+              <button class="btn btn--small btn--ghost" type="button" data-issue-escalate="${escapeHtml(it.tradeCaseId)}">Escalate</button>
+            </div>`
+          : "";
+
+      return `<article class="issue-card ${sevClass} ${isOpen ? "is-open" : ""}" data-issue-id="${escapeHtml(it.id)}">
+        <div class="issue-card__head" role="button" tabindex="0" data-issue-toggle="${escapeHtml(it.id)}">
+          <div class="issue-card__title">${escapeHtml(it.title)}</div>
+          <div class="issue-card__meta">
+            <span class="nt-badge ${sevClass}">${escapeHtml(sev.toUpperCase())}</span>
+            <span class="nt-badge">${escapeHtml(statusText)}</span>
+            <span class="nt-badge nt-mono">${escapeHtml(it.tradeCaseId)}</span>
+          </div>
+        </div>
+        <div class="issue-card__body" ${isOpen ? "" : "hidden"}>
+          <div class="issue-block">
+            <div class="issue-block__label">AI proposal</div>
+            <div>${escapeHtml(it.aiProposal)}</div>
+          </div>
+          <div class="issue-block">
+            <div class="issue-block__label">Why</div>
+            <div class="muted">${escapeHtml(it.why)}</div>
+          </div>
+          <div class="issue-block">
+            <div class="issue-block__label">Related workspace links</div>
+            ${links}
+          </div>
+          ${draftHtml}
+          ${actionHtml}
+        </div>
+      </article>`;
+    };
+
+    const sections = statusOrder
+      .map((k) => {
+        const list = grouped[k] || [];
+        const cards = list.length ? list.map(renderCard).join("") : `<div class="nt-muted">No items</div>`;
+        return `<section class="issue-group" aria-label="${escapeHtml(statusLabel(k))}">
+          <div class="issue-group__head">${escapeHtml(statusLabel(k))} <span class="stage-count">${list.length}</span></div>
+          <div class="issue-group__body">${cards}</div>
+        </section>`;
+      })
+      .join("");
+
+    return `<section class="issues-center" aria-label="Issues Center">${sections}</section>`;
   };
 
   const renderPlaceholder = (title) => `<div class="nt-placeholder">
@@ -1108,7 +1310,7 @@ function closeModal() {
   state.activeContextDrawer = null;
 }
 
-function openWorkspaceModal(modalId, { title, bodyHtml }) {
+function openWorkspaceModal(modalId, { title, bodyHtml, tradeCaseId }) {
   const modal = document.getElementById(modalId);
   if (!modal) return;
   const modalTitle = modal.querySelector(".modal__title");
@@ -1116,7 +1318,8 @@ function openWorkspaceModal(modalId, { title, bodyHtml }) {
   if (modalTitle) modalTitle.textContent = title || "";
   if (body) body.innerHTML = typeof bodyHtml === "string" ? bodyHtml : "";
   // Workspace modal body is interactive; keep the currently opened tradeCase id on the modal.
-  if (state.modalTradeCaseId) modal.setAttribute("data-tradecase-id", String(state.modalTradeCaseId));
+  const idToSet = tradeCaseId || state.modalTradeCaseId;
+  if (idToSet) modal.setAttribute("data-tradecase-id", String(idToSet));
   modal.classList.add("is-open");
   modal.setAttribute("aria-hidden", "false");
 }
@@ -1491,14 +1694,6 @@ function renderShipmentWorkspace(tradeCase) {
     sh?.blNo ? "BLはBooking情報と紐づいています" : null,
   ].filter(Boolean);
 
-  const nextActions = [
-    incidents.some((i) => i.type === "invoiceQuantityMismatch") ? "数量差異の扱い（分納/追加手配）を営業と合意" : null,
-    docStatus.some((d) => String(d.docType || "").toLowerCase().includes("packing") && String(d.status || "").toLowerCase().includes("missing"))
-      ? "PLを仕入先へリマインド"
-      : "PL到着予定を確認（mock）",
-    "顧客納期への影響を更新し、回答文を短く残す",
-  ].filter(Boolean);
-
   return `
     <div class="workspace-desk">
       <div class="workspace-layout">
@@ -1542,10 +1737,6 @@ function renderShipmentWorkspace(tradeCase) {
           <div class="workspace-section">
             <div class="workspace-section__title">Delivery risk</div>
             ${riskHtml}
-          </div>
-          <div class="workspace-section">
-            <div class="workspace-section__title">Next action</div>
-            ${nextActions.length ? `<ul class="list">${nextActions.map((x) => `<li>${escapeHtml(x)}</li>`).join("")}</ul>` : `<div class="muted">-</div>`}
           </div>
           <div class="workspace-section">
             <div class="workspace-section__title">Human memo</div>
@@ -1594,12 +1785,6 @@ function renderSiWorkspace(tradeCase) {
   const riskNotes = [
     incidents.some((i) => i.type === "invoiceQuantityMismatch") ? "⚠ 数量差異あり（INV/SI）" : null,
     "⚠ 顧客納期回答が未確定（mock）",
-  ].filter(Boolean);
-
-  const nextActions = [
-    "分納可否（売約条件）を確認",
-    "顧客への回答文（短文）を確定",
-    relatedShipments.length ? "関連Shipmentの書類を突合" : "Shipment側で必要書類の到着予定を確認（mock）",
   ].filter(Boolean);
 
   return `
@@ -1654,10 +1839,6 @@ function renderSiWorkspace(tradeCase) {
           <div class="workspace-section">
             <div class="workspace-section__title">Delivery risk</div>
             ${riskNotes.length ? `<ul class="list">${riskNotes.map((x) => `<li>${escapeHtml(x)}</li>`).join("")}</ul>` : `<div class="muted">-</div>`}
-          </div>
-          <div class="workspace-section">
-            <div class="workspace-section__title">Next action</div>
-            ${nextActions.length ? `<ul class="list">${nextActions.map((x) => `<li>${escapeHtml(x)}</li>`).join("")}</ul>` : `<div class="muted">-</div>`}
           </div>
           <div class="workspace-section">
             <div class="workspace-section__title">Human memo</div>
@@ -3433,7 +3614,6 @@ function renderTradeCaseDetail(tradeCase) {
 
         <main class="workspace-main">
           ${renderResolutionAgentRun(tradeCase)}
-          ${renderNextHumanApproval(tradeCase)}
           ${renderAgentRunTimeline(tradeCase)}
           ${renderDecisionTreeOverviewAccordion(tradeCase)}
 
@@ -3443,60 +3623,11 @@ function renderTradeCaseDetail(tradeCase) {
           </section>
 
           ${renderStakeholderCoordinationPreview(tradeCase)}
-          ${renderAgentRecommendation(tradeCase)}
-
-          <section class="detail-section detail-section--decision">
-            <h3 class="detail-section__title">Human Decision Actions / 判断と承認</h3>
-            <div class="muted">通常はAgent Runが進行します。必要な場合のみ手動介入してください。</div>
-            <div class="detail-subhead">Human Intervention</div>
-            <div class="action-groups">
-              <div class="action-group">
-                <div class="action-group__title muted">Primary actions</div>
-                <div class="action-row">
-                  <button class="btn btn--primary" type="button" data-human-action="markAsPartialShipment" data-human-label="分納として処理">分納として処理</button>
-                  <button class="btn btn--primary" type="button" data-human-action="linkToNextShipment" data-human-label="次便に紐づけ">次便に紐づけ</button>
-                  <button class="btn btn--primary" type="button" data-human-action="considerAirSwitch" data-human-label="AIR切替を検討">AIR切替を検討</button>
-                  <button class="btn btn--primary" type="button" data-human-action="startSalesCheck" data-human-label="営業確認を開始">営業確認を開始</button>
-                </div>
-              </div>
-              <div class="action-group">
-                <div class="action-group__title muted">Secondary actions</div>
-                <div class="action-row">
-                  <button class="btn" type="button" data-human-action="requestConfirmation" data-human-label="確認依頼">確認依頼</button>
-                  <button class="btn" type="button" data-human-action="hold" data-human-label="保留">保留</button>
-                  <button class="btn" type="button" data-human-action="escalate" data-human-label="エスカレーション">エスカレーション</button>
-                </div>
-              </div>
-              <div class="action-group">
-                <div class="action-group__title muted">Exception actions</div>
-                <div class="action-row">
-                  <button class="btn" type="button" data-human-action="markAsNoIssue" data-human-label="問題なしとして記録">問題なしとして記録</button>
-                  <button class="btn btn--danger" type="button" data-human-action="reject" data-human-label="却下">却下</button>
-                </div>
-              </div>
-            </div>
-
-            <div class="detail-subhead">Approval（提案の承認）</div>
-            ${renderProposals(nextActions)}
-          </section>
-
-          ${renderTeamsMessagePreview(tradeCase)}
-
           <section class="detail-section">
-            <h3 class="detail-section__title">Agent Analysis / AI分析</h3>
-            <div class="detail-subhead">Detected Incidents</div>
-            ${incidentAccordionHtml}
-            <div class="detail-subhead">Resolution Workflow（旧）</div>
-            <div class="accordion" data-accordion-root>
-              <div class="accordion__item">
-                <button class="accordion__trigger" type="button" data-accordion-trigger aria-expanded="false">
-                  <span class="pill pill--mini">直列表示を見る</span>
-                  <span class="accordion__summary">Resolution Workflow / 確認手順（旧UI）</span>
-                </button>
-                <div class="accordion__panel" hidden>
-                  ${renderResolutionWorkflow(tradeCase)}
-                </div>
-              </div>
+            <h3 class="detail-section__title">Actions / 承認と実行</h3>
+            <div class="muted">承認・下書き編集・保留などの実務アクションは、Issues（AI承認センター）で行ってください。</div>
+            <div style="margin-top:10px;">
+              <button class="btn btn--primary" type="button" data-open-approval-center="1">Open Issues（AI承認センター）</button>
             </div>
           </section>
         </main>
@@ -3595,6 +3726,14 @@ function setupModal() {
     if (!target) return;
     if (target.matches("[data-close]")) closeModal();
 
+    const openApprovalCenterEl = target.closest && target.closest("[data-open-approval-center]");
+    if (openApprovalCenterEl) {
+      state.topActiveTab = "issues";
+      closeModal();
+      renderApp();
+      return;
+    }
+
     const openShipmentWorkspaceEl = target.closest && target.closest("[data-open-shipment-workspace]");
     if (openShipmentWorkspaceEl) {
       const tc = state.modalTradeCaseId ? getTradeCaseById(state.modalTradeCaseId) : null;
@@ -3640,77 +3779,27 @@ function setupModal() {
     const agentRunApproveEl = target.closest && target.closest("[data-agent-run-approve]");
     if (agentRunApproveEl) {
       if (!state.modalTradeCaseId) return;
+      const ok = agentRunApproveSend(state.modalTradeCaseId);
       const tc = getTradeCaseById(state.modalTradeCaseId);
-      const run = tc && tc.resolutionAgentRun ? tc.resolutionAgentRun : null;
-      if (!run) return;
-      const steps = Array.isArray(run.steps) ? run.steps : [];
-      const current = steps.find((s) => s && s.id === run.currentStepId) || null;
-      if (!current || !current.requiresHumanApproval) return;
-
-      const nowIso = new Date().toISOString();
-      current.status = "sent";
-      current.approvedBy = "human";
-      current.approvedAt = nowIso;
-
-      const waitStep = steps.find((s) => s && s.id === "step-wait-supplier-reply") || null;
-      if (waitStep && waitStep.status === "waitingReply") {
-        run.currentStepId = waitStep.id;
-        run.status = "waitingExternalReply";
-        run.progressPercent = Math.max(run.progressPercent || 0, 45);
-        run.nextHumanAction = undefined;
-      } else {
-        run.status = "waitingExternalReply";
-        run.progressPercent = Math.max(run.progressPercent || 0, 45);
-        run.nextHumanAction = undefined;
-      }
-
-      recordHumanIntervention(state.modalTradeCaseId, {
-        actionType: "agentRunApproveSend",
-        label: "Agent Run: Approve & Send",
-        note: `step:${current.id}`,
-      });
-      log(`送信（mock）: ${current.id}`);
-      renderTradeCaseDetail(tc);
+      if (ok && tc) renderTradeCaseDetail(tc);
       return;
     }
 
     const agentRunHoldEl = target.closest && target.closest("[data-agent-run-hold]");
     if (agentRunHoldEl) {
       if (!state.modalTradeCaseId) return;
+      const ok = agentRunHold(state.modalTradeCaseId);
       const tc = getTradeCaseById(state.modalTradeCaseId);
-      const run = tc && tc.resolutionAgentRun ? tc.resolutionAgentRun : null;
-      if (!run) return;
-      const steps = Array.isArray(run.steps) ? run.steps : [];
-      const current = steps.find((s) => s && s.id === run.currentStepId) || null;
-      if (!current) return;
-      current.status = "held";
-      run.status = "waitingHumanApproval";
-      run.nextHumanAction = {
-        label: "保留を解除して承認",
-        description: "保留中です。内容を確認し、送信する場合は承認してください。",
-        actionType: current.actionType || "humanApproval",
-      };
-      recordHumanIntervention(state.modalTradeCaseId, { actionType: "agentRunHold", label: "Agent Run: Hold", note: `step:${current.id}` });
-      log(`保留: ${current.id}`);
-      renderTradeCaseDetail(tc);
+      if (ok && tc) renderTradeCaseDetail(tc);
       return;
     }
 
     const agentRunEditEl = target.closest && target.closest("[data-agent-run-edit]");
     if (agentRunEditEl) {
       if (!state.modalTradeCaseId) return;
+      const ok = agentRunEdit(state.modalTradeCaseId);
       const tc = getTradeCaseById(state.modalTradeCaseId);
-      const run = tc && tc.resolutionAgentRun ? tc.resolutionAgentRun : null;
-      if (!run) return;
-      const steps = Array.isArray(run.steps) ? run.steps : [];
-      const current = steps.find((s) => s && s.id === run.currentStepId) || null;
-      const msg = current && current.proposedMessage ? current.proposedMessage : null;
-      if (!current || !msg) return;
-      const nextBody = window.prompt("Edit message body（mock）", String(msg.body || ""));
-      if (typeof nextBody === "string") msg.body = nextBody;
-      recordHumanIntervention(state.modalTradeCaseId, { actionType: "agentRunEdit", label: "Agent Run: Edit", note: `step:${current.id}` });
-      log(`修正（mock）: ${current.id}`);
-      renderTradeCaseDetail(tc);
+      if (ok && tc) renderTradeCaseDetail(tc);
       return;
     }
 
@@ -4002,7 +4091,71 @@ function setupNewTop() {
 
     const openIssueEl = target.closest && target.closest("[data-open-issue]");
     if (openIssueEl) {
+      // (legacy) keep backward compatibility
       openShipmentWorkspace(openIssueEl.getAttribute("data-open-issue") || "");
+      return;
+    }
+
+    const issueToggleEl = target.closest && target.closest("[data-issue-toggle]");
+    if (issueToggleEl) {
+      const id = issueToggleEl.getAttribute("data-issue-toggle") || "";
+      state.activeIssueId = state.activeIssueId === id ? null : id;
+      renderApp();
+      return;
+    }
+
+    const openShipmentFromIssueEl = target.closest && target.closest("[data-issue-open-shipment]");
+    if (openShipmentFromIssueEl) {
+      openShipmentWorkspace(openShipmentFromIssueEl.getAttribute("data-issue-open-shipment") || "");
+      return;
+    }
+
+    const openSiFromIssueEl = target.closest && target.closest("[data-issue-open-si]");
+    if (openSiFromIssueEl) {
+      openSiWorkspace(openSiFromIssueEl.getAttribute("data-issue-open-si") || "");
+      return;
+    }
+
+    const openCaseFromIssueEl = target.closest && target.closest("[data-issue-open-case]");
+    if (openCaseFromIssueEl) {
+      const id = openCaseFromIssueEl.getAttribute("data-issue-open-case") || "";
+      const tc = id ? getTradeCaseById(id) : null;
+      if (tc) {
+        openTradeCaseDetail(tc);
+      }
+      return;
+    }
+
+    const issueApproveEl = target.closest && target.closest("[data-issue-approve]");
+    if (issueApproveEl) {
+      const id = issueApproveEl.getAttribute("data-issue-approve") || "";
+      agentRunApproveSend(id);
+      renderApp();
+      return;
+    }
+
+    const issueHoldEl = target.closest && target.closest("[data-issue-hold]");
+    if (issueHoldEl) {
+      const id = issueHoldEl.getAttribute("data-issue-hold") || "";
+      agentRunHold(id);
+      renderApp();
+      return;
+    }
+
+    const issueEditEl = target.closest && target.closest("[data-issue-edit]");
+    if (issueEditEl) {
+      const id = issueEditEl.getAttribute("data-issue-edit") || "";
+      agentRunEdit(id);
+      renderApp();
+      return;
+    }
+
+    const issueEscalateEl = target.closest && target.closest("[data-issue-escalate]");
+    if (issueEscalateEl) {
+      const id = issueEscalateEl.getAttribute("data-issue-escalate") || "";
+      recordHumanIntervention(id, { actionType: "issueEscalate", label: "Escalate", note: "manual escalation" });
+      log(`エスカレーション（mock）: ${id}`);
+      renderApp();
       return;
     }
 
@@ -4030,6 +4183,14 @@ function setupNewTop() {
     const openIssueEl = target.closest && target.closest("[data-open-issue]");
     if (openIssueEl) {
       openShipmentWorkspace(openIssueEl.getAttribute("data-open-issue") || "");
+      return;
+    }
+
+    const issueToggleEl = target.closest && target.closest("[data-issue-toggle]");
+    if (issueToggleEl) {
+      const id = issueToggleEl.getAttribute("data-issue-toggle") || "";
+      state.activeIssueId = state.activeIssueId === id ? null : id;
+      renderApp();
       return;
     }
   });
