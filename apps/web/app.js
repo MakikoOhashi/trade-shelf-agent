@@ -568,13 +568,25 @@ function agentRunEdit(tradeCaseId) {
 function renderNewTop() {
   const tab = state.topActiveTab || "shelf";
 
-  const navHtml = `<nav class="nt-nav" aria-label="Primary">
+  const navIconByKey = {
+    shelf: "🏠",
+    issues: "⚠️",
+    requests: "💬",
+    documents: "📄",
+    settings: "⚙️",
+  };
+
+  const navHtml = `<nav class="top-nav" aria-label="Primary">
     ${newTopTabs
       .map((t) => {
         const active = t.key === tab;
-        return `<button class="nt-tab ${active ? "is-active" : ""}" type="button" data-nt-tab="${escapeHtml(
+        const icon = navIconByKey[t.key] || "•";
+        return `<button class="top-nav__item ${active ? "top-nav__item--active" : ""}" type="button" data-nt-tab="${escapeHtml(
           t.key,
-        )}" aria-current="${active ? "page" : "false"}">${escapeHtml(t.label)}</button>`;
+        )}" aria-current="${active ? "page" : "false"}">
+          <span class="top-nav__icon" aria-hidden="true">${escapeHtml(icon)}</span>
+          <span class="top-nav__label">${escapeHtml(t.label)}</span>
+        </button>`;
       })
       .join("")}
   </nav>`;
@@ -1510,10 +1522,12 @@ function renderNewTop() {
 
   return `
     <div class="new-top">
-      <header class="nt-header">
-        <div class="nt-brand">Trade Shelf Agent</div>
-        <div class="nt-actions">
-          <button class="nt-gear" type="button" data-open-ingestion="1" aria-label="Ingestion settings">⚙️ Ingestion</button>
+      <header class="top-header">
+        <div class="top-header__brand">Trade Shelf Agent</div>
+        <div class="top-header__actions">
+          <button class="top-header__action-btn" type="button" data-open-ingestion="1" aria-label="Ingestion settings" title="Ingestion settings">
+            <span class="top-header__action-icon" aria-hidden="true">⚙</span>
+          </button>
         </div>
       </header>
       ${navHtml}

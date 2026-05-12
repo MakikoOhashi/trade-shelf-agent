@@ -47,6 +47,51 @@ body {
   background: #ffffff;
 }
 
+#app .top-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 64px;
+  padding: 0 18px;
+  border-bottom: 1px solid #d0d7de;
+  background: #ffffff;
+}
+
+#app .top-header__brand {
+  font-weight: 700;
+  letter-spacing: 0.2px;
+}
+
+#app .top-header__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+#app .top-header__action-btn {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: #57606a;
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+#app .top-header__action-btn:hover {
+  background: rgba(208, 215, 222, 0.35);
+  color: #24292f;
+}
+
+#app .top-header__action-icon {
+  font-size: 16px;
+  line-height: 1;
+}
+
 #app .nt-brand {
   font-weight: 700;
   letter-spacing: 0.2px;
@@ -78,6 +123,63 @@ body {
   padding: 10px 18px;
   border-bottom: 1px solid #d0d7de;
   background: #f6f8fa;
+}
+
+#app .top-nav {
+  display: flex;
+  align-items: stretch;
+  gap: 4px;
+  padding: 0 18px;
+  height: 48px;
+  border-bottom: 1px solid #d0d7de;
+  background: #ffffff;
+}
+
+#app .top-nav__item {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: #57606a;
+  padding: 0 12px;
+  height: 48px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+#app .top-nav__item:hover {
+  background: rgba(208, 215, 222, 0.35);
+  color: #24292f;
+}
+
+#app .top-nav__item--active {
+  color: #24292f;
+  background: transparent;
+  border-bottom-color: #fd8c73;
+  border-radius: 0;
+}
+
+#app .top-nav__icon {
+  font-size: 15px;
+  line-height: 1;
+  opacity: 0.7;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transform: translateY(-0.5px);
+}
+
+#app .top-nav__item--active .top-nav__icon {
+  opacity: 1;
+}
+
+#app .top-nav__label {
+  font-weight: 600;
 }
 
 #app .nt-tab {
