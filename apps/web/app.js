@@ -183,6 +183,7 @@ function getMockEvidenceArchiveItems() {
       id: "ev-doc-inv-1122",
       type: "Document",
       title: "INV-1122 Commercial Invoice",
+      description: "Supplier invoice with quantity mismatch",
       linked: [
         { kind: "si", label: "SI-2026-001", tradeCaseId: tc1Id },
         { kind: "shipment", label: "SHP-2026-009", tradeCaseId: tc1Id },
@@ -196,9 +197,25 @@ function getMockEvidenceArchiveItems() {
       },
     },
     {
+      id: "ev-doc-archived-contract-2025",
+      type: "Document",
+      title: "Supplier Contract (2025) – Archived",
+      description: "Archived supplier contract PDF for reference",
+      linked: [],
+      source: "Workspace",
+      date: "2025-12-02",
+      tags: ["contract", "archived"],
+      archived: true,
+      preview: {
+        kind: "document",
+        body: "（mock）Archived contract preview\n- Counterparty: ACME Components\n- Term: 2025-01-01 ~ 2025-12-31\n- Notes: stored for audit/reference",
+      },
+    },
+    {
       id: "ev-email-pl-pending",
       type: "Email",
       title: "Re: PL pending for SHP-2026-009",
+      description: "Supplier says PL will be sent within 24 hours",
       linked: [{ kind: "shipment", label: "SHP-2026-009", tradeCaseId: tc1Id }],
       source: "Outlook",
       date: "2026-05-11",
@@ -215,6 +232,7 @@ function getMockEvidenceArchiveItems() {
       id: "ev-teams-sales-a",
       type: "Teams",
       title: "営業A: PLまだ？",
+      description: "Sales asks for PL ETA to reply to customer",
       linked: [{ kind: "issue", label: "ISS-0002", tradeCaseId: tc1Id }],
       source: "Teams",
       date: "2026-05-11",
@@ -230,6 +248,7 @@ function getMockEvidenceArchiveItems() {
       id: "ev-issue-0001",
       type: "Issue",
       title: "ISS-0001 INV数量差異",
+      description: "Issue tracking for invoice/SI quantity mismatch",
       linked: [{ kind: "si", label: "SI-2026-001", tradeCaseId: tc1Id }],
       source: "Issues",
       date: "2026-05-10",
@@ -240,6 +259,7 @@ function getMockEvidenceArchiveItems() {
       id: "ev-sent-supplier-confirm",
       type: "Sent log",
       title: "Supplier confirmation email sent",
+      description: "Confirmation request sent to supplier regarding mismatch",
       linked: [{ kind: "issue", label: "ISS-0001", tradeCaseId: tc1Id }],
       source: "Email (sent)",
       date: "2026-05-10",
@@ -255,6 +275,7 @@ function getMockEvidenceArchiveItems() {
       id: "ev-decision-split-shipment",
       type: "Decision log",
       title: "分納として記録し次便確認",
+      description: "Decision: record as split shipment and confirm next batch",
       linked: [{ kind: "si", label: "SI-2026-001", tradeCaseId: tc1Id }],
       source: "Decision log",
       date: "2026-05-10",
@@ -270,6 +291,7 @@ function getMockEvidenceArchiveItems() {
       id: "ev-ai-classification-split",
       type: "AI classification",
       title: "Supplier reply classified as split shipment",
+      description: "AI classified supplier reply as split shipment (confidence 0.82)",
       linked: [{ kind: "shipment", label: "SHP-2026-009", tradeCaseId: tc1Id }],
       source: "AI agent",
       date: "2026-05-10",
@@ -1243,23 +1265,26 @@ function renderNewTop() {
   </div>`;
 
   const renderDocumentsEvidenceArchive = () => {
-    const filterDefs = [
-      { key: "all", label: "All" },
-      { key: "documents", label: "Documents" },
-      { key: "emails", label: "Emails" },
-      { key: "teams", label: "Teams" },
-      { key: "issues", label: "Issues" },
-      { key: "sentLogs", label: "Sent logs" },
-      { key: "decisions", label: "Decisions" },
-      { key: "aiLogs", label: "AI logs" },
-    ];
     const evidenceItems = getMockEvidenceArchiveItems();
 
     const filterKey = state.evidenceFilterKey || "all";
     const q = String(state.evidenceSearchQuery || "").trim().toLowerCase();
 
+    const sidebarDefs = [
+      { key: "all", label: "All", icon: "🏠" },
+      { key: "documents", label: "Documents", icon: "📄" },
+      { key: "emails", label: "Emails", icon: "✉️" },
+      { key: "teams", label: "Teams", icon: "💬" },
+      { key: "issues", label: "Issues", icon: "⚠️" },
+      { key: "sentLogs", label: "Sent logs", icon: "📤" },
+      { key: "decisions", label: "Decisions", icon: "✅" },
+      { key: "aiLogs", label: "AI logs", icon: "🤖" },
+      { key: "archived", label: "Archived", icon: "🗄️" },
+    ];
+
     const matchesFilter = (item) => {
       if (!item) return false;
+      if (filterKey === "archived") return Boolean(item.archived);
       const t = String(item.type || "");
       if (filterKey === "documents") return t === "Document";
       if (filterKey === "emails") return t === "Email";
@@ -1275,25 +1300,17 @@ function renderNewTop() {
       if (!q) return true;
       const linkedText = Array.isArray(item.linked) ? item.linked.map((x) => String(x.label || "")).join(" ") : "";
       const tagText = Array.isArray(item.tags) ? item.tags.join(" ") : "";
-      const hay = `${item.type || ""} ${item.title || ""} ${linkedText} ${item.source || ""} ${item.date || ""} ${tagText}`.toLowerCase();
+      const hay = `${item.type || ""} ${item.title || ""} ${item.description || ""} ${linkedText} ${item.source || ""} ${item.date || ""} ${tagText}`.toLowerCase();
       return hay.includes(q);
     };
 
     const filtered = evidenceItems.filter((it) => matchesFilter(it) && matchesQuery(it));
 
-    const chipHtml = filterDefs
-      .map((d) => {
-        const active = String(d.key) === String(filterKey);
-        return `<button class="evidence-filter-chip ${active ? "is-active" : ""}" type="button" data-evidence-filter="${escapeHtml(
-          String(d.key),
-        )}">${escapeHtml(String(d.label))}</button>`;
-      })
-      .join("");
-
     const rowsHtml = filtered
       .map((it) => {
         const type = String(it.type || "");
         const typeSlug = type.toLowerCase().replace(/\s+/g, "-");
+        const desc = String(it.description || "").trim();
         const linkedHtml = (Array.isArray(it.linked) ? it.linked : [])
           .map((x) => {
             const label = String(x && x.label ? x.label : "");
@@ -1316,16 +1333,21 @@ function renderNewTop() {
           .map((t) => `<span class="evidence-tag">${escapeHtml(String(t))}</span>`)
           .join("");
 
+        const metaBits = [it.date ? `Updated ${String(it.date)}` : "", it.source ? String(it.source) : ""].filter(Boolean);
+        const metaText = metaBits.join(" · ");
+
         return `<div class="evidence-row" role="row" data-evidence-row="1">
-          <div class="evidence-col evidence-col--type" role="cell">
-            <span class="evidence-type-badge evidence-type-badge--${escapeHtml(typeSlug)}">${escapeHtml(type)}</span>
+          <div class="evidence-row__left" role="cell">
+            <div class="evidence-row__title">
+              <span class="evidence-row__title-text">${escapeHtml(String(it.title || "—"))}</span>
+              <span class="evidence-type-badge evidence-type-badge--${escapeHtml(typeSlug)}">${escapeHtml(type)}</span>
+            </div>
+            <div class="evidence-row__linked">${linkedHtml || `<span class="muted">—</span>`}</div>
+            ${desc ? `<div class="evidence-row__desc">${escapeHtml(desc)}</div>` : ""}
+            <div class="evidence-row__tags evidence-tags">${tagsHtml || `<span class="muted">—</span>`}</div>
+            <div class="evidence-row__meta">${escapeHtml(metaText || "")}</div>
           </div>
-          <div class="evidence-col evidence-col--title" role="cell">${escapeHtml(String(it.title || "—"))}</div>
-          <div class="evidence-col evidence-col--linked" role="cell">${linkedHtml || `<span class="muted">—</span>`}</div>
-          <div class="evidence-col evidence-col--source" role="cell">${escapeHtml(String(it.source || "—"))}</div>
-          <div class="evidence-col evidence-col--date" role="cell">${escapeHtml(String(it.date || "—"))}</div>
-          <div class="evidence-col evidence-col--tags evidence-tags" role="cell">${tagsHtml || `<span class="muted">—</span>`}</div>
-          <div class="evidence-col evidence-col--open" role="cell">
+          <div class="evidence-row__right" role="cell">
             <button class="btn btn--ghost btn--small" type="button" data-evidence-open="${escapeHtml(String(it.id || ""))}">Open</button>
           </div>
         </div>`;
@@ -1334,31 +1356,48 @@ function renderNewTop() {
 
     const emptyHtml = `<div class="evidence-empty">No evidence found.</div>`;
 
-    return `<section class="evidence-archive" aria-label="Documents Evidence Archive">
-      <div class="evidence-archive__head">
-        <div class="evidence-archive__title">Documents / Evidence Archive</div>
-        <div class="evidence-archive__desc muted">書類・メール・会話・Issue履歴・送信ログを横断的に参照します。</div>
-      </div>
-      <div class="evidence-archive__controls">
-        <div class="evidence-filters" role="toolbar" aria-label="Evidence filters">${chipHtml}</div>
-        <div class="evidence-search">
-          <input class="evidence-search__input" type="search" value="${escapeHtml(
-            String(state.evidenceSearchQuery || ""),
-          )}" placeholder="Search documents, emails, issues, shipments, SI..." data-evidence-search="1" />
-        </div>
-      </div>
+    const sidebarHtml = sidebarDefs
+      .map((d) => {
+        const active = String(d.key) === String(filterKey);
+        return `<button class="evidence-sidebar-item ${active ? "evidence-sidebar-item--active" : ""}" type="button" data-evidence-filter="${escapeHtml(
+          String(d.key),
+        )}">
+          <span class="evidence-sidebar-item__icon" aria-hidden="true">${escapeHtml(String(d.icon || ""))}</span>
+          <span class="evidence-sidebar-item__label">${escapeHtml(String(d.label || ""))}</span>
+        </button>`;
+      })
+      .join("");
 
-      <div class="evidence-table" role="table" aria-label="Evidence list">
-        <div class="evidence-row evidence-row--head" role="row">
-          <div class="evidence-col evidence-col--type" role="columnheader">Type</div>
-          <div class="evidence-col evidence-col--title" role="columnheader">Title</div>
-          <div class="evidence-col evidence-col--linked" role="columnheader">Linked entity</div>
-          <div class="evidence-col evidence-col--source" role="columnheader">Source</div>
-          <div class="evidence-col evidence-col--date" role="columnheader">Date</div>
-          <div class="evidence-col evidence-col--tags" role="columnheader">Tags</div>
-          <div class="evidence-col evidence-col--open" role="columnheader"></div>
+    const totalCount = Array.isArray(evidenceItems) ? evidenceItems.length : 0;
+
+    return `<section class="evidence-archive" aria-label="Documents Evidence Archive">
+      <div class="evidence-page-layout" aria-label="Evidence page layout">
+        <nav class="evidence-sidebar" aria-label="Evidence categories">
+          ${sidebarHtml}
+        </nav>
+        <div class="evidence-main" aria-label="Evidence main">
+          <div class="evidence-main__head">
+            <div>
+              <div class="evidence-main__title">Documents / Evidence Archive</div>
+              <div class="evidence-main__sub muted">書類・メール・Teams・Issue・送信ログ・判断ログの横断アーカイブ。</div>
+            </div>
+            <div class="evidence-main__count nt-mono">${escapeHtml(String(filtered.length))} / ${escapeHtml(String(totalCount))}</div>
+          </div>
+
+          <div class="evidence-search" aria-label="Search evidence">
+            <input class="evidence-search__input" type="search" value="${escapeHtml(
+              String(state.evidenceSearchQuery || ""),
+            )}" placeholder="Search documents, emails, issues, shipments, SI..." data-evidence-search="1" />
+          </div>
+
+          <div class="evidence-list" role="table" aria-label="Evidence list">
+            <div class="evidence-list-header" role="row">
+              <div class="evidence-list-header__left" role="columnheader">Evidence</div>
+              <div class="evidence-list-header__right" role="columnheader"></div>
+            </div>
+            ${rowsHtml || emptyHtml}
+          </div>
         </div>
-        ${rowsHtml || emptyHtml}
       </div>
     </section>`;
   };
@@ -5606,7 +5645,7 @@ function setupNewTop() {
     const evidenceFilterEl = target.closest && target.closest("[data-evidence-filter]");
     if (evidenceFilterEl) {
       const key = evidenceFilterEl.getAttribute("data-evidence-filter") || "all";
-      const allowed = ["all", "documents", "emails", "teams", "issues", "sentLogs", "decisions", "aiLogs"];
+      const allowed = ["all", "documents", "emails", "teams", "issues", "sentLogs", "decisions", "aiLogs", "archived"];
       state.evidenceFilterKey = allowed.includes(key) ? key : "all";
       renderApp();
       return;
