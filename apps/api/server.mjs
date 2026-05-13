@@ -47,6 +47,11 @@ const CLASSIFY_SYSTEM_PROMPT = [
   "- Split one message into multiple threads if it contains multiple operational requests.",
   "- Normalize SI-224 to SI-2026-224 if year is not given.",
   '- If PL is mentioned, documentTypes should include "PL".',
+  "- Keep each summary under 40 Japanese characters.",
+  "- Return at most 3 threads.",
+  "- Use short Japanese titles.",
+  "- Do not include long explanations.",
+  "- Use compact JSON.",
   "- Confidence must be a number between 0 and 1.",
   '- If unsure, use intent "unknown" and lower confidence.',
   "",
@@ -311,6 +316,8 @@ const server = http.createServer(async (req, res) => {
       const userPrompt = [
         "Classify this input:",
         rawText.trim(),
+        "",
+        "Return compact JSON only. Maximum 3 threads.",
       ].join("\n");
 
       const completion = await aiClient.chat.completions.create({
@@ -320,8 +327,11 @@ const server = http.createServer(async (req, res) => {
           { role: "user", content: userPrompt },
         ],
         temperature: 0,
-        max_tokens: 1200,
+        max_tokens: 2000,
       });
+
+      const finishReason = completion.choices?.[0]?.finish_reason;
+      console.log("LLM finish_reason:", finishReason);
 
       const content = completion.choices?.[0]?.message?.content ?? "";
       let parsed;
@@ -331,6 +341,7 @@ const server = http.createServer(async (req, res) => {
         sendJson(res, 502, {
           ok: false,
           error: "Failed to parse LLM JSON",
+          finishReason,
           raw: String(content ?? ""),
         });
         return;
