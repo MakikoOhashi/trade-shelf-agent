@@ -56,9 +56,19 @@ const state = {
   issueSeqByTradeCaseId: {},
   /**
    * New TOP (GitHub-like) active tab
-   * @type {"shelf" | "issues" | "requests" | "documents" | "settings"}
+   * @type {"shelf" | "issues" | "requests" | "activity" | "documents" | "settings"}
    */
   topActiveTab: "shelf",
+  /**
+   * Activity Feed items (mock)
+   * @type {Array<any>}
+   */
+  activityFeedItems: [],
+  /**
+   * Activity Feed filter key
+   * @type {"all" | "teams" | "email" | "aiProcessed" | "awaitingApproval" | "failed" | "supplierReply"}
+   */
+  activityFilterKey: "all",
   /**
    * Shelf view mode toggle state
    * @type {"si" | "shipments"}
@@ -105,11 +115,12 @@ const state = {
 };
 
 const newTopTabs = [
-  { key: "shelf", label: "Shelf" },
-  { key: "issues", label: "Issues（AI承認センター）" },
-  { key: "requests", label: "変更・確認依頼" },
-  { key: "documents", label: "Documents" },
-  { key: "settings", label: "Settings" },
+  { key: "shelf", label: "棚", subLabel: "Shelf" },
+  { key: "issues", label: "AI承認センター", subLabel: "Approvals" },
+  { key: "requests", label: "変更・確認依頼", subLabel: "Requests" },
+  { key: "activity", label: "活動ログ", subLabel: "Activity" },
+  { key: "documents", label: "Documents", subLabel: "" },
+  { key: "settings", label: "Settings", subLabel: "" },
 ];
 
 const shipmentStageLabels = [
@@ -591,10 +602,11 @@ function renderNewTop() {
   const tab = state.topActiveTab || "shelf";
 
   const navIconByKey = {
-    shelf: "🏠",
+    shelf: "🗂️",
     issues: "⚠️",
     requests: "💬",
-    documents: "📄",
+    activity: "📡",
+    documents: "📚",
     settings: "⚙️",
   };
 
@@ -603,11 +615,16 @@ function renderNewTop() {
       .map((t) => {
         const active = t.key === tab;
         const icon = navIconByKey[t.key] || "•";
+        const primary = String(t.label || "");
+        const sub = String(t.subLabel || "");
         return `<button class="top-nav__item ${active ? "top-nav__item--active" : ""}" type="button" data-nt-tab="${escapeHtml(
           t.key,
         )}" aria-current="${active ? "page" : "false"}">
           <span class="top-nav__icon" aria-hidden="true">${escapeHtml(icon)}</span>
-          <span class="top-nav__label">${escapeHtml(t.label)}</span>
+          <span class="top-nav__text">
+            <span class="top-nav__primary">${escapeHtml(primary)}</span>
+            ${sub ? `<span class="top-nav__sub">${escapeHtml(sub)}</span>` : ""}
+          </span>
         </button>`;
       })
       .join("")}
@@ -1402,6 +1419,189 @@ function renderNewTop() {
     </section>`;
   };
 
+  const renderActivityFeedPage = () => {
+    const filterKey = state.activityFilterKey || "all";
+    const itemsRaw = Array.isArray(state.activityFeedItems) ? state.activityFeedItems.filter(Boolean) : [];
+    const items = itemsRaw
+      .slice()
+      .sort((a, b) => String(b?.at || "").localeCompare(String(a?.at || "")));
+
+    const filterDefs = [
+      { key: "all", label: "All" },
+      { key: "teams", label: "Teams" },
+      { key: "email", label: "Email" },
+      { key: "aiProcessed", label: "AI processed" },
+      { key: "awaitingApproval", label: "Awaiting approval" },
+      { key: "failed", label: "Failed" },
+      { key: "supplierReply", label: "Supplier reply" },
+    ];
+
+    const matchesFilter = (it) => {
+      const src = String(it?.source || "").toLowerCase();
+      const t = String(it?.type || "").toLowerCase();
+      const status = String(it?.statusKey || "").toLowerCase();
+      if (filterKey === "teams") return src === "teams";
+      if (filterKey === "email") return src === "email";
+      if (filterKey === "aiProcessed") return t === "aiprocessed" || t === "issueupdated" || t === "issueresolved";
+      if (filterKey === "awaitingApproval") return status === "awaitingapproval" || status === "waitingapproval";
+      if (filterKey === "failed") return status === "failed" || t === "failedprocessing";
+      if (filterKey === "supplierReply") return t === "supplierreply";
+      return true;
+    };
+
+    const filtered = items.filter(matchesFilter);
+
+    const statusDotClass = (it) => {
+      const k = String(it?.statusKey || "").toLowerCase();
+      if (k === "success") return "is-success";
+      if (k === "warning") return "is-warning";
+      if (k === "failed") return "is-failed";
+      if (k === "processing") return "is-processing";
+      if (k === "awaitingapproval" || k === "waitingapproval") return "is-warning";
+      return "is-processing";
+    };
+
+    const renderLinks = (it) => {
+      const links = Array.isArray(it?.links) ? it.links.filter(Boolean) : [];
+      if (!links.length) return "";
+      const html = links
+        .map((l) => {
+          const label = String(l.label || "Open");
+          const href = String(l.href || "").trim() || "#";
+          return `<a class="activity-link" href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">${escapeHtml(label)}</a>`;
+        })
+        .join("");
+      return `<div class="activity-links" aria-label="Actions">${html}</div>`;
+    };
+
+    const renderLinked = (it) => {
+      const linked = Array.isArray(it?.linked) ? it.linked.filter(Boolean) : [];
+      if (!linked.length) return "";
+      const chips = linked
+        .map((x) => `<span class="activity-chip">${escapeHtml(String(x.label || x.kind || ""))}</span>`)
+        .join("");
+      return `<div class="activity-linked" aria-label="Linked">${chips}</div>`;
+    };
+
+    const renderItem = (it) => {
+      const title = String(it?.title || "");
+      const actor = String(it?.actor || "");
+      const at = String(it?.at || "");
+      const summary = String(it?.summary || "");
+      const details = Array.isArray(it?.details) ? it.details.filter(Boolean) : [];
+      const detailsHtml = details.length
+        ? `<ul class="activity-details">${details.map((d) => `<li>${escapeHtml(String(d))}</li>`).join("")}</ul>`
+        : "";
+
+      return `<article class="activity-item" aria-label="Activity item">
+        <div class="activity-tl" aria-hidden="true">
+          <div class="activity-line"></div>
+          <div class="activity-dot ${escapeHtml(statusDotClass(it))}"></div>
+        </div>
+        <div class="activity-card">
+          <div class="activity-meta">
+            <div class="activity-meta__left">
+              <span class="activity-kind">${escapeHtml(title || "-")}</span>
+              ${actor ? `<span class="activity-actor">${escapeHtml(actor)}</span>` : ""}
+            </div>
+            <div class="activity-meta__right">${escapeHtml(at)}</div>
+          </div>
+          ${summary ? `<div class="activity-summary">${escapeHtml(summary)}</div>` : ""}
+          ${detailsHtml}
+          ${renderLinked(it)}
+          ${renderLinks(it)}
+        </div>
+      </article>`;
+    };
+
+    const filterBarHtml = `<div class="activity-filterbar" role="toolbar" aria-label="Filters">
+      ${filterDefs
+        .map((d) => {
+          const active = String(d.key) === String(filterKey);
+          return `<button class="activity-filter ${active ? "is-active" : ""}" type="button" data-activity-filter="${escapeHtml(
+            String(d.key),
+          )}" aria-pressed="${active ? "true" : "false"}">${escapeHtml(String(d.label))}</button>`;
+        })
+        .join("")}
+    </div>`;
+
+    const feedHtml = filtered.length
+      ? filtered.map(renderItem).join("")
+      : `<div class="activity-empty nt-muted">No activities.</div>`;
+
+    const headerHtml = `<header class="activity-head" aria-label="Feed header">
+      <div class="activity-head__title">活動ログ</div>
+      <div class="activity-head__sub nt-muted">AI・Teams・メールの処理ログを時系列で監視します。</div>
+    </header>`;
+
+    const queueCounts = (() => {
+      let awaitingClassification = 0;
+      let awaitingApproval = 0;
+      let failedProcessing = 0;
+      for (const it of items) {
+        const s = String(it?.statusKey || "").toLowerCase();
+        const t = String(it?.type || "").toLowerCase();
+        if (s === "awaitingclassification") awaitingClassification++;
+        if (s === "awaitingapproval" || s === "waitingapproval") awaitingApproval++;
+        if (s === "failed" || t === "failedprocessing") failedProcessing++;
+      }
+      return { awaitingClassification, awaitingApproval, failedProcessing };
+    })();
+
+    const railHtml = `<aside class="activity-rail" aria-label="System rail">
+      <section class="activity-rail__section" aria-label="AI Queue">
+        <div class="activity-rail__h">AI Queue</div>
+        <div class="activity-rail__kv"><span class="k">awaiting classification</span><span class="v nt-mono">${escapeHtml(
+          String(queueCounts.awaitingClassification),
+        )}</span></div>
+        <div class="activity-rail__kv"><span class="k">awaiting approval</span><span class="v nt-mono">${escapeHtml(
+          String(queueCounts.awaitingApproval),
+        )}</span></div>
+        <div class="activity-rail__kv"><span class="k">failed processing</span><span class="v nt-mono">${escapeHtml(
+          String(queueCounts.failedProcessing),
+        )}</span></div>
+      </section>
+
+      <section class="activity-rail__section" aria-label="Recent escalations">
+        <div class="activity-rail__h">Recent escalations</div>
+        <ul class="activity-rail__list">
+          <li>ETA changed</li>
+          <li>INV mismatch</li>
+          <li>PL missing</li>
+        </ul>
+      </section>
+
+      <section class="activity-rail__section" aria-label="Supplier waiting replies">
+        <div class="activity-rail__h">Supplier waiting replies</div>
+        <ul class="activity-rail__list">
+          <li>ACME Components</li>
+          <li>Orion Plastics</li>
+        </ul>
+      </section>
+
+      <section class="activity-rail__section" aria-label="Unlinked inputs">
+        <div class="activity-rail__h">Unlinked inputs</div>
+        <div class="nt-muted">AIが紐付けできなかったもの。</div>
+        <ul class="activity-rail__list">
+          <li>unknown shipment reference</li>
+          <li>unreadable attachment</li>
+        </ul>
+        <button class="btn btn--small" type="button" data-activity-attach-manual="1">Attach manually</button>
+      </section>
+    </aside>`;
+
+    return `<section class="activity-page" aria-label="Activity Feed page">
+      <div class="activity-layout" aria-label="Activity layout">
+        <div class="activity-feed" aria-label="Feed">
+          ${headerHtml}
+          ${filterBarHtml}
+          <div class="activity-stream" aria-label="Activity stream">${feedHtml}</div>
+        </div>
+        ${railHtml}
+      </div>
+    </section>`;
+  };
+
   const renderRequests = () => {
     const list = Array.isArray(state.rawRequests) ? state.rawRequests.filter(Boolean) : [];
     const activeRawId = state.activeRawRequestId || (list[0] && list[0].id) || null;
@@ -1555,6 +1755,8 @@ function renderNewTop() {
         ? renderIssues()
         : tab === "requests"
           ? renderRequests()
+          : tab === "activity"
+            ? renderActivityFeedPage()
         : tab === "documents"
           ? renderDocumentsEvidenceArchive()
           : renderPlaceholder("Settings");
@@ -5281,6 +5483,7 @@ function seed() {
   state.issueSeqByTradeCaseId = {};
   for (let i = 0; i < sortedIds.length; i++) state.issueSeqByTradeCaseId[sortedIds[i]] = i + 1;
   seedRequestsMock();
+  seedActivityFeedMock();
   renderApp();
 }
 
@@ -5386,6 +5589,132 @@ function seedRequestsMock() {
   state.activeOperationalThreadId = t11;
 }
 
+function seedActivityFeedMock() {
+  const findTcByShipmentId = (shipmentId) =>
+    (Array.isArray(state.tradeCases) ? state.tradeCases : []).find((c) => c && c.shipmentEntity && String(c.shipmentEntity.id) === String(shipmentId)) || null;
+
+  const findTcBySiNo = (siNo) =>
+    (Array.isArray(state.tradeCases) ? state.tradeCases : []).find((c) => c && c.siEntity && String(c.siEntity.siNo) === String(siNo)) || null;
+
+  const issueNoForCase = (tcId) => {
+    const n = state.issueSeqByTradeCaseId && typeof state.issueSeqByTradeCaseId[tcId] === "number" ? state.issueSeqByTradeCaseId[tcId] : null;
+    const nn = typeof n === "number" && Number.isFinite(n) ? n : 0;
+    return `ISS-${String(Math.max(0, nn)).padStart(4, "0")}`;
+  };
+
+  const tcShipment = findTcByShipmentId("SHP-2026-009");
+  const tcId = tcShipment?.id || findTcBySiNo("SI-2026-001")?.id || "";
+  const issueNo = tcId ? issueNoForCase(tcId) : "ISS-0002";
+
+  state.activityFeedItems = [
+    {
+      id: `act-${shortId()}`,
+      type: "teamsReceived",
+      source: "teams",
+      title: "Teams received",
+      actor: "営業A",
+      at: "2026-05-12 13:40",
+      summary: "「PLまだ？あとSI-224も確認して」",
+      details: ["AI classified: PL未着確認 / SI-224確認", `Linked: Issue ${issueNo} / Shipment SHP-2026-009`, "Status: waiting approval"],
+      statusKey: "awaitingApproval",
+      linked: [
+        { kind: "issue", label: issueNo },
+        { kind: "shipment", label: "SHP-2026-009" },
+      ],
+      links: [
+        { label: "Open Issue", href: `/#issues/${encodeURIComponent(issueNo)}` },
+        { label: "Open Shipment", href: `/#shipments/SHP-2026-009` },
+        { label: "Open SI Workspace", href: `/#si/SI-2026-001` },
+        { label: "Retry classify", href: `/#retry/classify/${encodeURIComponent(issueNo)}` },
+      ],
+    },
+    {
+      id: `act-${shortId()}`,
+      type: "emailReceived",
+      source: "email",
+      title: "Email received",
+      actor: "supplier@acme.com",
+      at: "2026-05-12 14:12",
+      summary: "Attached: PL.pdf",
+      details: ["AI processed: Packing List recognized", "Updated: Shipment SHP-2026-009", `Issue ${issueNo} resolved candidate`],
+      statusKey: "processing",
+      linked: [
+        { kind: "shipment", label: "SHP-2026-009" },
+        { kind: "issue", label: issueNo },
+      ],
+      links: [
+        { label: "Open Shipment", href: `/#shipments/SHP-2026-009` },
+        { label: "Open Issue", href: `/#issues/${encodeURIComponent(issueNo)}` },
+      ],
+    },
+    {
+      id: `act-${shortId()}`,
+      type: "aiProcessed",
+      source: "ai",
+      title: "AI processed",
+      actor: "trade-shelf-agent",
+      at: "2026-05-12 14:13",
+      summary: "PL.pdf parsed → document status updated",
+      details: ["Confidence: 0.94", "Extraction: cartons / gross weight / HS codes (mock)"],
+      statusKey: "success",
+      linked: [{ kind: "shipment", label: "SHP-2026-009" }],
+      links: [{ label: "Open Shipment", href: `/#shipments/SHP-2026-009` }],
+    },
+    {
+      id: `act-${shortId()}`,
+      type: "issueUpdated",
+      source: "ai",
+      title: "Issue updated",
+      actor: "trade-shelf-agent",
+      at: "2026-05-12 14:14",
+      summary: `${issueNo} status: blocked → review`,
+      details: ["Proposed: mark resolved if PL matches SI/INV (mock)"],
+      statusKey: "warning",
+      linked: [{ kind: "issue", label: issueNo }],
+      links: [{ label: "Open Issue", href: `/#issues/${encodeURIComponent(issueNo)}` }],
+    },
+    {
+      id: `act-${shortId()}`,
+      type: "escalation",
+      source: "system",
+      title: "Escalation detected",
+      actor: "system",
+      at: "2026-05-12 15:02",
+      summary: "ETA changed on SHP-2026-009",
+      details: ["Old ETA: 2026-05-20 → New ETA: 2026-05-23 (mock)"],
+      statusKey: "warning",
+      linked: [{ kind: "shipment", label: "SHP-2026-009" }],
+      links: [{ label: "Open Shipment", href: `/#shipments/SHP-2026-009` }],
+    },
+    {
+      id: `act-${shortId()}`,
+      type: "supplierReply",
+      source: "email",
+      title: "Supplier reply",
+      actor: "sales@acme-components.example",
+      at: "2026-05-12 16:18",
+      summary: "Re: INV mismatch — will reissue invoice today",
+      details: ["Attachment: INV-1122-rev.pdf (mock)"],
+      statusKey: "success",
+      linked: [{ kind: "issue", label: issueNo }],
+      links: [{ label: "Open Issue", href: `/#issues/${encodeURIComponent(issueNo)}` }],
+    },
+    {
+      id: `act-${shortId()}`,
+      type: "failedProcessing",
+      source: "ai",
+      title: "Failed processing",
+      actor: "trade-shelf-agent",
+      at: "2026-05-12 17:05",
+      summary: "Attachment unreadable (mock)",
+      details: ["Reason: PDF corrupted", "Action: retry OCR / request resend"],
+      statusKey: "failed",
+      linked: [],
+      links: [{ label: "Retry classify", href: `/#retry/ocr/${shortId()}` }],
+    },
+  ];
+}
+
 function decomposeRawRequestMock(text) {
   const t = String(text || "").trim();
   const out = [];
@@ -5449,6 +5778,20 @@ function setupNewTop() {
         if (key !== "requests") state.isOperationalThreadModalOpen = false;
         renderApp();
       }
+      return;
+    }
+
+    const actFilterEl = target.closest && target.closest("[data-activity-filter]");
+    if (actFilterEl) {
+      const key = actFilterEl.getAttribute("data-activity-filter") || "all";
+      state.activityFilterKey = key || "all";
+      renderApp();
+      return;
+    }
+
+    const actAttachEl = target.closest && target.closest("[data-activity-attach-manual]");
+    if (actAttachEl) {
+      window.alert("(mock) Open manual attach flow.");
       return;
     }
 

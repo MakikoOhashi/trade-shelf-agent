@@ -636,3 +636,67 @@ export type IncidentLog = {
   proposalId?: string;
   interventionId?: string;
 };
+
+  // 共通RawInputを定義
+
+export type InputSource = "teams" | "email" | "attachment";
+
+export type RawInputStatus =
+  | "received"
+  | "classified"
+  | "linked"
+  | "failed";
+
+export type RawInput = {
+  id: string;
+  source: InputSource;
+  receivedAt: string;
+  senderName?: string;
+  senderEmail?: string;
+  channel?: string;
+  subject?: string;
+  rawText: string;
+  attachmentNames?: string[];
+  status: RawInputStatus;
+};
+
+// AI後の中間モデルを作る
+export type OperationalThread = {
+  id: string;
+  rawInputId: string;
+  title: string;
+  intent:
+    | "missing_document_check"
+    | "eta_change"
+    | "quantity_mismatch"
+    | "shipment_status_check"
+    | "air_change_check"
+    | "unknown";
+  summary: string;
+  extractedEntities: {
+    siIds?: string[];
+    shipmentIds?: string[];
+    invoiceIds?: string[];
+    supplierNames?: string[];
+    documentTypes?: string[];
+  };
+  confidence: number;
+};
+
+  // EntityLinkを作る
+export type EntityType =
+  | "SI"
+  | "Shipment"
+  | "Issue"
+  | "Document"
+  | "Supplier";
+
+
+export type EntityLink = {
+  id: string;
+  threadId: string;
+  entityType: EntityType;
+  entityId: string;
+  confidence: number;
+  reason: string;
+};
