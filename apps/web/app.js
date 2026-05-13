@@ -35,6 +35,11 @@ const state = {
    */
   ingestInputText: "",
   /**
+   * Classification mode toggle (Requests page)
+   * @type {"mock" | "llm"}
+   */
+  classifyMode: "llm",
+  /**
    * Mock ingest loading state (Requests page)
    * @type {boolean}
    */
@@ -209,8 +214,15 @@ function closeIngestionModal() {
   modal.setAttribute("aria-hidden", "true");
 }
 
+function fetchWithTimeout(url, options, timeoutMs = 20000) {
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), timeoutMs);
+  const opts = { ...(options || {}), signal: controller.signal };
+  return fetch(url, opts).finally(() => window.clearTimeout(timer));
+}
+
 async function submitMockIngest(rawText) {
-  const response = await fetch(`${API_BASE_URL}/ingest/mock`, {
+  const response = await fetchWithTimeout(`${API_BASE_URL}/ingest/mock`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -227,6 +239,128 @@ async function submitMockIngest(rawText) {
   }
 
   return response.json();
+}
+
+async function submitRealClassify(rawText) {
+  const response = await fetchWithTimeout(`${API_BASE_URL}/ai/classify`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      rawText,
+    }),
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(text || `LLM classify failed: ${response.status}`);
+  }
+
+  return response.json();
+}
+
+function transformThreadsToActivityEvents(threads) {
+  const list = Array.isArray(threads) ? threads.filter(Boolean) : [];
+  const occurredAt = nowIso();
+  const titles = list.map((t) => String(t?.title || "").trim()).filter(Boolean);
+
+  /** @type {Array<any>} */
+  const out = [];
+
+  out.push({
+    id: `act-${shortId()}`,
+    occurredAt,
+    type: "classified",
+    title: `LLM classified ${list.length} operational thread(s)`,
+    description: titles.slice(0, 6).join(" / "),
+    status: "ok",
+  });
+
+  for (const t of list) {
+    const extracted = t?.extractedEntities && typeof t.extractedEntities === "object" ? t.extractedEntities : {};
+    const linkedEntities = [];
+
+    const pushEntities = (entityType, ids) => {
+      const arr = Array.isArray(ids) ? ids : [];
+      for (const v of arr) {
+        const entityId = String(v ?? "").trim();
+        if (!entityId) continue;
+        linkedEntities.push({
+          entityType,
+          entityId,
+          confidence: typeof t?.confidence === "number" ? t.confidence : undefined,
+        });
+      }
+    };
+
+    pushEntities("si", extracted.siIds);
+    pushEntities("shipment", extracted.shipmentIds);
+    pushEntities("invoice", extracted.invoiceIds);
+    pushEntities("supplier", extracted.supplierNames);
+    pushEntities("document", extracted.documentTypes);
+
+    if (linkedEntities.length) {
+      out.push({
+        id: `act-${shortId()}`,
+        occurredAt,
+        type: "entity_linked",
+        title: "Linked entities from LLM classification",
+        description: String(t?.title || ""),
+        status: "ok",
+        linkedEntities,
+      });
+    }
+
+    out.push({
+      id: `act-${shortId()}`,
+      occurredAt,
+      type: "approval_required",
+      title: "Approval required",
+      description: `Review LLM thread: ${String(t?.title || "Untitled")}`,
+      status: "warning",
+    });
+  }
+
+  return out;
+}
+
+function transformThreadsToIssueMutations(threads, rawText) {
+  const list = Array.isArray(threads) ? threads.filter(Boolean) : [];
+  const raw = String(rawText || "").trim();
+
+  return list.map((t) => {
+    const id = String(t?.id || "").trim();
+    const confidence = typeof t?.confidence === "number" ? t.confidence : null;
+    const extracted = t?.extractedEntities && typeof t.extractedEntities === "object" ? t.extractedEntities : {};
+
+    const lines = [
+      `Summary: ${String(t?.summary || "").trim() || "-"}`,
+      `Intent: ${String(t?.intent || "").trim() || "-"}`,
+      `Confidence: ${typeof confidence === "number" && Number.isFinite(confidence) ? confidence.toFixed(2) : "-"}`,
+    ];
+
+    const pushList = (label, arr) => {
+      const a = Array.isArray(arr) ? arr.map((v) => String(v ?? "").trim()).filter(Boolean) : [];
+      if (!a.length) return;
+      lines.push(`${label}: ${a.join(", ")}`);
+    };
+
+    pushList("Entities(SI)", extracted.siIds);
+    pushList("Entities(Shipment)", extracted.shipmentIds);
+    pushList("Entities(Invoice)", extracted.invoiceIds);
+    pushList("Entities(Supplier)", extracted.supplierNames);
+    pushList("Entities(Document)", extracted.documentTypes);
+
+    if (raw) lines.push(`Raw: ${raw}`);
+
+    return {
+      issueId: `LLM-${id || shortId()}`,
+      action: "mark_approval_required",
+      title: String(t?.title || "Untitled"),
+      body: lines.join("\n"),
+    };
+  });
 }
 
 function prependUniqueById(existing, incoming) {
@@ -1878,6 +2012,49 @@ function renderNewTop() {
     const ingestEvents = Array.isArray(ingestResult?.activityEvents) ? ingestResult.activityEvents.filter(Boolean) : [];
     const ingestMutations = Array.isArray(ingestResult?.issueMutations) ? ingestResult.issueMutations.filter(Boolean) : [];
 
+    const isLlmResult = ingestResult && ingestResult.mode === "llm";
+    const llmThreads = isLlmResult ? ingestThreads : [];
+
+    const llmResultHtml = isLlmResult
+      ? `<div class="ingest-result__llm" aria-label="LLM result">
+          <div class="ingest-result__llm-head">
+            <div class="ingest-result__h">LLM Result</div>
+            <span class="req-pill req-pill--llm">LLM (Kimi)</span>
+          </div>
+          <div class="ingest-result__llm-sub muted">${escapeHtml(String(llmThreads.length))} operational threads detected</div>
+          <div class="ingest-result__llm-list">
+            ${llmThreads
+              .map((t) => {
+                const intent = String(t?.intent || "unknown");
+                const title = String(t?.title || "Untitled");
+                const confidence = typeof t?.confidence === "number" ? t.confidence : null;
+                const cfText = typeof confidence === "number" && Number.isFinite(confidence) ? confidence.toFixed(2) : "-";
+                const extracted = t?.extractedEntities && typeof t.extractedEntities === "object" ? t.extractedEntities : {};
+                const entities = [];
+                const push = (label, values) => {
+                  const arr = Array.isArray(values) ? values.map((v) => String(v ?? "").trim()).filter(Boolean) : [];
+                  if (!arr.length) return;
+                  entities.push(`<div class="ingest-entity"><span class="k">${escapeHtml(label)}</span><span class="v">${escapeHtml(arr.join(", "))}</span></div>`);
+                };
+                push("SI", extracted.siIds);
+                push("Shipment", extracted.shipmentIds);
+                push("Invoice", extracted.invoiceIds);
+                push("Supplier", extracted.supplierNames);
+                push("Doc", extracted.documentTypes);
+                return `<div class="ingest-llm-thread">
+                  <div class="ingest-llm-thread__top">
+                    <span class="ingest-llm-thread__intent nt-mono">[${escapeHtml(intent)}]</span>
+                    <span class="ingest-llm-thread__title">${escapeHtml(title)}</span>
+                    <span class="ingest-llm-thread__cf nt-mono">${escapeHtml(cfText)}</span>
+                  </div>
+                  ${entities.length ? `<div class="ingest-llm-thread__entities">${entities.join("")}</div>` : `<div class="nt-muted">Entities: (none)</div>`}
+                </div>`;
+              })
+              .join("")}
+          </div>
+        </div>`
+      : "";
+
     const ingestSummaryHtml = ingestResult
       ? `<div class="ingest-result" aria-label="Latest ingest result">
           <div class="ingest-result__stats">
@@ -1886,6 +2063,7 @@ function renderNewTop() {
             <div><span class="k">ActivityEvents</span><span class="v nt-mono">${escapeHtml(String(ingestEvents.length))}</span></div>
             <div><span class="k">IssueMutations</span><span class="v nt-mono">${escapeHtml(String(ingestMutations.length))}</span></div>
           </div>
+          ${llmResultHtml}
           ${
             ingestThreads.length
               ? `<div class="ingest-result__threads">
@@ -1910,15 +2088,32 @@ function renderNewTop() {
           <div class="ingest-form__title">変更・確認依頼を取り込む</div>
           <div class="ingest-form__sub muted">Teamsやメールで来る雑な依頼を、AIが業務単位に分解してIssueとActivityへ反映します。</div>
         </div>
+        <div class="classification-mode-switch" aria-label="Classification Mode">
+          <div class="classification-mode-switch__label">Classification Mode</div>
+          <div class="classification-mode-switch__controls" role="tablist" aria-label="Classification Mode">
+            <button class="mode-chip ${state.classifyMode === "mock" ? "is-active" : ""}" type="button" data-classify-mode="mock" ${
+              state.ingestLoading ? "disabled" : ""
+            }>Mock</button>
+            <button class="mode-chip ${state.classifyMode === "llm" ? "is-active" : ""}" type="button" data-classify-mode="llm" ${
+              state.ingestLoading ? "disabled" : ""
+            }>LLM (Kimi)</button>
+          </div>
+        </div>
         <textarea class="ingest-textarea" rows="3" placeholder="PLまだ？あとSI-224も確認して" data-ingest-input="1">${escapeHtml(
           String(state.ingestInputText || ""),
         )}</textarea>
         <div class="ingest-form__actions">
           <button class="btn btn--primary" type="button" data-ingest-submit="1" ${
             state.ingestLoading ? "disabled" : ""
-          }>mock ingest 実行</button>
+          }>${state.classifyMode === "mock" ? "mock ingest 実行" : "LLM classify 実行"}</button>
           <button class="btn btn--ghost" type="button" data-ingest-sample="1" ${state.ingestLoading ? "disabled" : ""}>サンプルを入れる</button>
-          ${state.ingestLoading ? `<span class="ingest-loading nt-muted">loading...</span>` : ""}
+          ${
+            state.ingestLoading
+              ? state.classifyMode === "llm"
+                ? `<span class="ingest-loading nt-muted"><span class="spinner" aria-hidden="true"></span>Kimi classifying operational threads...</span>`
+                : `<span class="ingest-loading nt-muted">loading...</span>`
+              : ""
+          }
         </div>
         ${state.ingestError ? `<div class="ingest-error">${escapeHtml(String(state.ingestError))}</div>` : ""}
         ${ingestSummaryHtml}
@@ -5969,6 +6164,15 @@ function setupNewTop() {
     const target = e.target;
     if (!target) return;
 
+    const classifyModeEl = target.closest && target.closest("[data-classify-mode]");
+    if (classifyModeEl) {
+      if (state.ingestLoading) return;
+      const next = classifyModeEl.getAttribute("data-classify-mode") || "llm";
+      state.classifyMode = next === "mock" ? "mock" : "llm";
+      renderApp();
+      return;
+    }
+
     const tabEl = target.closest && target.closest("[data-nt-tab]");
     if (tabEl) {
       const key = tabEl.getAttribute("data-nt-tab") || "";
@@ -6047,11 +6251,32 @@ function setupNewTop() {
 
       (async () => {
         try {
-          const payload = await submitMockIngest(rawText);
-          if (payload && payload.ok === false) {
-            throw new Error(payload.error || "Mock ingest failed");
+          let result = null;
+
+          if (state.classifyMode === "mock") {
+            const payload = await submitMockIngest(rawText);
+            if (payload && payload.ok === false) {
+              throw new Error(payload.error || "Mock ingest failed");
+            }
+            result = payload && payload.result ? payload.result : payload;
+          } else {
+            const payload = await submitRealClassify(rawText);
+            if (payload && payload.ok === false) {
+              throw new Error(payload.error || "LLM classify failed");
+            }
+            const threads = Array.isArray(payload?.threads) ? payload.threads : [];
+            const activityEvents = transformThreadsToActivityEvents(threads);
+            const issueMutations = transformThreadsToIssueMutations(threads, rawText);
+            result = {
+              mode: "llm",
+              rawText,
+              threads,
+              links: [],
+              activityEvents,
+              issueMutations,
+            };
           }
-          const result = payload && payload.result ? payload.result : payload;
+
           state.latestIngestResult = result || null;
 
           const events = Array.isArray(result?.activityEvents) ? result.activityEvents.filter(Boolean) : [];
@@ -6068,7 +6293,7 @@ function setupNewTop() {
           }));
           state.issueMutationItems = prependUniqueById(state.issueMutationItems, mutations);
         } catch (e) {
-          state.ingestError = e && e.message ? String(e.message) : "Mock ingest failed";
+          state.ingestError = e && e.message ? String(e.message) : state.classifyMode === "llm" ? "LLM classify failed" : "Mock ingest failed";
         } finally {
           state.ingestLoading = false;
           renderApp();
