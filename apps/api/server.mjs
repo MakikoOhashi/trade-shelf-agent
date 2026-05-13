@@ -15,6 +15,56 @@ const aiClient = new OpenAI({
   apiKey: process.env.AZURE_OPENAI_API_KEY,
 });
 
+const CLASSIFY_SYSTEM_PROMPT = [
+  "You are an operations classification engine for international trade operations.",
+  "Convert messy Teams or email messages into OperationalThread JSON.",
+  "Return JSON only. No markdown. No explanation.",
+  "",
+  "Intent values must be one of:",
+  "- missing_document_check",
+  "- eta_change",
+  "- quantity_mismatch",
+  "- shipment_status_check",
+  "- air_change_check",
+  "- unknown",
+  "",
+  "Each thread must have:",
+  "- id",
+  "- title",
+  "- intent",
+  "- summary",
+  "- extractedEntities",
+  "- confidence",
+  "",
+  "extractedEntities may include:",
+  "- siIds",
+  "- shipmentIds",
+  "- invoiceIds",
+  "- supplierNames",
+  "- documentTypes",
+  "",
+  "Rules:",
+  "- Split one message into multiple threads if it contains multiple operational requests.",
+  "- Normalize SI-224 to SI-2026-224 if year is not given.",
+  '- If PL is mentioned, documentTypes should include "PL".',
+  "- Confidence must be a number between 0 and 1.",
+  '- If unsure, use intent "unknown" and lower confidence.',
+  "",
+  "Return only:",
+  "{",
+  '  "threads": [...]',
+  "}",
+].join("\n");
+
+const CLASSIFY_INTENTS = new Set([
+  "missing_document_check",
+  "eta_change",
+  "quantity_mismatch",
+  "shipment_status_check",
+  "air_change_check",
+  "unknown",
+]);
+
 function sendJson(res, statusCode, payload) {
   const body = JSON.stringify(payload, null, 2);
   res.writeHead(statusCode, {
@@ -56,6 +106,100 @@ function contentTypeFor(filePath) {
   if (ext === ".png") return "image/png";
   if (ext === ".svg") return "image/svg+xml; charset=utf-8";
   return "application/octet-stream";
+}
+
+function normalizeSiId(siId, now = new Date()) {
+  const raw = String(siId || "").trim();
+  if (!raw) return "";
+
+  // Allow already-normalized values like SI-2026-224.
+  const normalizedMatch = raw.match(/^SI-(\d{4})-(\d+)$/i);
+  if (normalizedMatch) {
+    const year = normalizedMatch[1];
+    const num = normalizedMatch[2];
+    return `SI-${year}-${num}`;
+  }
+
+  // Normalize SI-224 -> SI-YYYY-224 (current year).
+  const simpleMatch = raw.match(/^SI-(\d+)$/i);
+  if (simpleMatch) {
+    const year = String(now.getFullYear());
+    return `SI-${year}-${simpleMatch[1]}`;
+  }
+
+  return raw;
+}
+
+function toStringArray(value) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => String(item ?? "").trim())
+    .filter((item) => item.length > 0);
+}
+
+function clamp01(n) {
+  if (!Number.isFinite(n)) return 0.3;
+  if (n < 0) return 0;
+  if (n > 1) return 1;
+  return n;
+}
+
+function normalizeThreads(parsed, rawText) {
+  const threads = Array.isArray(parsed?.threads) ? parsed.threads : null;
+  if (!threads) return null;
+
+  const now = new Date();
+  const raw = String(rawText || "");
+  const rawHasPL = /\bPL\b/i.test(raw);
+  const rawSiIds = Array.from(raw.matchAll(/\bSI-(\d{1,6})\b/gi)).map((m) =>
+    normalizeSiId(m[0], now),
+  );
+
+  return threads.map((t, index) => {
+    const id =
+      typeof t?.id === "string" && t.id.trim()
+        ? t.id.trim()
+        : `llm-thread-${index + 1}`;
+
+    const title = typeof t?.title === "string" ? t.title.trim() : "";
+    const summary = typeof t?.summary === "string" ? t.summary.trim() : "";
+
+    const intentRaw = typeof t?.intent === "string" ? t.intent.trim() : "";
+    const intent = CLASSIFY_INTENTS.has(intentRaw) ? intentRaw : "unknown";
+
+    const extracted = t?.extractedEntities && typeof t.extractedEntities === "object"
+      ? t.extractedEntities
+      : {};
+
+    const siIds = toStringArray(extracted.siIds).map((v) =>
+      normalizeSiId(v, now),
+    );
+    const shipmentIds = toStringArray(extracted.shipmentIds);
+    const invoiceIds = toStringArray(extracted.invoiceIds);
+    const supplierNames = toStringArray(extracted.supplierNames);
+    const documentTypes = toStringArray(extracted.documentTypes);
+
+    // Light heuristics to improve reliability for smoke tests.
+    if (rawSiIds.length && siIds.length === 0) siIds.push(...rawSiIds);
+    if (rawHasPL && !documentTypes.includes("PL")) documentTypes.push("PL");
+
+    const confidence = clamp01(Number(t?.confidence));
+
+    return {
+      id,
+      title: title || "Untitled",
+      intent,
+      summary: summary || "No summary provided",
+      extractedEntities: {
+        siIds,
+        shipmentIds,
+        invoiceIds,
+        supplierNames,
+        documentTypes,
+      },
+      confidence,
+    };
+  });
 }
 
 async function serveStatic(req, res) {
@@ -151,6 +295,62 @@ const server = http.createServer(async (req, res) => {
       return;
     } catch (e) {
       sendJson(res, 400, { ok: false, error: "invalid request body" });
+      return;
+    }
+  }
+
+  if (method === "POST" && reqUrl.pathname === "/ai/classify") {
+    try {
+      const body = await readJsonBody(req);
+      const rawText = typeof body.rawText === "string" ? body.rawText : "";
+      if (!rawText.trim()) {
+        sendJson(res, 400, { ok: false, error: "rawText is required" });
+        return;
+      }
+
+      const userPrompt = [
+        "Classify this input:",
+        rawText.trim(),
+      ].join("\n");
+
+      const completion = await aiClient.chat.completions.create({
+        model: process.env.AZURE_OPENAI_DEPLOYMENT,
+        messages: [
+          { role: "system", content: CLASSIFY_SYSTEM_PROMPT },
+          { role: "user", content: userPrompt },
+        ],
+        temperature: 0,
+        max_tokens: 1200,
+      });
+
+      const content = completion.choices?.[0]?.message?.content ?? "";
+      let parsed;
+      try {
+        parsed = JSON.parse(content);
+      } catch {
+        sendJson(res, 502, {
+          ok: false,
+          error: "Failed to parse LLM JSON",
+          raw: String(content ?? ""),
+        });
+        return;
+      }
+
+      const normalized = normalizeThreads(parsed, rawText);
+      if (!normalized) {
+        sendJson(res, 502, {
+          ok: false,
+          error: "Invalid LLM response shape",
+          raw: String(content ?? ""),
+        });
+        return;
+      }
+
+      sendJson(res, 200, { ok: true, threads: normalized });
+      return;
+    } catch (error) {
+      console.error(error);
+      sendJson(res, 500, { ok: false, error: String(error) });
       return;
     }
   }
