@@ -700,3 +700,36 @@ export type EntityLink = {
   confidence: number;
   reason: string;
 };
+
+export type ActivityEventType =
+  | "raw_input_received"
+  | "classified"
+  | "entity_linked"
+  | "issue_updated"
+  | "approval_required"
+  | "failed_processing";
+
+export type ActivityEvent = {
+  id: string;
+  type: ActivityEventType;
+  occurredAt: string;
+  title: string;
+  description?: string;
+  sourceRawInputId?: string;
+  threadId?: string;
+  linkedEntities?: EntityLink[];
+  status: "ok" | "warning" | "failed";
+};
+
+export type MockIngestResult = {
+  rawInput: RawInput;
+  threads: OperationalThread[];
+  links: EntityLink[];
+  activityEvents: ActivityEvent[];
+  issueMutations: {
+    issueId: string;
+    action: "append_comment" | "create_issue_candidate" | "mark_approval_required";
+    title: string;
+    body: string;
+  }[];
+};

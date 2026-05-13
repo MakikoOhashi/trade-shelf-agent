@@ -9,11 +9,15 @@ const ts = await import(path.join(pkgRoot, "node_modules", "typescript", "lib", 
 
 const srcMockTradeCasesPath = path.join(pkgRoot, "src", "mockTradeCases.ts");
 const srcIncidentPath = path.join(pkgRoot, "src", "incident.ts");
+const srcIngestPath = path.join(pkgRoot, "src", "ingest.ts");
+const srcMockInputsPath = path.join(pkgRoot, "src", "mockInputs.ts");
 const outPath = path.resolve(pkgRoot, "..", "..", "apps", "web", "vendor", "shared", "index.js");
 
-const [mockTradeCasesSource, incidentSource] = await Promise.all([
+const [mockTradeCasesSource, incidentSource, ingestSource, mockInputsSource] = await Promise.all([
   fs.readFile(srcMockTradeCasesPath, "utf8"),
   fs.readFile(srcIncidentPath, "utf8"),
+  fs.readFile(srcIngestPath, "utf8"),
+  fs.readFile(srcMockInputsPath, "utf8"),
 ]);
 
 const compilerOptions = {
@@ -38,11 +42,34 @@ const incidentResult = ts.transpileModule(incidentSource, {
   },
 });
 
-const banner = `// Generated from packages/shared/src/{mockTradeCases.ts,incident.ts}\n// Run: (cd packages/shared && npm run build:web-vendor)\n\n`;
+const ingestResult = ts.transpileModule(ingestSource, {
+  fileName: "ingest.ts",
+  compilerOptions: {
+    ...compilerOptions,
+  },
+});
+
+const mockInputsResult = ts.transpileModule(mockInputsSource, {
+  fileName: "mockInputs.ts",
+  compilerOptions: {
+    ...compilerOptions,
+  },
+});
+
+const banner = `// Generated from packages/shared/src/{mockTradeCases.ts,incident.ts,ingest.ts,mockInputs.ts}\n// Run: (cd packages/shared && npm run build:web-vendor)\n\n`;
 await fs.mkdir(path.dirname(outPath), { recursive: true });
 await fs.writeFile(
   outPath,
-  banner + mockTradeCasesResult.outputText.trimStart() + "\n\n" + incidentResult.outputText.trimStart(),
+  [
+    banner,
+    mockTradeCasesResult.outputText.trimStart(),
+    "",
+    incidentResult.outputText.trimStart(),
+    "",
+    ingestResult.outputText.trimStart(),
+    "",
+    mockInputsResult.outputText.trimStart(),
+  ].join("\n"),
   "utf8",
 );
 
