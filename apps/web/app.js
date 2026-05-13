@@ -77,6 +77,11 @@ const state = {
    */
   activeIssueId: null,
   /**
+   * AI承認センターで開いている LLM mutation detail の id
+   * @type {string | null}
+   */
+  activeMutationId: null,
+  /**
    * tradeCaseId -> sequential issue number (1-based)
    * @type {Record<string, number>}
    */
@@ -438,6 +443,171 @@ function transformThreadsToIssueMutations(threads, rawText) {
       body: lines.join("\n"),
     };
   });
+}
+
+function parseIssueMutationBody(body) {
+  const text = String(body || "");
+  const lines = text.split(/\r?\n/);
+  const out = {
+    summary: "",
+    intent: "",
+    confidence: null,
+    rawText: "",
+    entities: [],
+  };
+
+  for (const line of lines) {
+    const s = String(line || "");
+    if (s.startsWith("Summary:")) out.summary = s.replace(/^Summary:\s*/, "").trim();
+    if (s.startsWith("Intent:")) out.intent = s.replace(/^Intent:\s*/, "").trim();
+    if (s.startsWith("Confidence:")) {
+      const v = s.replace(/^Confidence:\s*/, "").trim();
+      const n = Number(v);
+      out.confidence = Number.isFinite(n) ? n : null;
+    }
+    if (s.startsWith("Raw:")) out.rawText = s.replace(/^Raw:\s*/, "").trim();
+    const m = s.match(/^Entities\((.+?)\):\s*(.+)\s*$/);
+    if (m) {
+      const entityType = String(m[1] || "").trim();
+      const ids = String(m[2] || "")
+        .split(",")
+        .map((x) => x.trim())
+        .filter(Boolean);
+      for (const entityId of ids) out.entities.push({ entityType, entityId });
+    }
+  }
+
+  return out;
+}
+
+function classifyLabelJaFromIntent(intent) {
+  const v = String(intent || "").trim();
+  const norm = v.toLowerCase();
+  if (!norm) return "-";
+  if (norm.includes("missing_document") || norm.includes("missing-document") || norm.includes("document_missing")) return "書類未着確認";
+  if (norm.includes("invoice") && norm.includes("mismatch")) return "インボイス不一致確認";
+  if (norm.includes("eta") || norm.includes("schedule")) return "スケジュール確認";
+  if (norm.includes("delivery")) return "納期リスク確認";
+  return v;
+}
+
+function confidenceLabelJa(confidence) {
+  const c = typeof confidence === "number" && Number.isFinite(confidence) ? confidence : null;
+  if (c === null) return "-";
+  if (c >= 0.9) return `高（${c.toFixed(2)}）`;
+  if (c >= 0.75) return `中（${c.toFixed(2)}）`;
+  return `低（${c.toFixed(2)}）`;
+}
+
+function summarizeEntitiesJa(entities) {
+  const list = Array.isArray(entities) ? entities.filter(Boolean) : [];
+  if (!list.length) return "-";
+  const byType = new Map();
+  for (const e of list) {
+    const t = String(e?.entityType || "").trim();
+    const id = String(e?.entityId || "").trim();
+    if (!t || !id) continue;
+    const arr = byType.get(t) || [];
+    arr.push(id);
+    byType.set(t, arr);
+  }
+  const parts = [];
+  for (const [t, ids] of byType.entries()) {
+    const uniq = [...new Set(ids)].filter(Boolean);
+    if (!uniq.length) continue;
+    const label = formatEntityType(t);
+    parts.push(`${label} ${uniq.join(", ")}`.trim());
+  }
+  return parts.length ? parts.join(" / ") : "-";
+}
+
+function buildDraftBodyFromMutation(mutation) {
+  const title = String(mutation?.title || "").trim();
+  const parsed = parseIssueMutationBody(String(mutation?.body || ""));
+  const classification = classifyLabelJaFromIntent(parsed.intent) || "確認";
+  const entitiesText = summarizeEntitiesJa(parsed.entities);
+
+  const lines = [];
+  if (entitiesText && entitiesText !== "-") lines.push(`${entitiesText} について、${classification}のため状況をご確認ください。`);
+  else lines.push(`${classification}のため、状況をご確認ください。`);
+  if (title) lines.push(`件名: ${title}`);
+  lines.push("");
+  lines.push("可能であれば、以下をご連絡ください。");
+  lines.push("- 現状（未着 / 発行済 / 再発行中 など）");
+  lines.push("- 予定日（未発行の場合）");
+  lines.push("- 関連書類や参照番号（あれば）");
+  return lines.join("\n");
+}
+
+function buildIssueLikeFromMutation(mutation) {
+  const parsed = parseIssueMutationBody(String(mutation?.body || ""));
+  const classification = classifyLabelJaFromIntent(parsed.intent);
+  const entitiesText = summarizeEntitiesJa(parsed.entities);
+  const confidenceText = confidenceLabelJa(parsed.confidence);
+  const rawText = parsed.rawText || "-";
+
+  const title = String(mutation?.title || "Untitled");
+  const issueNo = String(mutation?.issueId || "LLM");
+  const now = nowIso();
+
+  return {
+    id: String(mutation?.id || issueNo),
+    issueNo,
+    title,
+    severity: "medium",
+    statusKey: "requiresApproval",
+    statusText: "requires approval",
+    currentStatus: {
+      status: "人間承認待ち",
+      pendingApproval: true,
+      nextAction: "AI提案内容の確認",
+      aiProposal: parsed.summary || title,
+      classification,
+      entitiesText,
+      confidenceText,
+      source: "Kimi AI分類",
+    },
+    timeline: [
+      {
+        id: `raw:${issueNo}`,
+        at: now,
+        type: "rawInputReceived",
+        label: "依頼を受信",
+        actor: "requester",
+        message: `元の依頼: ${rawText}`,
+      },
+      {
+        id: `ai:${issueNo}`,
+        at: now,
+        type: "aiClassified",
+        label: "AIが業務スレッドへ分類",
+        actor: "trade-shelf-agent",
+        message: `分類: ${classification}\n信頼度: ${confidenceText}\nsource: Kimi AI分類`,
+      },
+      {
+        id: `ent:${issueNo}`,
+        at: now,
+        type: "entityLinked",
+        label: "関連エンティティへ紐付け",
+        actor: "trade-shelf-agent",
+        message: `関連エンティティ: ${entitiesText}`,
+      },
+      {
+        id: `draft:${issueNo}`,
+        at: now,
+        type: "draftProposal",
+        label: "Draft proposal",
+        actor: "trade-shelf-agent",
+        message: "AIが次に必要な確認アクションを作成しました。承認してください。",
+      },
+    ],
+    draft: {
+      channel: "email",
+      to: ["ops@example.com"],
+      subject: `Confirmation required: ${title}`,
+      body: buildDraftBodyFromMutation(mutation),
+    },
+  };
 }
 
 function prependUniqueById(existing, incoming) {
@@ -1339,19 +1509,33 @@ function renderNewTop() {
           const issueId = String(m?.issueId || "");
           const action = String(m?.action || "");
           const title = String(m?.title || "");
-          const body = String(m?.body || "");
-          return `<div class="pending-mutations__item">
+          const parsed = parseIssueMutationBody(String(m?.body || ""));
+          const classification = classifyLabelJaFromIntent(parsed.intent);
+          const entitiesText = summarizeEntitiesJa(parsed.entities);
+          const confText = confidenceLabelJa(parsed.confidence);
+
+          return `<div class="pending-mutations__item" role="button" tabindex="0" data-mutation-open="${escapeHtml(String(m?.id || ""))}">
             <div class="pending-mutations__top">
-              <span class="pending-mutations__issue nt-mono">${escapeHtml(issueId || "-")}</span>
-              <span class="pending-mutations__action">${escapeHtml(actionLabel(action))}</span>
+              <div class="pending-mutations__title-row">
+                <div class="pending-mutations__title">${escapeHtml(title || "-")}</div>
+                <span class="issue-pill is-approval">承認待ち</span>
+              </div>
+              <div class="pending-mutations__sub">
+                <span class="issue-pill nt-mono">#${escapeHtml(issueId || "-")}</span>
+                <span class="issue-pill">${escapeHtml(actionLabel(action))}</span>
+              </div>
             </div>
-            <div class="pending-mutations__title">${escapeHtml(title || "-")}</div>
-            ${body ? `<pre class="pending-mutations__body">${escapeHtml(body)}</pre>` : ""}
+            <div class="pending-mutations__meta">
+              <span class="issue-pill">${escapeHtml(`分類: ${classification || "-"}`)}</span>
+              <span class="issue-pill">${escapeHtml(`関連: ${entitiesText || "-"}`)}</span>
+              <span class="issue-pill">${escapeHtml(`信頼度: ${confText || "-"}`)}</span>
+              <span class="issue-pill is-source">${escapeHtml("source: Kimi AI分類")}</span>
+            </div>
           </div>`;
         })
         .join("");
       return `<section class="pending-mutations" aria-label="Pending AI mutations">
-        <div class="pending-mutations__h">Pending AI mutations</div>
+        <div class="pending-mutations__h">AIからの確認・対応候補</div>
         ${rows}
       </section>`;
     };
@@ -1369,7 +1553,11 @@ function renderNewTop() {
           return String(a?.issueNo || "").localeCompare(String(b?.issueNo || ""));
         });
       const body = sorted.length ? sorted.map(issueRow).join("") : `<div class="nt-muted">No items</div>`;
-      return `<section class="issue-list" aria-label="Issues list">${renderPendingMutations()}${body}</section>`;
+      return `<section class="issue-list" aria-label="Issues list">
+        ${renderPendingMutations()}
+        <div class="issue-list__section-title">既存Issue</div>
+        ${body}
+      </section>`;
     };
 
     const renderTimelineItem = (item) => {
@@ -1391,7 +1579,98 @@ function renderNewTop() {
       </div>`;
     };
 
-	    const renderIssueDetail = (tradeCaseId) => {
+    const renderMutationDetail = (mutationId) => {
+      const mut =
+        pendingMutations.find((x) => x && String(x.id) === String(mutationId)) ||
+        (Array.isArray(state.issueMutationItems) ? state.issueMutationItems.find((x) => x && String(x.id) === String(mutationId)) : null) ||
+        null;
+      if (!mut) return `<div class="nt-muted">LLM候補が見つかりませんでした。</div>`;
+
+      const issueLike = buildIssueLikeFromMutation(mut);
+      const sev = String(issueLike.severity || "low").toLowerCase();
+      const sevClass = sev === "critical" || sev === "high" ? "is-high" : sev === "medium" ? "is-medium" : "is-low";
+
+      const statusText = issueLike.statusText || "requires approval";
+      const cs = issueLike.currentStatus || {};
+
+      const currentStatusHtml = `<section class="issue-current-status ${sevClass}" aria-label="Current Status">
+        <div class="issue-current-title">Current Status</div>
+        <div class="issue-current-rows">
+          <div class="issue-current-row"><span class="k">ステータス</span><span class="v">${escapeHtml(String(cs.status || "人間承認待ち"))}</span></div>
+          <div class="issue-current-row issue-current-row--pending"><span class="k">承認待ち</span><span class="v">${escapeHtml(String(cs.nextAction || "AI提案内容の確認"))}</span></div>
+          <div class="issue-current-row"><span class="k">AI提案</span><span class="v">${escapeHtml(String(cs.aiProposal || "-"))}</span></div>
+        </div>
+        <div class="issue-current-actions" aria-label="Next actions">
+          <button class="btn btn--primary btn--small" type="button" data-mutation-approve="${escapeHtml(String(issueLike.id))}">Approve</button>
+          <button class="btn btn--small" type="button" data-mutation-edit="${escapeHtml(String(issueLike.id))}">Edit draft</button>
+          <button class="btn btn--small" type="button" data-mutation-hold="${escapeHtml(String(issueLike.id))}">Hold</button>
+        </div>
+      </section>`;
+
+      const emailDraftHtml = `<div class="issue-email-draft">
+        <div class="kv">
+          <span class="muted">channel</span> ${escapeHtml(String(issueLike.draft?.channel || "-"))}
+          <span class="muted">to</span> ${escapeHtml((issueLike.draft?.to || []).join(", ") || "-")}
+          ${issueLike.draft?.subject ? `<span class="muted">subject</span> ${escapeHtml(String(issueLike.draft.subject))}` : ""}
+        </div>
+        <pre class="pre pre--compact">${escapeHtml(String(issueLike.draft?.body || ""))}</pre>
+        <div class="issue-actions">
+          <button class="btn btn--primary btn--small" type="button" data-mutation-approve="${escapeHtml(String(issueLike.id))}">Approve send</button>
+          <button class="btn btn--small" type="button" data-mutation-edit="${escapeHtml(String(issueLike.id))}">Edit draft</button>
+          <button class="btn btn--small" type="button" data-mutation-hold="${escapeHtml(String(issueLike.id))}">Hold</button>
+        </div>
+      </div>`;
+
+      const timeline = Array.isArray(issueLike.timeline) ? issueLike.timeline.slice() : [];
+      const draftAt = timeline.length ? String(timeline[timeline.length - 1]?.at || nowIso()) : nowIso();
+      timeline.push({
+        id: `email:${issueLike.issueNo}`,
+        at: draftAt,
+        type: "emailDraft",
+        label: "Email draft",
+        actor: "trade-shelf-agent",
+        bodyHtml: emailDraftHtml,
+      });
+
+      timeline.sort((a, b) => String(a?.at || "").localeCompare(String(b?.at || "")));
+      const timelineHtml = timeline.length ? timeline.map(renderTimelineItem).join("") : `<div class="nt-muted">No timeline yet</div>`;
+
+      const metaPanelHtml = `<aside class="issue-meta-panel issue-meta-panel--sticky" aria-label="Meta Panel">
+        <div class="issue-sidebar-row"><div class="issue-sidebar__k">分類</div><div class="issue-sidebar__v">${escapeHtml(String(cs.classification || "-"))}</div></div>
+        <div class="issue-sidebar-row"><div class="issue-sidebar__k">関連エンティティ</div><div class="issue-sidebar__v">${escapeHtml(String(cs.entitiesText || "-"))}</div></div>
+        <div class="issue-sidebar-row"><div class="issue-sidebar__k">信頼度</div><div class="issue-sidebar__v">${escapeHtml(String(cs.confidenceText || "-"))}</div></div>
+        <div class="issue-sidebar-row"><div class="issue-sidebar__k">source</div><div class="issue-sidebar__v">${escapeHtml(String(cs.source || "Kimi AI分類"))}</div></div>
+      </aside>`;
+
+      return `<section class="issue-detail" aria-label="LLM mutation detail">
+        <div class="issue-detail-layout" aria-label="Issue detail layout">
+          <div class="issue-main-column" aria-label="Issue conversation">
+            <div class="issue-detail__top">
+              <button class="btn btn--small btn--ghost" type="button" data-mutation-back="1">← Back</button>
+              <div class="issue-detail__title">
+                <div class="issue-detail__h">${escapeHtml(issueLike.title)}</div>
+                <div class="issue-detail__sub">
+                  <span class="issue-pill nt-mono">#${escapeHtml(issueLike.issueNo)}</span>
+                  <span class="issue-pill ${sevClass}">${escapeHtml(sev.toUpperCase())}</span>
+                  <span class="issue-pill">${escapeHtml(statusText)}</span>
+                </div>
+              </div>
+            </div>
+            ${currentStatusHtml}
+            <section class="detail-section issue-timeline-section" aria-label="Timeline">
+              <h3 class="detail-section__title">Timeline / 対応履歴</h3>
+              <div class="nt-muted">古い順に記録。現在の対応は上部の Current Status を確認。</div>
+              <div class="issue-timeline">${timelineHtml}</div>
+            </section>
+          </div>
+          <div class="issue-sidebar-column" aria-label="Issue sidebar">
+            ${metaPanelHtml}
+          </div>
+        </div>
+      </section>`;
+    };
+
+    const renderIssueDetail = (tradeCaseId) => {
 	      const tc = tradeCaseId ? getTradeCaseById(tradeCaseId) : null;
 	      const it = issues.find((x) => x && x.tradeCaseId === tradeCaseId) || null;
 	      if (!tc || !it) return `<div class="nt-muted">Issue not found</div>`;
@@ -1638,6 +1917,7 @@ function renderNewTop() {
     };
 
     if (state.activeIssueId) return renderIssueDetail(state.activeIssueId);
+    if (state.activeMutationId) return renderMutationDetail(state.activeMutationId);
     return renderIssueList();
   };
 
@@ -6269,7 +6549,10 @@ function setupNewTop() {
       const key = tabEl.getAttribute("data-nt-tab") || "";
       if (newTopTabs.some((t) => t.key === key)) {
         state.topActiveTab = key;
-        if (key !== "issues") state.activeIssueId = null;
+        if (key !== "issues") {
+          state.activeIssueId = null;
+          state.activeMutationId = null;
+        }
         if (key !== "requests") state.isOperationalThreadModalOpen = false;
         renderApp();
       }
@@ -6459,6 +6742,7 @@ function setupNewTop() {
     if (issueOpenEl) {
       const id = issueOpenEl.getAttribute("data-issue-open") || "";
       state.activeIssueId = id || null;
+      state.activeMutationId = null;
       renderApp();
       return;
     }
@@ -6467,6 +6751,46 @@ function setupNewTop() {
     if (issueBackEl) {
       state.activeIssueId = null;
       renderApp();
+      return;
+    }
+
+    const mutationOpenEl = target.closest && target.closest("[data-mutation-open]");
+    if (mutationOpenEl) {
+      const id = mutationOpenEl.getAttribute("data-mutation-open") || "";
+      state.activeMutationId = id || null;
+      state.activeIssueId = null;
+      renderApp();
+      return;
+    }
+
+    const mutationBackEl = target.closest && target.closest("[data-mutation-back]");
+    if (mutationBackEl) {
+      state.activeMutationId = null;
+      renderApp();
+      return;
+    }
+
+    const mutationApproveEl = target.closest && target.closest("[data-mutation-approve]");
+    if (mutationApproveEl) {
+      const id = mutationApproveEl.getAttribute("data-mutation-approve") || "";
+      log(`(mock) mutation approved: ${id}`);
+      window.alert("(mock) Approve clicked. 次Stepで Activity に approved を追加します。");
+      return;
+    }
+
+    const mutationHoldEl = target.closest && target.closest("[data-mutation-hold]");
+    if (mutationHoldEl) {
+      const id = mutationHoldEl.getAttribute("data-mutation-hold") || "";
+      log(`(mock) mutation held: ${id}`);
+      window.alert("(mock) Hold clicked.");
+      return;
+    }
+
+    const mutationEditEl = target.closest && target.closest("[data-mutation-edit]");
+    if (mutationEditEl) {
+      const id = mutationEditEl.getAttribute("data-mutation-edit") || "";
+      log(`(mock) mutation edit draft: ${id}`);
+      window.alert("(mock) Edit draft clicked.");
       return;
     }
 
@@ -6672,6 +6996,16 @@ function setupNewTop() {
     if (issueOpenEl) {
       const id = issueOpenEl.getAttribute("data-issue-open") || "";
       state.activeIssueId = id || null;
+      state.activeMutationId = null;
+      renderApp();
+      return;
+    }
+
+    const mutationOpenEl = target.closest && target.closest("[data-mutation-open]");
+    if (mutationOpenEl) {
+      const id = mutationOpenEl.getAttribute("data-mutation-open") || "";
+      state.activeMutationId = id || null;
+      state.activeIssueId = null;
       renderApp();
       return;
     }
