@@ -260,6 +260,92 @@ async function submitRealClassify(rawText) {
   return response.json();
 }
 
+function buildEntityLinksFromThread(thread) {
+  const t = thread && typeof thread === "object" ? thread : {};
+  const threadId = String(t.id || "").trim() || `thr-${shortId()}`;
+  const confidence = typeof t.confidence === "number" ? t.confidence : 0.3;
+  const entities = t.extractedEntities && typeof t.extractedEntities === "object" ? t.extractedEntities : {};
+
+  /** @type {Array<any>} */
+  const links = [];
+
+  for (const siId of entities.siIds || []) {
+    const v = String(siId ?? "").trim();
+    if (!v) continue;
+    links.push({
+      id: `llm-link-${threadId}-si-${v}`,
+      threadId,
+      entityType: "SI",
+      entityId: v,
+      confidence,
+      reason: "AIが依頼文からSI番号を抽出",
+    });
+  }
+
+  for (const shipmentId of entities.shipmentIds || []) {
+    const v = String(shipmentId ?? "").trim();
+    if (!v) continue;
+    links.push({
+      id: `llm-link-${threadId}-shipment-${v}`,
+      threadId,
+      entityType: "Shipment",
+      entityId: v,
+      confidence,
+      reason: "AIが依頼文からShipment番号を抽出",
+    });
+  }
+
+  for (const supplierName of entities.supplierNames || []) {
+    const v = String(supplierName ?? "").trim();
+    if (!v) continue;
+    links.push({
+      id: `llm-link-${threadId}-supplier-${v}`,
+      threadId,
+      entityType: "Supplier",
+      entityId: v,
+      confidence,
+      reason: "AIが依頼文からSupplier名を抽出",
+    });
+  }
+
+  for (const documentType of entities.documentTypes || []) {
+    const v = String(documentType ?? "").trim();
+    if (!v) continue;
+    links.push({
+      id: `llm-link-${threadId}-document-${v}`,
+      threadId,
+      entityType: "Document",
+      entityId: v,
+      confidence,
+      reason: "AIが依頼文から書類種別を抽出",
+    });
+  }
+
+  return links;
+}
+
+function buildEntityLinksFromThreads(threads) {
+  const list = Array.isArray(threads) ? threads.filter(Boolean) : [];
+  return list.flatMap(buildEntityLinksFromThread);
+}
+
+function formatEntityType(type) {
+  const t = String(type || "");
+  const map = {
+    si: "SI",
+    SI: "SI",
+    document: "Document",
+    Document: "Document",
+    shipment: "Shipment",
+    Shipment: "Shipment",
+    supplier: "Supplier",
+    Supplier: "Supplier",
+    Issue: "Issue",
+    issue: "Issue",
+  };
+  return map[t] || map[t.toLowerCase()] || t;
+}
+
 function transformThreadsToActivityEvents(threads) {
   const list = Array.isArray(threads) ? threads.filter(Boolean) : [];
   const occurredAt = nowIso();
@@ -272,43 +358,30 @@ function transformThreadsToActivityEvents(threads) {
     id: `act-${shortId()}`,
     occurredAt,
     type: "classified",
-    title: `LLM classified ${list.length} operational thread(s)`,
+    title: `${list.length}件の業務スレッドを検出`,
     description: titles.slice(0, 6).join(" / "),
     status: "ok",
+    actor: "Kimi AI分類",
   });
 
   for (const t of list) {
-    const extracted = t?.extractedEntities && typeof t.extractedEntities === "object" ? t.extractedEntities : {};
-    const linkedEntities = [];
-
-    const pushEntities = (entityType, ids) => {
-      const arr = Array.isArray(ids) ? ids : [];
-      for (const v of arr) {
-        const entityId = String(v ?? "").trim();
-        if (!entityId) continue;
-        linkedEntities.push({
-          entityType,
-          entityId,
-          confidence: typeof t?.confidence === "number" ? t.confidence : undefined,
-        });
-      }
-    };
-
-    pushEntities("si", extracted.siIds);
-    pushEntities("shipment", extracted.shipmentIds);
-    pushEntities("invoice", extracted.invoiceIds);
-    pushEntities("supplier", extracted.supplierNames);
-    pushEntities("document", extracted.documentTypes);
+    const links = buildEntityLinksFromThread(t);
+    const linkedEntities = links.map((l) => ({
+      entityType: l.entityType,
+      entityId: l.entityId,
+      confidence: l.confidence,
+    }));
 
     if (linkedEntities.length) {
       out.push({
         id: `act-${shortId()}`,
         occurredAt,
         type: "entity_linked",
-        title: "Linked entities from LLM classification",
+        title: "紐付け先を抽出",
         description: String(t?.title || ""),
         status: "ok",
         linkedEntities,
+        actor: "Kimi AI分類",
       });
     }
 
@@ -316,9 +389,10 @@ function transformThreadsToActivityEvents(threads) {
       id: `act-${shortId()}`,
       occurredAt,
       type: "approval_required",
-      title: "Approval required",
+      title: "承認が必要",
       description: `Review LLM thread: ${String(t?.title || "Untitled")}`,
       status: "warning",
+      actor: "Kimi AI分類",
     });
   }
 
@@ -332,7 +406,7 @@ function transformThreadsToIssueMutations(threads, rawText) {
   return list.map((t) => {
     const id = String(t?.id || "").trim();
     const confidence = typeof t?.confidence === "number" ? t.confidence : null;
-    const extracted = t?.extractedEntities && typeof t.extractedEntities === "object" ? t.extractedEntities : {};
+    const links = buildEntityLinksFromThread(t);
 
     const lines = [
       `Summary: ${String(t?.summary || "").trim() || "-"}`,
@@ -340,17 +414,20 @@ function transformThreadsToIssueMutations(threads, rawText) {
       `Confidence: ${typeof confidence === "number" && Number.isFinite(confidence) ? confidence.toFixed(2) : "-"}`,
     ];
 
-    const pushList = (label, arr) => {
-      const a = Array.isArray(arr) ? arr.map((v) => String(v ?? "").trim()).filter(Boolean) : [];
-      if (!a.length) return;
-      lines.push(`${label}: ${a.join(", ")}`);
-    };
-
-    pushList("Entities(SI)", extracted.siIds);
-    pushList("Entities(Shipment)", extracted.shipmentIds);
-    pushList("Entities(Invoice)", extracted.invoiceIds);
-    pushList("Entities(Supplier)", extracted.supplierNames);
-    pushList("Entities(Document)", extracted.documentTypes);
+    if (links.length) {
+      const grouped = new Map();
+      for (const l of links) {
+        const k = formatEntityType(l.entityType);
+        const arr = grouped.get(k) || [];
+        arr.push(String(l.entityId));
+        grouped.set(k, arr);
+      }
+      for (const [k, arr] of grouped.entries()) {
+        const uniq = [...new Set(arr)].filter(Boolean);
+        if (!uniq.length) continue;
+        lines.push(`Entities(${k}): ${uniq.join(", ")}`);
+      }
+    }
 
     if (raw) lines.push(`Raw: ${raw}`);
 
@@ -397,14 +474,14 @@ function activityEventToFeedItem(ev) {
   const linkedEntities = Array.isArray(ev?.linkedEntities) ? ev.linkedEntities.filter(Boolean) : [];
 
   const linked = linkedEntities.map((l) => ({
-    kind: String(l?.entityType || ""),
-    label: `${String(l?.entityType || "")} ${String(l?.entityId || "")}`.trim(),
+    kind: String(l?.entityType || "").toLowerCase(),
+    label: `${formatEntityType(String(l?.entityType || ""))} ${String(l?.entityId || "")}`.trim(),
   }));
 
   const linkedText = linkedEntities.length
     ? `Linked: ${linkedEntities
         .map((l) => {
-          const et = String(l?.entityType || "");
+          const et = formatEntityType(String(l?.entityType || ""));
           const eid = String(l?.entityId || "");
           const cf = typeof l?.confidence === "number" ? l.confidence : null;
           const cfText = typeof cf === "number" && Number.isFinite(cf) ? ` (${cf.toFixed(2)})` : "";
@@ -425,7 +502,7 @@ function activityEventToFeedItem(ev) {
     type,
     source: "ai",
     title,
-    actor: "mock ingest",
+    actor: String(ev?.actor || "") || "mock ingest",
     at,
     summary: description || title,
     details,
@@ -2008,20 +2085,34 @@ function renderNewTop() {
 
     const ingestResult = state.latestIngestResult;
     const ingestThreads = Array.isArray(ingestResult?.threads) ? ingestResult.threads.filter(Boolean) : [];
-    const ingestLinks = Array.isArray(ingestResult?.links) ? ingestResult.links.filter(Boolean) : [];
+    const rawIngestLinks = Array.isArray(ingestResult?.links) ? ingestResult.links.filter(Boolean) : [];
     const ingestEvents = Array.isArray(ingestResult?.activityEvents) ? ingestResult.activityEvents.filter(Boolean) : [];
     const ingestMutations = Array.isArray(ingestResult?.issueMutations) ? ingestResult.issueMutations.filter(Boolean) : [];
 
     const isLlmResult = ingestResult && ingestResult.mode === "llm";
     const llmThreads = isLlmResult ? ingestThreads : [];
+    const ingestLinks = isLlmResult ? buildEntityLinksFromThreads(ingestThreads) : rawIngestLinks;
+
+    const intentLabel = (intent) => {
+      const v = String(intent || "");
+      const map = {
+        missing_document_check: "書類未着確認",
+        shipment_status_check: "出荷状況確認",
+        quantity_mismatch: "数量・金額差異",
+        eta_change: "ETA変更",
+        air_change_check: "AIR変更確認",
+        unknown: "要確認",
+      };
+      return map[v] || v || "-";
+    };
 
     const llmResultHtml = isLlmResult
       ? `<div class="ingest-result__llm" aria-label="LLM result">
           <div class="ingest-result__llm-head">
-            <div class="ingest-result__h">LLM Result</div>
-            <span class="req-pill req-pill--llm">LLM (Kimi)</span>
+            <div class="ingest-result__h">AI分類結果</div>
+            <span class="req-pill req-pill--llm">KimiによるAI分類</span>
           </div>
-          <div class="ingest-result__llm-sub muted">${escapeHtml(String(llmThreads.length))} operational threads detected</div>
+          <div class="ingest-result__llm-sub muted">${escapeHtml(String(llmThreads.length))}件の業務スレッドを検出</div>
           <div class="ingest-result__llm-list">
             ${llmThreads
               .map((t) => {
@@ -2043,11 +2134,11 @@ function renderNewTop() {
                 push("Doc", extracted.documentTypes);
                 return `<div class="ingest-llm-thread">
                   <div class="ingest-llm-thread__top">
-                    <span class="ingest-llm-thread__intent nt-mono">[${escapeHtml(intent)}]</span>
+                    <span class="ingest-llm-thread__intent nt-mono">[${escapeHtml(intentLabel(intent))}]</span>
                     <span class="ingest-llm-thread__title">${escapeHtml(title)}</span>
                     <span class="ingest-llm-thread__cf nt-mono">${escapeHtml(cfText)}</span>
                   </div>
-                  ${entities.length ? `<div class="ingest-llm-thread__entities">${entities.join("")}</div>` : `<div class="nt-muted">Entities: (none)</div>`}
+                  ${entities.length ? `<div class="ingest-llm-thread__entities">${entities.join("")}</div>` : `<div class="nt-muted">紐付け先: （なし）</div>`}
                 </div>`;
               })
               .join("")}
@@ -2058,16 +2149,16 @@ function renderNewTop() {
     const ingestSummaryHtml = ingestResult
       ? `<div class="ingest-result" aria-label="Latest ingest result">
           <div class="ingest-result__stats">
-            <div><span class="k">OperationalThreads</span><span class="v nt-mono">${escapeHtml(String(ingestThreads.length))}</span></div>
-            <div><span class="k">EntityLinks</span><span class="v nt-mono">${escapeHtml(String(ingestLinks.length))}</span></div>
-            <div><span class="k">ActivityEvents</span><span class="v nt-mono">${escapeHtml(String(ingestEvents.length))}</span></div>
-            <div><span class="k">IssueMutations</span><span class="v nt-mono">${escapeHtml(String(ingestMutations.length))}</span></div>
+            <div><span class="k">業務スレッド</span><span class="v nt-mono">${escapeHtml(String(ingestThreads.length))}</span></div>
+            <div><span class="k">紐付け先</span><span class="v nt-mono">${escapeHtml(String(ingestLinks.length))}</span></div>
+            <div><span class="k">活動ログ</span><span class="v nt-mono">${escapeHtml(String(ingestEvents.length))}</span></div>
+            <div><span class="k">Issue更新候補</span><span class="v nt-mono">${escapeHtml(String(ingestMutations.length))}</span></div>
           </div>
           ${llmResultHtml}
           ${
             ingestThreads.length
               ? `<div class="ingest-result__threads">
-                  <div class="ingest-result__h">Threads</div>
+                  <div class="ingest-result__h">スレッド</div>
                   <ul class="ingest-result__list">${ingestThreads
                     .map((t) => `<li>${escapeHtml(String(t?.title || t?.id || "Thread"))}</li>`)
                     .join("")}</ul>
@@ -2083,20 +2174,20 @@ function renderNewTop() {
         <div class="req-title__sub">TeamsやWebからの雑な依頼を、AIが業務単位へ整理します。</div>
       </div>
 
-      <div class="ingest-form" aria-label="Mock ingest form">
-        <div class="ingest-form__head">
-          <div class="ingest-form__title">変更・確認依頼を取り込む</div>
-          <div class="ingest-form__sub muted">Teamsやメールで来る雑な依頼を、AIが業務単位に分解してIssueとActivityへ反映します。</div>
-        </div>
+        <div class="ingest-form" aria-label="Mock ingest form">
+          <div class="ingest-form__head">
+            <div class="ingest-form__title">変更・確認依頼を取り込む</div>
+            <div class="ingest-form__sub muted">Teamsやメールで来る雑な依頼を、AIが業務単位に分解してIssueとActivityへ反映します。</div>
+          </div>
         <div class="classification-mode-switch" aria-label="Classification Mode">
-          <div class="classification-mode-switch__label">Classification Mode</div>
+          <div class="classification-mode-switch__label">分類モード</div>
           <div class="classification-mode-switch__controls" role="tablist" aria-label="Classification Mode">
             <button class="mode-chip ${state.classifyMode === "mock" ? "is-active" : ""}" type="button" data-classify-mode="mock" ${
               state.ingestLoading ? "disabled" : ""
-            }>Mock</button>
+            }>モック</button>
             <button class="mode-chip ${state.classifyMode === "llm" ? "is-active" : ""}" type="button" data-classify-mode="llm" ${
               state.ingestLoading ? "disabled" : ""
-            }>LLM (Kimi)</button>
+            }>LLM（Kimi）</button>
           </div>
         </div>
         <textarea class="ingest-textarea" rows="3" placeholder="PLまだ？あとSI-224も確認して" data-ingest-input="1">${escapeHtml(
@@ -2105,12 +2196,12 @@ function renderNewTop() {
         <div class="ingest-form__actions">
           <button class="btn btn--primary" type="button" data-ingest-submit="1" ${
             state.ingestLoading ? "disabled" : ""
-          }>${state.classifyMode === "mock" ? "mock ingest 実行" : "LLM classify 実行"}</button>
+          }>${state.classifyMode === "mock" ? "モックを実行" : "AI分類を実行"}</button>
           <button class="btn btn--ghost" type="button" data-ingest-sample="1" ${state.ingestLoading ? "disabled" : ""}>サンプルを入れる</button>
           ${
             state.ingestLoading
               ? state.classifyMode === "llm"
-                ? `<span class="ingest-loading nt-muted"><span class="spinner" aria-hidden="true"></span>Kimi classifying operational threads...</span>`
+                ? `<span class="ingest-loading nt-muted"><span class="spinner" aria-hidden="true"></span>Kimiが業務スレッドを分類中...</span>`
                 : `<span class="ingest-loading nt-muted">loading...</span>`
               : ""
           }
@@ -2128,15 +2219,15 @@ function renderNewTop() {
 
       <div class="req-grid" aria-label="Requests layout">
         <div class="req-col req-col--left" aria-label="Raw requests">
-          <div class="req-col__head">Raw conversation / request inbox</div>
+          <div class="req-col__head">受信ボックス</div>
           <div class="req-list">${rawCardsHtml || `<div class="nt-muted">No requests</div>`}</div>
         </div>
         <div class="req-col req-col--center" aria-label="Operational threads">
-          <div class="req-col__head">AIが分解した operational threads</div>
+          <div class="req-col__head">AIが分解した業務スレッド</div>
           <div class="op-list">${threadCardsHtml || `<div class="nt-muted">Select a request</div>`}</div>
         </div>
         <div class="req-col req-col--right" aria-label="Linked entities / actions">
-          <div class="req-col__head">Linked entities / actions</div>
+          <div class="req-col__head">紐付け先 / アクション</div>
           ${actionHtml}
         </div>
       </div>
@@ -6265,13 +6356,14 @@ function setupNewTop() {
               throw new Error(payload.error || "LLM classify failed");
             }
             const threads = Array.isArray(payload?.threads) ? payload.threads : [];
+            const links = buildEntityLinksFromThreads(threads);
             const activityEvents = transformThreadsToActivityEvents(threads);
             const issueMutations = transformThreadsToIssueMutations(threads, rawText);
             result = {
               mode: "llm",
               rawText,
               threads,
-              links: [],
+              links,
               activityEvents,
               issueMutations,
             };
