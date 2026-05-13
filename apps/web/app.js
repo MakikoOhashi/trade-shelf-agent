@@ -1,5 +1,7 @@
 import { analyzeImpact, detectIncidents, mockTradeCases, proposeActions } from "@trade-shelf/shared";
 
+const API_BASE_URL = window.TRADE_SHELF_API_BASE_URL || "http://127.0.0.1:3000";
+
 const movementShelfDefs = [
   { key: "notArranged", label: "未手配" },
   { key: "preparingShipment", label: "出荷準備中" },
@@ -27,6 +29,26 @@ const state = {
    * @type {Array<any>}
    */
   rawRequests: [],
+  /**
+   * Mock ingest input (Requests page)
+   * @type {string}
+   */
+  ingestInputText: "",
+  /**
+   * Mock ingest loading state (Requests page)
+   * @type {boolean}
+   */
+  ingestLoading: false,
+  /**
+   * Mock ingest error text (Requests page)
+   * @type {string}
+   */
+  ingestError: "",
+  /**
+   * Latest mock ingest result payload (Requests page)
+   * @type {any}
+   */
+  latestIngestResult: null,
   /**
    * Active raw request id in Requests page
    * @type {string | null}
@@ -64,6 +86,11 @@ const state = {
    * @type {Array<any>}
    */
   activityFeedItems: [],
+  /**
+   * Latest Issue mutations (mock ingest)
+   * @type {Array<any>}
+   */
+  issueMutationItems: [],
   /**
    * Activity Feed filter key
    * @type {"all" | "teams" | "email" | "aiProcessed" | "awaitingApproval" | "failed" | "supplierReply"}
@@ -180,6 +207,98 @@ function closeIngestionModal() {
   if (!modal) return;
   modal.classList.remove("is-open");
   modal.setAttribute("aria-hidden", "true");
+}
+
+async function submitMockIngest(rawText) {
+  const response = await fetch(`${API_BASE_URL}/ingest/mock`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      source: "teams",
+      senderName: "営業A",
+      channel: "Teams",
+      rawText,
+    }),
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(text || `Mock ingest failed: ${response.status}`);
+  }
+
+  return response.json();
+}
+
+function prependUniqueById(existing, incoming) {
+  const add = Array.isArray(incoming) ? incoming.filter(Boolean) : [];
+  const base = Array.isArray(existing) ? existing.filter(Boolean) : [];
+  const out = [];
+  const seen = new Set();
+  for (const it of [...add, ...base]) {
+    const id = it && it.id ? String(it.id) : "";
+    if (!id) continue;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    out.push(it);
+  }
+  return out;
+}
+
+function statusKeyFromIngestStatus(status) {
+  const s = String(status || "").toLowerCase();
+  if (s === "ok" || s === "success") return "success";
+  if (s === "warning") return "warning";
+  if (s === "failed" || s === "error") return "failed";
+  return "processing";
+}
+
+function activityEventToFeedItem(ev) {
+  const occurredAt = ev && ev.occurredAt ? String(ev.occurredAt) : "";
+  const at = occurredAt ? formatLocalTime(occurredAt) : formatLocalTime(nowIso());
+  const rawType = String(ev?.type || "");
+  const type = rawType === "issue_updated" ? "issueUpdated" : rawType || "aiProcessed";
+  const title = String(ev?.title || rawType || "Activity");
+  const description = String(ev?.description || "");
+  const status = String(ev?.status || "");
+  const linkedEntities = Array.isArray(ev?.linkedEntities) ? ev.linkedEntities.filter(Boolean) : [];
+
+  const linked = linkedEntities.map((l) => ({
+    kind: String(l?.entityType || ""),
+    label: `${String(l?.entityType || "")} ${String(l?.entityId || "")}`.trim(),
+  }));
+
+  const linkedText = linkedEntities.length
+    ? `Linked: ${linkedEntities
+        .map((l) => {
+          const et = String(l?.entityType || "");
+          const eid = String(l?.entityId || "");
+          const cf = typeof l?.confidence === "number" ? l.confidence : null;
+          const cfText = typeof cf === "number" && Number.isFinite(cf) ? ` (${cf.toFixed(2)})` : "";
+          return `${et} ${eid}${cfText}`.trim();
+        })
+        .join(", ")}`
+    : "";
+
+  const details = [
+    `type: ${type || "-"}`,
+    description ? `description: ${description}` : "",
+    status ? `status: ${status}` : "",
+    linkedText,
+  ].filter(Boolean);
+
+  return {
+    id: String(ev?.id || `act-${shortId()}`),
+    type,
+    source: "ai",
+    title,
+    actor: "mock ingest",
+    at,
+    summary: description || title,
+    details,
+    statusKey: statusKeyFromIngestStatus(status),
+    linked,
+    links: [],
+  };
 }
 
 function getMockEvidenceArchiveItems() {
@@ -991,6 +1110,41 @@ function renderNewTop() {
       </div>`;
     };
 
+    const pendingMutations = Array.isArray(state.issueMutationItems) ? state.issueMutationItems.filter(Boolean) : [];
+
+    const actionLabel = (a) => {
+      const v = String(a || "");
+      if (v === "append_comment") return "既存Issue更新";
+      if (v === "create_issue_candidate") return "新規Issue候補";
+      if (v === "mark_approval_required") return "承認待ち";
+      return v || "-";
+    };
+
+    const renderPendingMutations = () => {
+      if (!pendingMutations.length) return "";
+      const rows = pendingMutations
+        .slice()
+        .map((m) => {
+          const issueId = String(m?.issueId || "");
+          const action = String(m?.action || "");
+          const title = String(m?.title || "");
+          const body = String(m?.body || "");
+          return `<div class="pending-mutations__item">
+            <div class="pending-mutations__top">
+              <span class="pending-mutations__issue nt-mono">${escapeHtml(issueId || "-")}</span>
+              <span class="pending-mutations__action">${escapeHtml(actionLabel(action))}</span>
+            </div>
+            <div class="pending-mutations__title">${escapeHtml(title || "-")}</div>
+            ${body ? `<pre class="pending-mutations__body">${escapeHtml(body)}</pre>` : ""}
+          </div>`;
+        })
+        .join("");
+      return `<section class="pending-mutations" aria-label="Pending AI mutations">
+        <div class="pending-mutations__h">Pending AI mutations</div>
+        ${rows}
+      </section>`;
+    };
+
     const renderIssueList = () => {
       const sorted = issues
         .slice()
@@ -1004,7 +1158,7 @@ function renderNewTop() {
           return String(a?.issueNo || "").localeCompare(String(b?.issueNo || ""));
         });
       const body = sorted.length ? sorted.map(issueRow).join("") : `<div class="nt-muted">No items</div>`;
-      return `<section class="issue-list" aria-label="Issues list">${body}</section>`;
+      return `<section class="issue-list" aria-label="Issues list">${renderPendingMutations()}${body}</section>`;
     };
 
     const renderTimelineItem = (item) => {
@@ -1718,10 +1872,56 @@ function renderNewTop() {
         </div>`
       : `<div class="req-actions"><div class="nt-muted">Select a thread</div></div>`;
 
+    const ingestResult = state.latestIngestResult;
+    const ingestThreads = Array.isArray(ingestResult?.threads) ? ingestResult.threads.filter(Boolean) : [];
+    const ingestLinks = Array.isArray(ingestResult?.links) ? ingestResult.links.filter(Boolean) : [];
+    const ingestEvents = Array.isArray(ingestResult?.activityEvents) ? ingestResult.activityEvents.filter(Boolean) : [];
+    const ingestMutations = Array.isArray(ingestResult?.issueMutations) ? ingestResult.issueMutations.filter(Boolean) : [];
+
+    const ingestSummaryHtml = ingestResult
+      ? `<div class="ingest-result" aria-label="Latest ingest result">
+          <div class="ingest-result__stats">
+            <div><span class="k">OperationalThreads</span><span class="v nt-mono">${escapeHtml(String(ingestThreads.length))}</span></div>
+            <div><span class="k">EntityLinks</span><span class="v nt-mono">${escapeHtml(String(ingestLinks.length))}</span></div>
+            <div><span class="k">ActivityEvents</span><span class="v nt-mono">${escapeHtml(String(ingestEvents.length))}</span></div>
+            <div><span class="k">IssueMutations</span><span class="v nt-mono">${escapeHtml(String(ingestMutations.length))}</span></div>
+          </div>
+          ${
+            ingestThreads.length
+              ? `<div class="ingest-result__threads">
+                  <div class="ingest-result__h">Threads</div>
+                  <ul class="ingest-result__list">${ingestThreads
+                    .map((t) => `<li>${escapeHtml(String(t?.title || t?.id || "Thread"))}</li>`)
+                    .join("")}</ul>
+                </div>`
+              : ""
+          }
+        </div>`
+      : "";
+
     return `<section class="req-page" aria-label="Change & Check Requests">
       <div class="req-title">
         <div class="req-title__h">変更・確認依頼</div>
         <div class="req-title__sub">TeamsやWebからの雑な依頼を、AIが業務単位へ整理します。</div>
+      </div>
+
+      <div class="ingest-form" aria-label="Mock ingest form">
+        <div class="ingest-form__head">
+          <div class="ingest-form__title">変更・確認依頼を取り込む</div>
+          <div class="ingest-form__sub muted">Teamsやメールで来る雑な依頼を、AIが業務単位に分解してIssueとActivityへ反映します。</div>
+        </div>
+        <textarea class="ingest-textarea" rows="3" placeholder="PLまだ？あとSI-224も確認して" data-ingest-input="1">${escapeHtml(
+          String(state.ingestInputText || ""),
+        )}</textarea>
+        <div class="ingest-form__actions">
+          <button class="btn btn--primary" type="button" data-ingest-submit="1" ${
+            state.ingestLoading ? "disabled" : ""
+          }>mock ingest 実行</button>
+          <button class="btn btn--ghost" type="button" data-ingest-sample="1" ${state.ingestLoading ? "disabled" : ""}>サンプルを入れる</button>
+          ${state.ingestLoading ? `<span class="ingest-loading nt-muted">loading...</span>` : ""}
+        </div>
+        ${state.ingestError ? `<div class="ingest-error">${escapeHtml(String(state.ingestError))}</div>` : ""}
+        ${ingestSummaryHtml}
       </div>
 
       <div class="req-compose" aria-label="Request input">
@@ -5827,6 +6027,56 @@ function setupNewTop() {
       return;
     }
 
+    const ingestSampleEl = target.closest && target.closest("[data-ingest-sample]");
+    if (ingestSampleEl) {
+      state.ingestInputText = "PLまだ？あとSI-224も確認して";
+      state.ingestError = "";
+      renderApp();
+      return;
+    }
+
+    const ingestSubmitEl = target.closest && target.closest("[data-ingest-submit]");
+    if (ingestSubmitEl) {
+      const rawText = String(state.ingestInputText || "").trim();
+      if (!rawText) return;
+      if (state.ingestLoading) return;
+
+      state.ingestLoading = true;
+      state.ingestError = "";
+      renderApp();
+
+      (async () => {
+        try {
+          const payload = await submitMockIngest(rawText);
+          if (payload && payload.ok === false) {
+            throw new Error(payload.error || "Mock ingest failed");
+          }
+          const result = payload && payload.result ? payload.result : payload;
+          state.latestIngestResult = result || null;
+
+          const events = Array.isArray(result?.activityEvents) ? result.activityEvents.filter(Boolean) : [];
+          const feedItems = events.map(activityEventToFeedItem);
+          state.activityFeedItems = prependUniqueById(state.activityFeedItems, feedItems);
+
+          const mutationsRaw = Array.isArray(result?.issueMutations) ? result.issueMutations.filter(Boolean) : [];
+          const mutations = mutationsRaw.map((m) => ({
+            id: `mut:${String(m?.issueId || "")}:${String(m?.action || "")}:${String(m?.title || "")}`,
+            issueId: m?.issueId,
+            action: m?.action,
+            title: m?.title,
+            body: m?.body,
+          }));
+          state.issueMutationItems = prependUniqueById(state.issueMutationItems, mutations);
+        } catch (e) {
+          state.ingestError = e && e.message ? String(e.message) : "Mock ingest failed";
+        } finally {
+          state.ingestLoading = false;
+          renderApp();
+        }
+      })();
+      return;
+    }
+
     const reqAddEl = target.closest && target.closest("[data-requests-add]");
     if (reqAddEl) {
       const rootPage = reqAddEl.closest && reqAddEl.closest(".req-page");
@@ -6069,6 +6319,11 @@ function setupNewTop() {
   root.addEventListener("input", (e) => {
     const target = e.target;
     if (!target) return;
+    const ingestEl = target.closest && target.closest("[data-ingest-input]");
+    if (ingestEl) {
+      state.ingestInputText = typeof ingestEl.value === "string" ? ingestEl.value : "";
+      return;
+    }
     const searchEl = target.closest && target.closest("[data-evidence-search]");
     if (searchEl) {
       state.evidenceSearchQuery = typeof searchEl.value === "string" ? searchEl.value : "";
