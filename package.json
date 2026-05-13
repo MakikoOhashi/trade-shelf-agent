@@ -5,5 +5,9 @@
   "scripts": {
     "build": "npm --prefix packages/shared run typecheck && npm --prefix packages/shared run build:web-vendor",
     "lint": "npm --prefix packages/shared run typecheck"
+  },
+  "dependencies": {
+    "dotenv": "^17.4.2",
+    "openai": "^6.37.0"
   }
 }

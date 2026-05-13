@@ -1,12 +1,19 @@
+import "dotenv/config";
 import http from "node:http";
 import fs from "node:fs/promises";
 import path from "node:path";
 import url from "node:url";
 
+import OpenAI from "openai";
 import { runMockIngest } from "../web/vendor/shared/index.js";
 
 const __dirname = path.dirname(url.fileURLToPath(import.meta.url));
 const webRoot = path.resolve(__dirname, "..", "web");
+
+const aiClient = new OpenAI({
+  baseURL: process.env.AZURE_OPENAI_ENDPOINT,
+  apiKey: process.env.AZURE_OPENAI_API_KEY,
+});
 
 function sendJson(res, statusCode, payload) {
   const body = JSON.stringify(payload, null, 2);
@@ -87,6 +94,34 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(204);
     res.end();
     return;
+  }
+
+  if (method === "GET" && reqUrl.pathname === "/ai/ping") {
+    try {
+      const completion = await aiClient.chat.completions.create({
+        model: process.env.AZURE_OPENAI_DEPLOYMENT,
+        messages: [
+          {
+            role: "user",
+            content: "Reply only with: pong",
+          },
+        ],
+        temperature: 0,
+      });
+
+      const content = completion.choices?.[0]?.message?.content ?? "";
+
+      sendJson(res, 200, {
+        ok: true,
+        model: process.env.AZURE_OPENAI_DEPLOYMENT,
+        response: content,
+      });
+      return;
+    } catch (error) {
+      console.error(error);
+      sendJson(res, 500, { ok: false, error: String(error) });
+      return;
+    }
   }
 
   if (method === "POST" && reqUrl.pathname === "/ingest/mock") {
