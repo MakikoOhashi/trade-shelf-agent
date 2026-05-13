@@ -78,6 +78,17 @@ const server = http.createServer(async (req, res) => {
   const reqUrl = new URL(req.url || "/", "http://localhost");
   const method = String(req.method || "GET").toUpperCase();
 
+  // Dev-only CORS (for localhost UI). In production, restrict origins explicitly.
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+
+  if (method === "OPTIONS") {
+    res.writeHead(204);
+    res.end();
+    return;
+  }
+
   if (method === "POST" && reqUrl.pathname === "/ingest/mock") {
     try {
       const body = await readJsonBody(req);
