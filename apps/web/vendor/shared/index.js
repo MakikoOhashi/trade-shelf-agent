@@ -1161,6 +1161,15 @@ function ingestStableId(prefix, seed) {
     }
     return `${prefix}-${(h >>> 0).toString(16).padStart(8, "0")}`;
 }
+function ingestHash8(seed) {
+    // Same FNV-1a core as ingestStableId(), but returns only the 8-hex hash.
+    let h = 2166136261;
+    for (let i = 0; i < seed.length; i++) {
+        h ^= seed.charCodeAt(i);
+        h = Math.imul(h, 16777619);
+    }
+    return (h >>> 0).toString(16).padStart(8, "0");
+}
 function ingestNowIso() {
     return new Date().toISOString();
 }
@@ -1233,6 +1242,70 @@ function issueIdForThread(thread, threadLinks, mode) {
         return issueCandidateIdFromThread(thread.id);
     const existingIssue = (threadLinks || []).find((l) => l?.entityType === "Issue" && String(l?.entityId || "").trim());
     return existingIssue ? String(existingIssue.entityId).trim() : issueCandidateIdFromThread(thread.id);
+}
+export function planNextActions(input, threads, links, issueMutations, options = {}) {
+    const list = Array.isArray(threads) ? threads.filter(Boolean) : [];
+    const allLinks = Array.isArray(links) ? links.filter(Boolean) : [];
+    const mutations = Array.isArray(issueMutations) ? issueMutations.filter(Boolean) : [];
+    const docHasCore = (types) => {
+        const arr = Array.isArray(types) ? types : [];
+        const normalized = arr.map((v) => String(v ?? "").trim().toUpperCase()).filter(Boolean);
+        return normalized.includes("PL") || normalized.includes("INV") || normalized.includes("BL");
+    };
+    const actionTypesForThread = (thread) => {
+        switch (thread.intent) {
+            case "missing_document_check": {
+                const types = thread.extractedEntities?.documentTypes ?? [];
+                if (docHasCore(types))
+                    return ["supplier_confirmation_required", "email_required"];
+                return ["human_review_only"];
+            }
+            case "quantity_mismatch":
+                return ["supplier_confirmation_required", "email_required"];
+            case "eta_change":
+                return ["teams_reply_required", "human_review_only"];
+            case "shipment_status_check":
+                return ["human_review_only"];
+            case "air_change_check":
+                return ["teams_reply_required", "human_review_only"];
+            default:
+                return ["human_review_only"];
+        }
+    };
+    const titleForThread = (thread, actionTypes) => {
+        if (thread.intent === "missing_document_check" && actionTypes.includes("supplier_confirmation_required")) {
+            return "仕入先への書類確認が必要です";
+        }
+        if (thread.intent === "quantity_mismatch")
+            return "数量・金額差異の確認が必要です";
+        if (actionTypes.includes("teams_reply_required"))
+            return "社内返信の確認が必要です";
+        return "人間確認が必要です";
+    };
+    const issueIdForMutationThread = (threadId) => {
+        const created = mutations.find((m) => m?.threadId === threadId && m?.action === "create_issue_candidate");
+        const issueId = created ? String(created.issueId || "").trim() : "";
+        return issueId || undefined;
+    };
+    const sourceLabel = options.sourceLabel || "AI";
+    return list.map((thread) => {
+        const threadLinks = allLinks.filter((l) => l.threadId === thread.id);
+        const actionTypes = actionTypesForThread(thread);
+        const seed = `${input.id}${thread.id}${actionTypes.join(",")}`;
+        return {
+            id: `AP-${ingestHash8(seed)}`,
+            sourceRawInputId: input.id,
+            threadId: thread.id,
+            issueId: issueIdForMutationThread(thread.id),
+            actionTypes,
+            title: titleForThread(thread, actionTypes),
+            description: thread.summary || thread.title || input.rawText,
+            confidence: typeof thread.confidence === "number" ? thread.confidence : 0.3,
+            linkedEntities: threadLinks,
+            sourceLabel,
+            status: "planned",
+        };
+    });
 }
 export function classifyRawInput(input) {
     if (input.rawText.includes("PLまだ")) {
@@ -1525,13 +1598,29 @@ export function buildIssueMutations(input, threads, links, options = {}) {
     }
     return mutations;
 }
-export function buildIngestResultFromThreads(input, threads, options = {}) {
+export function runIngestPipeline(input, options = {}) {
+    const threads = Array.isArray(options.threads) ? options.threads : classifyRawInput(input);
     const normalizedThreads = normalizeOperationalThreads(input, threads);
     const links = dedupeEntityLinks(linkThreadsToEntities(normalizedThreads));
-    const activityEvents = buildActivityEvents(input, normalizedThreads, links, options);
     const issueMutations = buildIssueMutations(input, normalizedThreads, links, options);
+    const actionPlans = planNextActions(input, normalizedThreads, links, issueMutations, options);
     const baseOccurredAt = input.receivedAt || ingestNowIso();
-    const maxSeq = activityEvents.reduce((m, e) => Math.max(m, typeof e?.sequence === "number" ? e.sequence : 0), 0);
+    const activityEventsBase = buildActivityEvents(input, normalizedThreads, links, options);
+    let sequence = activityEventsBase.reduce((m, e) => Math.max(m, typeof e?.sequence === "number" ? e.sequence : 0), 0) + 1;
+    const actor = options.sourceLabel || "AI";
+    const actionPlannedEvents = actionPlans.map((ap) => ({
+        id: ingestStableId("ACT", `${input.id}:${ap.threadId}:${ap.id}:action_planned`),
+        type: "action_planned",
+        occurredAt: baseOccurredAt,
+        sequence: sequence++,
+        title: "次アクションを判定",
+        description: ap.title,
+        sourceRawInputId: input.id,
+        threadId: ap.threadId,
+        linkedEntities: ap.linkedEntities,
+        status: "ok",
+        actor,
+    }));
     const issueUpdatedEvents = (() => {
         const list = Array.isArray(issueMutations) ? issueMutations.filter(Boolean) : [];
         if (!list.length)
@@ -1546,12 +1635,12 @@ export function buildIngestResultFromThreads(input, threads, options = {}) {
                 id: ingestStableId("ACT", `${input.id}:issue_updated:summary:${issueIds.join(",")}`),
                 type: "issue_updated",
                 occurredAt: baseOccurredAt,
-                sequence: maxSeq + 1,
+                sequence: sequence++,
                 title: "Issue更新",
                 description: desc,
                 sourceRawInputId: input.id,
                 status: hasWarning ? "warning" : "ok",
-                actor: options.sourceLabel || "AI",
+                actor,
             },
         ];
     })();
@@ -1559,13 +1648,16 @@ export function buildIngestResultFromThreads(input, threads, options = {}) {
         rawInput: { ...input, status: "linked" },
         threads: normalizedThreads,
         links,
-        activityEvents: [...activityEvents, ...issueUpdatedEvents],
+        activityEvents: [...activityEventsBase, ...actionPlannedEvents, ...issueUpdatedEvents],
         issueMutations,
+        actionPlans,
     };
 }
+export function buildIngestResultFromThreads(input, threads, options = {}) {
+    return runIngestPipeline(input, { ...options, threads });
+}
 export function runMockIngest(input) {
-    const threads = classifyRawInput(input);
-    return buildIngestResultFromThreads(input, threads, {
+    return runIngestPipeline(input, {
         sourceLabel: "mock ingest",
         approvalPolicy: "low_confidence",
     });

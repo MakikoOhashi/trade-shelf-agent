@@ -72,6 +72,78 @@ Processor 同士は直接呼び出さない。
 
 ---
 
+## Processor I/O shape（最小）
+
+各 Processor は「最小の I/O shape（入力/出力）」を持つ。ここで示す shape は、Orchestrator が Processor を差し替え可能に保つための契約である。
+
+### RawInput（最小）
+
+- `id`
+- `source`
+- `rawText`
+- `receivedAt`
+- `senderName`
+- `channel`
+
+### Tagger / Thread Splitter
+
+input:
+
+- `RawInput`
+
+output:
+
+- `OperationalThread[]`
+
+### Entity Linker
+
+input:
+
+- `OperationalThread[]`
+
+output:
+
+- `EntityLink[]`
+
+### Issue Planner
+
+input:
+
+- `RawInput`
+- `OperationalThread[]`
+- `EntityLink[]`
+
+output:
+
+- `IssueMutation[]`
+
+### Action Planner
+
+input:
+
+- `RawInput`
+- `OperationalThread[]`
+- `EntityLink[]`
+- `IssueMutation[]`
+
+output:
+
+- `ActionPlan[]`
+
+### Event Logger
+
+input:
+
+- `RawInput`
+- `OperationalThread[]`
+- `EntityLink[]`
+- `IssueMutation[]`
+- `ActionPlan[]`
+
+output:
+
+- `ActivityEvent[]`
+
 ## 1. Tagger
 
 ### 役割

@@ -706,6 +706,7 @@ export type ActivityEventType =
   | "classified"
   | "entity_linked"
   | "issue_updated"
+  | "action_planned"
   | "approval_required"
   | "failed_processing";
 
@@ -742,10 +743,33 @@ export type IssueMutation = {
   sourceLabel?: string;
 };
 
+export type ActionType =
+  | "human_review_only"
+  | "email_required"
+  | "teams_reply_required"
+  | "supplier_confirmation_required"
+  | "forwarder_confirmation_required"
+  | "no_action";
+
+export type ActionPlan = {
+  id: string;
+  sourceRawInputId: string;
+  threadId: string;
+  issueId?: string;
+  actionTypes: ActionType[];
+  title: string;
+  description: string;
+  confidence: number;
+  linkedEntities?: EntityLink[];
+  sourceLabel?: string;
+  status: "planned" | "pending_approval" | "skipped";
+};
+
 export type MockIngestResult = {
   rawInput: RawInput;
   threads: OperationalThread[];
   links: EntityLink[];
   activityEvents: ActivityEvent[];
   issueMutations: IssueMutation[];
+  actionPlans?: ActionPlan[];
 };

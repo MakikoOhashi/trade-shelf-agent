@@ -1612,11 +1612,19 @@ function renderNewTop() {
       const statusText = issueLike.statusText || "requires approval";
       const cs = issueLike.currentStatus || {};
 
+      const nextActionFromPlans = (() => {
+        const plans = Array.isArray(state.latestIngestResult?.actionPlans) ? state.latestIngestResult.actionPlans.filter(Boolean) : [];
+        const threadId = mut?.threadId ? String(mut.threadId) : "";
+        const issueId = mut?.issueId ? String(mut.issueId) : "";
+        const matched = plans.find((p) => (threadId && String(p?.threadId || "") === threadId) || (issueId && String(p?.issueId || "") === issueId));
+        return matched && matched.title ? String(matched.title) : "";
+      })();
+
       const currentStatusHtml = `<section class="issue-current-status ${sevClass}" aria-label="Current Status">
         <div class="issue-current-title">Current Status</div>
         <div class="issue-current-rows">
           <div class="issue-current-row"><span class="k">ステータス</span><span class="v">${escapeHtml(String(cs.status || "人間承認待ち"))}</span></div>
-          <div class="issue-current-row issue-current-row--pending"><span class="k">承認待ち</span><span class="v">${escapeHtml(String(cs.nextAction || "AI提案内容の確認"))}</span></div>
+          <div class="issue-current-row issue-current-row--pending"><span class="k">承認待ち</span><span class="v">${escapeHtml(String(nextActionFromPlans || cs.nextAction || "AI提案内容の確認"))}</span></div>
           <div class="issue-current-row"><span class="k">AI提案</span><span class="v">${escapeHtml(String(cs.aiProposal || "-"))}</span></div>
         </div>
         <div class="issue-current-actions" aria-label="Next actions">
@@ -2422,6 +2430,7 @@ function renderNewTop() {
     const rawIngestLinks = Array.isArray(ingestResult?.links) ? ingestResult.links.filter(Boolean) : [];
     const ingestEvents = Array.isArray(ingestResult?.activityEvents) ? ingestResult.activityEvents.filter(Boolean) : [];
     const ingestMutations = Array.isArray(ingestResult?.issueMutations) ? ingestResult.issueMutations.filter(Boolean) : [];
+    const ingestActionPlans = Array.isArray(ingestResult?.actionPlans) ? ingestResult.actionPlans.filter(Boolean) : [];
 
     const isLlmResult = state.latestIngestResultMode === "llm";
     const llmThreads = isLlmResult ? ingestThreads : [];
@@ -2487,8 +2496,24 @@ function renderNewTop() {
             <div><span class="k">紐付け先</span><span class="v nt-mono">${escapeHtml(String(ingestLinks.length))}</span></div>
             <div><span class="k">活動ログ</span><span class="v nt-mono">${escapeHtml(String(ingestEvents.length))}</span></div>
             <div><span class="k">Issue更新候補</span><span class="v nt-mono">${escapeHtml(String(ingestMutations.length))}</span></div>
+            <div><span class="k">ActionPlans</span><span class="v nt-mono">${escapeHtml(String(ingestActionPlans.length))}</span></div>
           </div>
           ${llmResultHtml}
+          ${
+            ingestActionPlans.length
+              ? `<div class="ingest-result__threads">
+                  <div class="ingest-result__h">Action Plans</div>
+                  <ul class="ingest-result__list">${ingestActionPlans
+                    .map((p) => {
+                      const title = String(p?.title || "ActionPlan");
+                      const types = Array.isArray(p?.actionTypes) ? p.actionTypes.map((t) => String(t ?? "").trim()).filter(Boolean) : [];
+                      const meta = types.length ? `(${types.join(", ")})` : "";
+                      return `<li>${escapeHtml(title)} <span class="muted nt-mono">${escapeHtml(meta)}</span></li>`;
+                    })
+                    .join("")}</ul>
+                </div>`
+              : ""
+          }
           ${
             ingestThreads.length
               ? `<div class="ingest-result__threads">
