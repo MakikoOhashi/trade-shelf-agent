@@ -60,6 +60,11 @@ const state = {
    */
   latestIngestResultMode: null,
   /**
+   * Mock approval states (actionPlanId -> { status, updatedAt })
+   * @type {Record<string, { status: string, updatedAt: string }>}
+   */
+  approvalsByActionPlanId: {},
+  /**
    * Active raw request id in Requests page
    * @type {string | null}
    */
@@ -479,6 +484,147 @@ function groupIssueMutationsForApproval(mutations) {
     .filter(Boolean);
 }
 
+function transitionApprovalState(currentState, action) {
+  const s = String(currentState || "planned");
+  const a = String(action || "");
+
+  if (a === "approve") {
+    if (s !== "pending_approval") return null;
+    return "approved";
+  }
+  if (a === "edit") {
+    if (s !== "pending_approval") return null;
+    return "edited";
+  }
+  if (a === "hold") {
+    if (s !== "pending_approval") return null;
+    return "held";
+  }
+  if (a === "mock_send") {
+    if (s !== "approved") return null;
+    return "mock_sent";
+  }
+  return null;
+}
+
+function approvalStatusLabelJa(status) {
+  const s = String(status || "");
+  if (s === "pending_approval") return "承認待ち";
+  if (s === "approved") return "承認済み";
+  if (s === "held") return "保留中";
+  if (s === "edited") return "編集済み";
+  if (s === "mock_sent") return "mock送信済み";
+  if (s === "planned") return "planned";
+  return s || "-";
+}
+
+function ensureApprovalsInitializedFromIngestResult(result) {
+  const plans = Array.isArray(result?.actionPlans) ? result.actionPlans.filter(Boolean) : [];
+  if (!plans.length) return;
+  if (!state.approvalsByActionPlanId || typeof state.approvalsByActionPlanId !== "object") state.approvalsByActionPlanId = {};
+
+  for (const p of plans) {
+    const id = String(p?.id || "").trim();
+    if (!id) continue;
+    if (state.approvalsByActionPlanId[id]) continue;
+    const status = String(p?.status || "planned");
+    state.approvalsByActionPlanId[id] = { status, updatedAt: nowIso() };
+  }
+}
+
+function findActionPlanIdFromAnyId(idLike) {
+  const id = String(idLike || "").trim();
+  if (!id) return "";
+  if (state.approvalsByActionPlanId && typeof state.approvalsByActionPlanId === "object" && state.approvalsByActionPlanId[id]) return id;
+  const plans = Array.isArray(state.latestIngestResult?.actionPlans) ? state.latestIngestResult.actionPlans.filter(Boolean) : [];
+  const byId = plans.find((p) => String(p?.id || "") === id);
+  if (byId) return id;
+  const byIssue = plans.find((p) => String(p?.issueId || "") === id);
+  if (byIssue && byIssue.id) return String(byIssue.id);
+  const byThread = plans.find((p) => String(p?.threadId || "") === id);
+  if (byThread && byThread.id) return String(byThread.id);
+  return "";
+}
+
+function updateIngestResultStatusesForActionPlan(actionPlanId, nextStatus) {
+  const apId = String(actionPlanId || "").trim();
+  const status = String(nextStatus || "").trim();
+  if (!apId || !status) return;
+
+  if (state.latestIngestResult && Array.isArray(state.latestIngestResult.actionPlans)) {
+    state.latestIngestResult.actionPlans = state.latestIngestResult.actionPlans.map((p) => {
+      if (!p || String(p.id || "") !== apId) return p;
+      return { ...p, status };
+    });
+  }
+
+  if (state.latestIngestResult && Array.isArray(state.latestIngestResult.drafts)) {
+    state.latestIngestResult.drafts = state.latestIngestResult.drafts.map((d) => {
+      if (!d) return d;
+      if (String(d?.actionPlanId || "") !== apId) return d;
+      return { ...d, status };
+    });
+  }
+}
+
+function recordApprovalActivityEvent(actionPlanId, nextStatus) {
+  const apId = String(actionPlanId || "").trim();
+  if (!apId) return;
+
+  const status = String(nextStatus || "").trim();
+  const typeByStatus = {
+    approved: "approved",
+    held: "held",
+    edited: "edited",
+    mock_sent: "mock_sent",
+  };
+  const rawType = typeByStatus[status] || "";
+  if (!rawType) return;
+
+  const sequenceByType = { approved: 70, edited: 71, held: 72, mock_sent: 80 };
+  const occurredAt = nowIso();
+
+  const plans = Array.isArray(state.latestIngestResult?.actionPlans) ? state.latestIngestResult.actionPlans.filter(Boolean) : [];
+  const plan = plans.find((p) => String(p?.id || "") === apId) || null;
+  const threadId = plan && plan.threadId ? String(plan.threadId) : "";
+
+  const links = Array.isArray(state.latestIngestResult?.links) ? state.latestIngestResult.links.filter(Boolean) : [];
+  const linkedEntities = threadId ? links.filter((l) => String(l?.threadId || "") === threadId) : [];
+
+  const ev = {
+    id: `act:${shortId()}`,
+    type: rawType,
+    occurredAt,
+    sequence: sequenceByType[rawType] ?? undefined,
+    title: rawType,
+    description: "",
+    sourceRawInputId: plan && plan.sourceRawInputId ? String(plan.sourceRawInputId) : undefined,
+    threadId: threadId || undefined,
+    linkedEntities,
+    status: "ok",
+    actor: "human",
+  };
+
+  const item = activityEventToFeedItem(ev);
+  state.activityFeedItems = prependUniqueById(state.activityFeedItems, [item]);
+}
+
+function applyApprovalAction(idLike, action) {
+  const actionPlanId = findActionPlanIdFromAnyId(idLike);
+  if (!actionPlanId) return { ok: false, error: "ActionPlan が見つかりませんでした。" };
+
+  const entry = state.approvalsByActionPlanId?.[actionPlanId] || null;
+  const current = String((entry && entry.status) || "planned");
+  const next = transitionApprovalState(current, action);
+  if (!next) return { ok: false, error: `不正な遷移です: ${current} -> ${action}` };
+
+  state.approvalsByActionPlanId[actionPlanId] = { status: next, updatedAt: nowIso() };
+  updateIngestResultStatusesForActionPlan(actionPlanId, next);
+  recordApprovalActivityEvent(actionPlanId, next);
+
+  return { ok: true, actionPlanId, next };
+}
+
 function buildDraftBodyFromMutation(mutation) {
   const title = String(mutation?.title || "").trim();
   const parsed = parseIssueMutationBody(String(mutation?.body || ""));
@@ -509,23 +655,56 @@ function buildIssueLikeFromMutation(mutation) {
   const now = nowIso();
 
   const source = String(mutation?.source || "").trim() || "Kimi AI分類";
+
+  const threadId = String(mutation?.threadId || "").trim();
+  const plans = Array.isArray(state.latestIngestResult?.actionPlans) ? state.latestIngestResult.actionPlans.filter(Boolean) : [];
+  const actionPlan =
+    plans.find((p) => (threadId && String(p?.threadId || "") === threadId) || (issueNo && String(p?.issueId || "") === issueNo)) || null;
+
+  const actionPlanId = actionPlan && actionPlan.id ? String(actionPlan.id) : "";
+  const approvalEntry = actionPlanId ? state.approvalsByActionPlanId?.[actionPlanId] : null;
+  const approvalStatus = String((approvalEntry && approvalEntry.status) || (actionPlan && actionPlan.status) || "pending_approval");
+
+  const drafts = Array.isArray(state.latestIngestResult?.drafts) ? state.latestIngestResult.drafts.filter(Boolean) : [];
+  const relatedDrafts = actionPlanId
+    ? drafts.filter((d) => String(d?.actionPlanId || "") === actionPlanId)
+    : threadId
+      ? drafts.filter((d) => String(d?.threadId || "") === threadId)
+      : [];
+
+  const preferredDraft = relatedDrafts.find((d) => String(d?.channel || "") === "email") || relatedDrafts[0] || null;
+  const draft = preferredDraft
+    ? {
+        channel: String(preferredDraft.channel || "-"),
+        to: preferredDraft.to ? [String(preferredDraft.to)] : [],
+        subject: preferredDraft.subject || "",
+        body: String(preferredDraft.body || ""),
+      }
+    : {
+        channel: "email",
+        to: ["supplier@example.invalid"],
+        subject: `Confirmation required: ${title}`,
+        body: buildDraftBodyFromMutation(mutation),
+      };
+
+  const statusText = approvalStatus === "pending_approval" ? "pending approval" : approvalStatus || "requires approval";
   return {
     id: String(mutation?.id || issueNo),
     issueNo,
     title,
     severity: "medium",
     statusKey: "requiresApproval",
-    statusText: "requires approval",
-      currentStatus: {
-        status: "人間承認待ち",
-        pendingApproval: true,
-        nextAction: "AI提案内容の確認",
-        aiProposal: parsed.summary || title,
-        classification,
-        entitiesText,
-        confidenceText,
-        source,
-      },
+    statusText,
+    currentStatus: {
+      status: approvalStatusLabelJa(approvalStatus),
+      pendingApproval: approvalStatus === "pending_approval",
+      nextAction: "AI提案内容の確認",
+      aiProposal: parsed.summary || title,
+      classification,
+      entitiesText,
+      confidenceText,
+      source,
+    },
     timeline: [
       {
         id: `raw:${issueNo}`,
@@ -560,12 +739,7 @@ function buildIssueLikeFromMutation(mutation) {
         message: "AIが次に必要な確認アクションを作成しました。承認してください。",
       },
     ],
-    draft: {
-      channel: "email",
-      to: ["ops@example.com"],
-      subject: `Confirmation required: ${title}`,
-      body: buildDraftBodyFromMutation(mutation),
-    },
+    draft,
   };
 }
 
@@ -630,10 +804,22 @@ function activityEventToFeedItem(ev) {
         return "AI分類";
       case "entity_linked":
         return "関連紐付け";
+      case "action_planned":
+        return "次アクションを判定";
+      case "draft_created":
+        return "下書きを生成";
       case "approval_required":
         return "承認待ちへ追加";
       case "issue_updated":
         return "Issue更新";
+      case "approved":
+        return "承認済み";
+      case "held":
+        return "保留";
+      case "edited":
+        return "編集済み";
+      case "mock_sent":
+        return "mock送信";
       case "failed_processing":
         return "処理失敗";
       default:
@@ -1620,19 +1806,53 @@ function renderNewTop() {
         return matched && matched.title ? String(matched.title) : "";
       })();
 
+      const matchedPlan = (() => {
+        const plans = Array.isArray(state.latestIngestResult?.actionPlans) ? state.latestIngestResult.actionPlans.filter(Boolean) : [];
+        const threadId = mut?.threadId ? String(mut.threadId) : "";
+        const issueId = mut?.issueId ? String(mut.issueId) : "";
+        return plans.find((p) => (threadId && String(p?.threadId || "") === threadId) || (issueId && String(p?.issueId || "") === issueId)) || null;
+      })();
+
+      const actionPlanId = matchedPlan && matchedPlan.id ? String(matchedPlan.id) : "";
+      const approvalEntry = actionPlanId ? state.approvalsByActionPlanId?.[actionPlanId] : null;
+      const approvalStatus = String((approvalEntry && approvalEntry.status) || (matchedPlan && matchedPlan.status) || "pending_approval");
+      const canApprove = approvalStatus === "pending_approval";
+      const canMockSend = approvalStatus === "approved";
+
+      const draftPreview = issueLike && issueLike.draft ? issueLike.draft : null;
+
+      const actionKey = actionPlanId || String(issueLike.id || "");
+
       const currentStatusHtml = `<section class="issue-current-status ${sevClass}" aria-label="Current Status">
         <div class="issue-current-title">Current Status</div>
         <div class="issue-current-rows">
-          <div class="issue-current-row"><span class="k">ステータス</span><span class="v">${escapeHtml(String(cs.status || "人間承認待ち"))}</span></div>
+          <div class="issue-current-row"><span class="k">Current Status</span><span class="v">${escapeHtml(approvalStatusLabelJa(approvalStatus) || String(cs.status || "人間承認待ち"))}</span></div>
           <div class="issue-current-row issue-current-row--pending"><span class="k">承認待ち</span><span class="v">${escapeHtml(String(nextActionFromPlans || cs.nextAction || "AI提案内容の確認"))}</span></div>
           <div class="issue-current-row"><span class="k">AI提案</span><span class="v">${escapeHtml(String(cs.aiProposal || "-"))}</span></div>
         </div>
         <div class="issue-current-actions" aria-label="Next actions">
-          <button class="btn btn--primary btn--small" type="button" data-mutation-approve="${escapeHtml(String(issueLike.id))}">Approve</button>
-          <button class="btn btn--small" type="button" data-mutation-edit="${escapeHtml(String(issueLike.id))}">Edit draft</button>
-          <button class="btn btn--small" type="button" data-mutation-hold="${escapeHtml(String(issueLike.id))}">Hold</button>
+          <button class="btn btn--primary btn--small" type="button" data-mutation-approve="${escapeHtml(actionKey)}" ${
+            canApprove ? "" : "disabled"
+          }>Approve</button>
+          <button class="btn btn--small" type="button" data-mutation-edit="${escapeHtml(actionKey)}" ${canApprove ? "" : "disabled"}>Edit draft</button>
+          <button class="btn btn--small" type="button" data-mutation-hold="${escapeHtml(actionKey)}" ${canApprove ? "" : "disabled"}>Hold</button>
+          <button class="btn btn--small" type="button" data-mutation-mock-send="${escapeHtml(actionKey)}" ${
+            canMockSend ? "" : "disabled"
+          }>Mock send</button>
         </div>
       </section>`;
+
+      const draftPreviewHtml = draftPreview
+        ? `<section class="detail-section issue-draft-preview" aria-label="Draft Preview">
+            <h3 class="detail-section__title">Draft Preview</h3>
+            <div class="kv">
+              <span class="muted">channel</span> ${escapeHtml(String(draftPreview.channel || "-"))}
+              <span class="muted">to</span> ${escapeHtml((Array.isArray(draftPreview.to) ? draftPreview.to : []).join(", ") || "-")}
+              ${draftPreview.subject ? `<span class="muted">subject</span> ${escapeHtml(String(draftPreview.subject))}` : ""}
+            </div>
+            <pre class="pre pre--compact">${escapeHtml(String(draftPreview.body || ""))}</pre>
+          </section>`
+        : "";
 
       const emailDraftHtml = `<div class="issue-email-draft">
         <div class="kv">
@@ -1642,9 +1862,11 @@ function renderNewTop() {
         </div>
         <pre class="pre pre--compact">${escapeHtml(String(issueLike.draft?.body || ""))}</pre>
         <div class="issue-actions">
-          <button class="btn btn--primary btn--small" type="button" data-mutation-approve="${escapeHtml(String(issueLike.id))}">Approve send</button>
-          <button class="btn btn--small" type="button" data-mutation-edit="${escapeHtml(String(issueLike.id))}">Edit draft</button>
-          <button class="btn btn--small" type="button" data-mutation-hold="${escapeHtml(String(issueLike.id))}">Hold</button>
+          <button class="btn btn--primary btn--small" type="button" data-mutation-mock-send="${escapeHtml(actionKey)}" ${
+            canMockSend ? "" : "disabled"
+          }>Mock send</button>
+          <button class="btn btn--small" type="button" data-mutation-edit="${escapeHtml(actionKey)}" ${canApprove ? "" : "disabled"}>Edit draft</button>
+          <button class="btn btn--small" type="button" data-mutation-hold="${escapeHtml(actionKey)}" ${canApprove ? "" : "disabled"}>Hold</button>
         </div>
       </div>`;
 
@@ -1701,6 +1923,7 @@ function renderNewTop() {
               </div>
             </div>
             ${currentStatusHtml}
+            ${draftPreviewHtml}
             <section class="detail-section issue-timeline-section" aria-label="Timeline">
               <h3 class="detail-section__title">Timeline / 対応履歴</h3>
               <div class="nt-muted">古い順に記録。現在の対応は上部の Current Status を確認。</div>
@@ -2430,6 +2653,7 @@ function renderNewTop() {
     const ingestEvents = Array.isArray(ingestResult?.activityEvents) ? ingestResult.activityEvents.filter(Boolean) : [];
     const ingestMutations = Array.isArray(ingestResult?.issueMutations) ? ingestResult.issueMutations.filter(Boolean) : [];
     const ingestActionPlans = Array.isArray(ingestResult?.actionPlans) ? ingestResult.actionPlans.filter(Boolean) : [];
+    const ingestDrafts = Array.isArray(ingestResult?.drafts) ? ingestResult.drafts.filter(Boolean) : [];
 
     const isLlmResult = state.latestIngestResultMode === "llm";
     const llmThreads = isLlmResult ? ingestThreads : [];
@@ -2496,6 +2720,7 @@ function renderNewTop() {
             <div><span class="k">活動ログ</span><span class="v nt-mono">${escapeHtml(String(ingestEvents.length))}</span></div>
             <div><span class="k">Issue更新候補</span><span class="v nt-mono">${escapeHtml(String(ingestMutations.length))}</span></div>
             <div><span class="k">ActionPlans</span><span class="v nt-mono">${escapeHtml(String(ingestActionPlans.length))}</span></div>
+            <div><span class="k">Drafts</span><span class="v nt-mono">${escapeHtml(String(ingestDrafts.length))}</span></div>
           </div>
           ${llmResultHtml}
           ${
@@ -2508,6 +2733,23 @@ function renderNewTop() {
                       const types = Array.isArray(p?.actionTypes) ? p.actionTypes.map((t) => String(t ?? "").trim()).filter(Boolean) : [];
                       const meta = types.length ? `(${types.join(", ")})` : "";
                       return `<li>${escapeHtml(title)} <span class="muted nt-mono">${escapeHtml(meta)}</span></li>`;
+                    })
+                    .join("")}</ul>
+                </div>`
+              : ""
+          }
+          ${
+            ingestDrafts.length
+              ? `<div class="ingest-result__threads">
+                  <div class="ingest-result__h">Drafts</div>
+                  <ul class="ingest-result__list">${ingestDrafts
+                    .map((d) => {
+                      const ch = String(d?.channel || "-");
+                      const to = d?.to ? String(d.to) : "";
+                      const subj = d?.subject ? String(d.subject) : "";
+                      const label = ch === "email" ? `email${to ? ` → ${to}` : ""}` : "teams";
+                      const meta = subj ? `(${subj})` : "";
+                      return `<li>${escapeHtml(label)} <span class="muted nt-mono">${escapeHtml(meta)}</span></li>`;
                     })
                     .join("")}</ul>
                 </div>`
@@ -6732,6 +6974,7 @@ function setupNewTop() {
 
           state.latestIngestResult = result || null;
           state.latestIngestResultMode = state.classifyMode;
+          ensureApprovalsInitializedFromIngestResult(result);
 
           const events = Array.isArray(result?.activityEvents) ? result.activityEvents.filter(Boolean) : [];
           const feedItems = events.map(activityEventToFeedItem);
@@ -6857,24 +7100,40 @@ function setupNewTop() {
     const mutationApproveEl = target.closest && target.closest("[data-mutation-approve]");
     if (mutationApproveEl) {
       const id = mutationApproveEl.getAttribute("data-mutation-approve") || "";
-      log(`(mock) mutation approved: ${id}`);
-      window.alert("(mock) Approve clicked. 次Stepで Activity に approved を追加します。");
+      const res = applyApprovalAction(id, "approve");
+      if (!res.ok) window.alert(`(mock) ${res.error}`);
+      else log(`(mock) approved: ${String(res.actionPlanId)} -> ${String(res.next)}`);
+      renderApp();
       return;
     }
 
     const mutationHoldEl = target.closest && target.closest("[data-mutation-hold]");
     if (mutationHoldEl) {
       const id = mutationHoldEl.getAttribute("data-mutation-hold") || "";
-      log(`(mock) mutation held: ${id}`);
-      window.alert("(mock) Hold clicked.");
+      const res = applyApprovalAction(id, "hold");
+      if (!res.ok) window.alert(`(mock) ${res.error}`);
+      else log(`(mock) held: ${String(res.actionPlanId)} -> ${String(res.next)}`);
+      renderApp();
       return;
     }
 
     const mutationEditEl = target.closest && target.closest("[data-mutation-edit]");
     if (mutationEditEl) {
       const id = mutationEditEl.getAttribute("data-mutation-edit") || "";
-      log(`(mock) mutation edit draft: ${id}`);
-      window.alert("(mock) Edit draft clicked.");
+      const res = applyApprovalAction(id, "edit");
+      if (!res.ok) window.alert(`(mock) ${res.error}`);
+      else log(`(mock) edited: ${String(res.actionPlanId)} -> ${String(res.next)}`);
+      renderApp();
+      return;
+    }
+
+    const mutationMockSendEl = target.closest && target.closest("[data-mutation-mock-send]");
+    if (mutationMockSendEl) {
+      const id = mutationMockSendEl.getAttribute("data-mutation-mock-send") || "";
+      const res = applyApprovalAction(id, "mock_send");
+      if (!res.ok) window.alert(`(mock) ${res.error}`);
+      else log(`(mock) mock sent: ${String(res.actionPlanId)} -> ${String(res.next)}`);
+      renderApp();
       return;
     }
 

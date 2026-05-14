@@ -130,6 +130,32 @@ output:
 
 - `ActionPlan[]`
 
+### Draft Writer
+
+input:
+
+- `RawInput`
+- `OperationalThread[]`
+- `EntityLink[]`
+- `IssueMutation[]`
+- `ActionPlan[]`
+
+output:
+
+- `DraftDocument[]`
+
+### Approval Handler
+
+input:
+
+- `ActionPlan[]`
+- `DraftDocument[]`
+
+output:
+
+- `ActionPlan[]`（status updated）
+- `DraftDocument[]`（status updated）
+
 ### Event Logger
 
 input:
@@ -143,6 +169,33 @@ input:
 output:
 
 - `ActivityEvent[]`
+
+---
+
+# State Machines（最小）
+
+## ActionPlan
+
+- `planned`
+  - → `pending_approval`（承認が必要な場合）
+  - → `skipped`（human_review_only などでスキップ扱いにする場合）
+- `pending_approval`
+  - → `approved`
+  - → `held`
+  - → `edited`
+- `approved`
+  - → `mock_sent`
+
+## Draft
+
+- `drafted`
+  - → `pending_approval`（必要なら）
+- `pending_approval`
+  - → `approved`
+  - → `held`
+  - → `edited`
+- `approved`
+  - → `mock_sent`
 
 ## 1. Tagger
 

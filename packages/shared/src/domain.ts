@@ -708,6 +708,11 @@ export type ActivityEventType =
   | "issue_updated"
   | "action_planned"
   | "approval_required"
+  | "draft_created"
+  | "approved"
+  | "held"
+  | "edited"
+  | "mock_sent"
   | "failed_processing";
 
 export type ActivityEvent = {
@@ -762,8 +767,54 @@ export type ActionPlan = {
   confidence: number;
   linkedEntities?: EntityLink[];
   sourceLabel?: string;
-  status: "planned" | "pending_approval" | "skipped";
+  status:
+    | "planned"
+    | "pending_approval"
+    | "approved"
+    | "held"
+    | "edited"
+    | "mock_sent"
+    | "skipped";
 };
+
+export type DraftChannel =
+  | "email"
+  | "teams";
+
+export type DraftStatus =
+  | "drafted"
+  | "pending_approval"
+  | "approved"
+  | "edited"
+  | "held"
+  | "mock_sent";
+
+export type DraftDocument = {
+  id: string;
+  sourceRawInputId: string;
+  threadId: string;
+  issueId?: string;
+  actionPlanId?: string;
+
+  channel: DraftChannel;
+
+  to?: string;
+  subject?: string;
+  body: string;
+
+  status: DraftStatus;
+
+  generatedBy: string;
+  generatedAt: string;
+
+  confidence: number;
+};
+
+export type ApprovalDecision =
+  | "approved"
+  | "held"
+  | "edited"
+  | "rejected";
 
 export type MockIngestResult = {
   rawInput: RawInput;
@@ -772,4 +823,5 @@ export type MockIngestResult = {
   activityEvents: ActivityEvent[];
   issueMutations: IssueMutation[];
   actionPlans?: ActionPlan[];
+  drafts?: DraftDocument[];
 };

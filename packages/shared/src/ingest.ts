@@ -2,6 +2,7 @@ import type {
   ActionPlan,
   ActionType,
   ActivityEvent,
+  DraftDocument,
   EntityLink,
   IssueMutation,
   MockIngestResult,
@@ -39,7 +40,12 @@ const ACTIVITY_SEQUENCE: Record<ActivityEventType, number> = {
   entity_linked: 30,
   action_planned: 40,
   approval_required: 50,
+  draft_created: 45,
   issue_updated: 60,
+  approved: 70,
+  edited: 71,
+  held: 72,
+  mock_sent: 80,
   failed_processing: 90,
 };
 
@@ -150,11 +156,11 @@ export function planNextActions(
       case "quantity_mismatch":
         return ["supplier_confirmation_required", "email_required"];
       case "eta_change":
-        return ["teams_reply_required", "human_review_only"];
+        return ["teams_reply_required"];
       case "shipment_status_check":
         return ["human_review_only"];
       case "air_change_check":
-        return ["teams_reply_required", "human_review_only"];
+        return ["teams_reply_required"];
       default:
         return ["human_review_only"];
     }
@@ -523,17 +529,156 @@ export function buildIssueMutations(
   return mutations;
 }
 
+function draftIdFromActionPlan(actionPlanId: string) {
+  return `DRF-${ingestHash8(String(actionPlanId || ""))}`.toUpperCase();
+}
+
+function primarySiLabelForThread(thread: OperationalThread, threadLinks: EntityLink[]) {
+  const direct = Array.isArray(thread?.extractedEntities?.siIds) ? thread.extractedEntities.siIds.find(Boolean) : "";
+  if (direct) return String(direct);
+  const fromLinks = (threadLinks || []).find((l) => l?.entityType === "SI" && l?.entityId);
+  return fromLinks ? String(fromLinks.entityId) : "SI-UNKNOWN";
+}
+
+export function buildDraftDocuments(
+  input: RawInput,
+  threads: OperationalThread[],
+  links: EntityLink[],
+  issueMutations: IssueMutation[],
+  actionPlans: ActionPlan[],
+  options: IngestBuildOptions = {},
+): DraftDocument[] {
+  const tList = Array.isArray(threads) ? threads.filter(Boolean) : [];
+  const allLinks = Array.isArray(links) ? links.filter(Boolean) : [];
+  const plans = Array.isArray(actionPlans) ? actionPlans.filter(Boolean) : [];
+  const mutations = Array.isArray(issueMutations) ? issueMutations.filter(Boolean) : [];
+
+  const generatedBy = options.sourceLabel || "AI";
+  const generatedAt = ingestNowIso();
+
+  const issueIdForThreadFromMutations = (threadId: string) => {
+    const created = mutations.find((m) => m?.threadId === threadId && m?.action === "create_issue_candidate");
+    const issueId = created ? String(created.issueId || "").trim() : "";
+    return issueId || undefined;
+  };
+
+  const emailTemplate = (intent: OperationalThread["intent"], thread: OperationalThread, threadLinks: EntityLink[]) => {
+    if (intent === "missing_document_check") {
+      const si = primarySiLabelForThread(thread, threadLinks);
+      return {
+        subject: `Confirmation required: PL status for ${si}`,
+        body: `${si} の PL状況をご確認ください。\n未発行の場合は予定日をご共有ください。`,
+      };
+    }
+    if (intent === "quantity_mismatch") {
+      return {
+        subject: "Confirmation required: Quantity mismatch",
+        body: "SI と INV の数量差異をご確認ください。",
+      };
+    }
+    return {
+      subject: "Confirmation required",
+      body: "状況をご確認ください。",
+    };
+  };
+
+  const teamsTemplate = (intent: OperationalThread["intent"]) => {
+    if (intent === "eta_change") {
+      return { body: "ETA変更を確認しました。顧客影響をご確認ください。" };
+    }
+    return { body: "状況を確認しました。影響をご確認ください。" };
+  };
+
+  const drafts: DraftDocument[] = [];
+
+  for (const ap of plans) {
+    const thread = tList.find((t) => String(t?.id || "") === String(ap.threadId || ""));
+    if (!thread) continue;
+
+    const types = Array.isArray(ap.actionTypes) ? ap.actionTypes.map((t) => String(t ?? "").trim()).filter(Boolean) : [];
+    if (types.includes("human_review_only")) continue;
+
+    const threadLinks = allLinks.filter((l) => l.threadId === ap.threadId);
+    const issueId = ap.issueId || issueIdForThreadFromMutations(ap.threadId);
+
+    if (types.includes("email_required")) {
+      const t = emailTemplate(thread.intent, thread, threadLinks);
+      drafts.push({
+        id: draftIdFromActionPlan(ap.id),
+        sourceRawInputId: input.id,
+        threadId: ap.threadId,
+        issueId,
+        actionPlanId: ap.id,
+        channel: "email",
+        to: "supplier@example.invalid",
+        subject: t.subject,
+        body: t.body,
+        status: "drafted",
+        generatedBy,
+        generatedAt,
+        confidence: typeof ap.confidence === "number" ? ap.confidence : 0.3,
+      } satisfies DraftDocument);
+    }
+
+    if (types.includes("teams_reply_required")) {
+      const t = teamsTemplate(thread.intent);
+      drafts.push({
+        id: `${draftIdFromActionPlan(ap.id)}-TEAMS`,
+        sourceRawInputId: input.id,
+        threadId: ap.threadId,
+        issueId,
+        actionPlanId: ap.id,
+        channel: "teams",
+        body: t.body,
+        status: "drafted",
+        generatedBy,
+        generatedAt,
+        confidence: typeof ap.confidence === "number" ? ap.confidence : 0.3,
+      } satisfies DraftDocument);
+    }
+  }
+
+  return drafts;
+}
+
 export function runIngestPipeline(input: RawInput, options: IngestPipelineOptions = {}): MockIngestResult {
   const threads = Array.isArray(options.threads) ? options.threads : classifyRawInput(input);
   const normalizedThreads = normalizeOperationalThreads(input, threads);
   const links = dedupeEntityLinks(linkThreadsToEntities(normalizedThreads));
   const issueMutations = buildIssueMutations(input, normalizedThreads, links, options);
-  const actionPlans = planNextActions(input, normalizedThreads, links, issueMutations, options);
+  const actionPlansBase = planNextActions(input, normalizedThreads, links, issueMutations, options);
+
+  const approvalPolicy = options.approvalPolicy ?? "low_confidence";
+  const isApprovalRequired = (thread: OperationalThread) =>
+    approvalPolicy === "all" ? true : approvalPolicy === "low_confidence" ? thread.confidence < 0.7 : false;
+
+  const actionPlans: ActionPlan[] = actionPlansBase.map((ap) => {
+    const thread = normalizedThreads.find((t) => t.id === ap.threadId);
+    if (!thread) return ap;
+    const status = isApprovalRequired(thread) ? "pending_approval" : "planned";
+    return { ...ap, status };
+  });
 
   const pipelineOccurredAt = input.receivedAt || ingestNowIso();
   const activityEventsBase = buildActivityEvents(input, normalizedThreads, links, pipelineOccurredAt, options);
 
   const actor = options.sourceLabel || "AI";
+
+  const drafts = buildDraftDocuments(input, normalizedThreads, links, issueMutations, actionPlans, options);
+
+  const draftCreatedEvents: ActivityEvent[] = drafts.map((d) => ({
+    id: ingestStableId("ACT", `${input.id}:${d.threadId}:${d.id}:draft_created`),
+    type: "draft_created",
+    occurredAt: pipelineOccurredAt,
+    sequence: ACTIVITY_SEQUENCE.draft_created,
+    title: "下書きを生成",
+    description: d.channel === "email" ? "email下書きを生成" : "Teams下書きを生成",
+    sourceRawInputId: input.id,
+    threadId: d.threadId,
+    linkedEntities: links.filter((l) => l.threadId === d.threadId),
+    status: "ok",
+    actor,
+  }));
 
   const actionPlannedEvents: ActivityEvent[] = actionPlans.map((ap) => ({
     id: ingestStableId("ACT", `${input.id}:${ap.threadId}:${ap.id}:action_planned`),
@@ -577,9 +722,10 @@ export function runIngestPipeline(input: RawInput, options: IngestPipelineOption
     rawInput: { ...input, status: "linked" },
     threads: normalizedThreads,
     links,
-    activityEvents: [...activityEventsBase, ...actionPlannedEvents, ...issueUpdatedEvents],
+    activityEvents: [...activityEventsBase, ...draftCreatedEvents, ...actionPlannedEvents, ...issueUpdatedEvents],
     issueMutations,
     actionPlans,
+    drafts,
   };
 }
 
