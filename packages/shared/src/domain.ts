@@ -715,8 +715,8 @@ export type ActivityEvent = {
   type: ActivityEventType;
   occurredAt: string;
   /**
-   * Sort key for events that share the same occurredAt.
-   * Smaller numbers appear first.
+   * 同一 pipeline / 同一 occurredAt 内での論理順序制御用。
+   * 小さいほど先に表示。
    */
   sequence?: number;
   title: string;

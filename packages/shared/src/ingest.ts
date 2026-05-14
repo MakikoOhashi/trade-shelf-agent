@@ -8,6 +8,7 @@ import type {
   OperationalThread,
   RawInput,
 } from "./domain";
+import type { ActivityEventType } from "./domain";
 
 function ingestStableId(prefix: string, seed: string) {
   let h = 2166136261;
@@ -31,6 +32,16 @@ function ingestHash8(seed: string) {
 function ingestNowIso() {
   return new Date().toISOString();
 }
+
+const ACTIVITY_SEQUENCE: Record<ActivityEventType, number> = {
+  raw_input_received: 10,
+  classified: 20,
+  entity_linked: 30,
+  action_planned: 40,
+  approval_required: 50,
+  issue_updated: 60,
+  failed_processing: 90,
+};
 
 export type IngestBuildOptions = {
   sourceLabel?: string;
@@ -283,13 +294,12 @@ export function buildActivityEvents(
   input: RawInput,
   threads: OperationalThread[],
   links: EntityLink[],
+  occurredAt: string,
   options: IngestBuildOptions = {},
 ): ActivityEvent[] {
   const events: ActivityEvent[] = [];
   const actor = options.sourceLabel || "AI";
   const approvalPolicy = options.approvalPolicy ?? "low_confidence";
-  const baseOccurredAt = input.receivedAt || ingestNowIso();
-  let sequence = 1;
 
   const sourceActorForInput = () => {
     const src = String(input.source || "").trim();
@@ -303,8 +313,8 @@ export function buildActivityEvents(
   events.push({
     id: ingestStableId("ACT", `${input.id}:raw_input_received`),
     type: "raw_input_received",
-    occurredAt: baseOccurredAt,
-    sequence: sequence++,
+    occurredAt,
+    sequence: ACTIVITY_SEQUENCE.raw_input_received,
     title: "依頼受信",
     description: input.rawText,
     sourceRawInputId: input.id,
@@ -315,8 +325,8 @@ export function buildActivityEvents(
   events.push({
     id: ingestStableId("ACT", `${input.id}:classified`),
     type: "classified",
-    occurredAt: baseOccurredAt,
-    sequence: sequence++,
+    occurredAt,
+    sequence: ACTIVITY_SEQUENCE.classified,
     title: "AI分類",
     description: (() => {
       const names = (Array.isArray(threads) ? threads : [])
@@ -334,8 +344,8 @@ export function buildActivityEvents(
   events.push({
     id: ingestStableId("ACT", `${input.id}:entity_linked`),
     type: "entity_linked",
-    occurredAt: baseOccurredAt,
-    sequence: sequence++,
+    occurredAt,
+    sequence: ACTIVITY_SEQUENCE.entity_linked,
     title: "関連紐付け",
     description: (() => {
       const list = (Array.isArray(links) ? links : [])
@@ -361,8 +371,8 @@ export function buildActivityEvents(
     events.push({
       id: ingestStableId("ACT", `${input.id}:${thread.id}:approval_required`),
       type: "approval_required",
-      occurredAt: baseOccurredAt,
-      sequence: sequence++,
+      occurredAt,
+      sequence: ACTIVITY_SEQUENCE.approval_required,
       title: "承認待ちへ追加",
       description: `${title} を承認待ちへ追加`,
       sourceRawInputId: input.id,
@@ -520,17 +530,16 @@ export function runIngestPipeline(input: RawInput, options: IngestPipelineOption
   const issueMutations = buildIssueMutations(input, normalizedThreads, links, options);
   const actionPlans = planNextActions(input, normalizedThreads, links, issueMutations, options);
 
-  const baseOccurredAt = input.receivedAt || ingestNowIso();
-  const activityEventsBase = buildActivityEvents(input, normalizedThreads, links, options);
-  let sequence = activityEventsBase.reduce((m, e) => Math.max(m, typeof e?.sequence === "number" ? e.sequence : 0), 0) + 1;
+  const pipelineOccurredAt = input.receivedAt || ingestNowIso();
+  const activityEventsBase = buildActivityEvents(input, normalizedThreads, links, pipelineOccurredAt, options);
 
   const actor = options.sourceLabel || "AI";
 
   const actionPlannedEvents: ActivityEvent[] = actionPlans.map((ap) => ({
     id: ingestStableId("ACT", `${input.id}:${ap.threadId}:${ap.id}:action_planned`),
     type: "action_planned",
-    occurredAt: baseOccurredAt,
-    sequence: sequence++,
+    occurredAt: pipelineOccurredAt,
+    sequence: ACTIVITY_SEQUENCE.action_planned,
     title: "次アクションを判定",
     description: ap.title,
     sourceRawInputId: input.id,
@@ -553,8 +562,8 @@ export function runIngestPipeline(input: RawInput, options: IngestPipelineOption
       {
         id: ingestStableId("ACT", `${input.id}:issue_updated:summary:${issueIds.join(",")}`),
         type: "issue_updated",
-        occurredAt: baseOccurredAt,
-        sequence: sequence++,
+        occurredAt: pipelineOccurredAt,
+        sequence: ACTIVITY_SEQUENCE.issue_updated,
         title: "Issue更新",
         description: desc,
         sourceRawInputId: input.id,

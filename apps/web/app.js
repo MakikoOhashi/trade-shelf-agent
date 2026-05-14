@@ -2116,11 +2116,10 @@ function renderNewTop() {
       .sort((a, b) => {
         const atA = String(a?.occurredAt || "");
         const atB = String(b?.occurredAt || "");
-        if (atA && atB && atA !== atB) return atA.localeCompare(atB);
-        const seqA = typeof a?.sequence === "number" ? a.sequence : null;
-        const seqB = typeof b?.sequence === "number" ? b.sequence : null;
-        if (typeof seqA === "number" && typeof seqB === "number" && seqA !== seqB) return seqA - seqB;
-        return String(a?.id || "").localeCompare(String(b?.id || ""));
+        if (atA !== atB) return atB.localeCompare(atA);
+        // Same occurredAt: show the later step first within the same pipeline (sequence DESC).
+        // Keep null/undefined sequence at the bottom.
+        return (b?.sequence ?? -999) - (a?.sequence ?? -999) || String(a?.id || "").localeCompare(String(b?.id || ""));
       });
 
     const filterDefs = [
