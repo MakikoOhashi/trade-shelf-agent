@@ -1240,6 +1240,16 @@ export function linkThreadsToEntities(threads) {
     }
     return links;
 }
+export function dedupeEntityLinks(links) {
+    const seen = new Set();
+    return links.filter((link) => {
+        const key = [link.threadId, link.entityType, link.entityId].join("::");
+        if (seen.has(key))
+            return false;
+        seen.add(key);
+        return true;
+    });
+}
 export function buildActivityEvents(input, threads, links, options = {}) {
     const events = [];
     const actor = options.sourceLabel || "mock ingest";
@@ -1281,10 +1291,8 @@ export function buildActivityEvents(input, threads, links, options = {}) {
             id: ingestStableId("ACT", `${input.id}:${thread.id}:approval_required`),
             type: "approval_required",
             occurredAt: ingestNowIso(),
-            title: "Approval required",
-            description: approvalPolicy === "all"
-                ? `Review thread (${thread.confidence.toFixed(2)}): ${thread.title}`
-                : `Low confidence thread (${thread.confidence.toFixed(2)}): ${thread.title}`,
+            title: `承認待ち: ${thread.title}`,
+            description: "AIが対応候補を整理しました。確認してください。",
             sourceRawInputId: input.id,
             threadId: thread.id,
             linkedEntities: links.filter((l) => l.threadId === thread.id),
@@ -1331,8 +1339,13 @@ export function buildIssueMutations(input, threads, links, options = {}) {
                 mutations.push({
                     issueId: "ISS-0002",
                     action: "mark_approval_required",
-                    title: "Approval required: low confidence classification",
-                    body: `Thread ${thread.id} confidence=${thread.confidence.toFixed(2)} for "${thread.title}"`,
+                    title: `承認待ち: ${thread.title}`,
+                    body: [
+                        "AIがこの依頼を承認待ちの対応候補として整理しました。",
+                        "",
+                        `Thread: ${thread.title} (confidence=${thread.confidence.toFixed(2)})`,
+                        `Summary: ${thread.summary}`,
+                    ].join("\n"),
                     ...baseFields,
                 });
             }
@@ -1363,8 +1376,13 @@ export function buildIssueMutations(input, threads, links, options = {}) {
                 mutations.push({
                     issueId: candidateId,
                     action: "mark_approval_required",
-                    title: "Approval required: low confidence classification",
-                    body: `Thread ${thread.id} confidence=${thread.confidence.toFixed(2)} for "${thread.title}"`,
+                    title: `承認待ち: ${thread.title}`,
+                    body: [
+                        "AIがこの依頼を承認待ちの対応候補として整理しました。",
+                        "",
+                        `Thread: ${thread.title} (confidence=${thread.confidence.toFixed(2)})`,
+                        `Summary: ${thread.summary}`,
+                    ].join("\n"),
                     ...baseFields,
                 });
             }
@@ -1384,8 +1402,13 @@ export function buildIssueMutations(input, threads, links, options = {}) {
             mutations.push({
                 issueId: candidateId,
                 action: "mark_approval_required",
-                title: "Approval required: low confidence classification",
-                body: `Thread ${thread.id} confidence=${thread.confidence.toFixed(2)} for "${thread.title}"`,
+                title: `承認待ち: ${thread.title}`,
+                body: [
+                    "AIがこの依頼を承認待ちの対応候補として整理しました。",
+                    "",
+                    `Thread: ${thread.title} (confidence=${thread.confidence.toFixed(2)})`,
+                    `Summary: ${thread.summary}`,
+                ].join("\n"),
                 ...baseFields,
             });
         }
@@ -1393,7 +1416,7 @@ export function buildIssueMutations(input, threads, links, options = {}) {
     return mutations;
 }
 export function buildIngestResultFromThreads(input, threads, options = {}) {
-    const links = linkThreadsToEntities(threads);
+    const links = dedupeEntityLinks(linkThreadsToEntities(threads));
     const activityEvents = buildActivityEvents(input, threads, links, options);
     const issueMutations = buildIssueMutations(input, threads, links, options);
     const issueUpdatedEvents = issueMutations.map((m) => ({

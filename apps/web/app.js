@@ -366,6 +366,73 @@ function summarizeEntitiesJa(entities) {
   return parts.length ? parts.join(" / ") : "-";
 }
 
+function normalizeAiApprovalText(text) {
+  const s = String(text || "");
+  if (!s) return "";
+  return s.replaceAll("Approval required: low confidence classification", "AIが対応候補を整理しました。確認してください。");
+}
+
+function normalizeMutationTitle(title) {
+  let s = String(title || "").trim();
+  if (!s) return "";
+  s = normalizeAiApprovalText(s);
+  s = s.replace(/\s*:\s*shipment unknown\s*$/i, "");
+  return s.trim();
+}
+
+function extractMutationParsed(mutation) {
+  const m = mutation || {};
+  const parsed = parseIssueMutationBody(String(m?.body || ""));
+  const linkedEntities = Array.isArray(m?.linkedEntities) ? m.linkedEntities.filter(Boolean) : [];
+  const entities =
+    linkedEntities.length
+      ? linkedEntities
+          .map((l) => ({ entityType: String(l?.entityType || ""), entityId: String(l?.entityId || "") }))
+          .filter((e) => e.entityType && e.entityId)
+      : parsed.entities;
+
+  const confidence =
+    typeof m?.confidence === "number" && Number.isFinite(m.confidence)
+      ? m.confidence
+      : typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+        ? parsed.confidence
+        : null;
+
+  return {
+    summary: parsed.summary,
+    intent: parsed.intent,
+    confidence,
+    rawText: parsed.rawText,
+    entities,
+  };
+}
+
+function groupIssueMutationsByIssueId(mutations) {
+  const list = Array.isArray(mutations) ? mutations.filter(Boolean) : [];
+  const groups = new Map();
+  const order = [];
+
+  for (const mut of list) {
+    const issueId = String(mut?.issueId || "").trim() || "LLM";
+    if (!groups.has(issueId)) {
+      groups.set(issueId, { issueId, items: [] });
+      order.push(issueId);
+    }
+    groups.get(issueId).items.push(mut);
+  }
+
+  return order
+    .map((issueId) => {
+      const g = groups.get(issueId);
+      if (!g) return null;
+      const items = Array.isArray(g.items) ? g.items.filter(Boolean) : [];
+      const representative = items.find((x) => String(x?.action || "") === "mark_approval_required") || items[0] || null;
+      const others = representative ? items.filter((x) => String(x?.id || "") !== String(representative?.id || "")) : items;
+      return { issueId, representative, others };
+    })
+    .filter(Boolean);
+}
+
 function buildDraftBodyFromMutation(mutation) {
   const title = String(mutation?.title || "").trim();
   const parsed = parseIssueMutationBody(String(mutation?.body || ""));
@@ -385,16 +452,17 @@ function buildDraftBodyFromMutation(mutation) {
 }
 
 function buildIssueLikeFromMutation(mutation) {
-  const parsed = parseIssueMutationBody(String(mutation?.body || ""));
+  const parsed = extractMutationParsed(mutation);
   const classification = classifyLabelJaFromIntent(parsed.intent);
   const entitiesText = summarizeEntitiesJa(parsed.entities);
   const confidenceText = confidenceLabelJa(parsed.confidence);
   const rawText = parsed.rawText || "-";
 
-  const title = String(mutation?.title || "Untitled");
+  const title = normalizeMutationTitle(String(mutation?.title || "")) || "Untitled";
   const issueNo = String(mutation?.issueId || "LLM");
   const now = nowIso();
 
+  const source = String(mutation?.source || "").trim() || "Kimi AI分類";
   return {
     id: String(mutation?.id || issueNo),
     issueNo,
@@ -402,16 +470,16 @@ function buildIssueLikeFromMutation(mutation) {
     severity: "medium",
     statusKey: "requiresApproval",
     statusText: "requires approval",
-    currentStatus: {
-      status: "人間承認待ち",
-      pendingApproval: true,
-      nextAction: "AI提案内容の確認",
-      aiProposal: parsed.summary || title,
-      classification,
-      entitiesText,
-      confidenceText,
-      source: "Kimi AI分類",
-    },
+      currentStatus: {
+        status: "人間承認待ち",
+        pendingApproval: true,
+        nextAction: "AI提案内容の確認",
+        aiProposal: parsed.summary || title,
+        classification,
+        entitiesText,
+        confidenceText,
+        source,
+      },
     timeline: [
       {
         id: `raw:${issueNo}`,
@@ -427,7 +495,7 @@ function buildIssueLikeFromMutation(mutation) {
         type: "aiClassified",
         label: "AIが業務スレッドへ分類",
         actor: "trade-shelf-agent",
-        message: `分類: ${classification}\n信頼度: ${confidenceText}\nsource: Kimi AI分類`,
+        message: `分類: ${classification}\n信頼度: ${confidenceText}\nsource: ${source}`,
       },
       {
         id: `ent:${issueNo}`,
@@ -1336,7 +1404,7 @@ function renderNewTop() {
       </div>`;
     };
 
-    const pendingMutations = Array.isArray(state.issueMutationItems) ? state.issueMutationItems.filter(Boolean) : [];
+  const pendingMutations = Array.isArray(state.issueMutationItems) ? state.issueMutationItems.filter(Boolean) : [];
 
     const actionLabel = (a) => {
       const v = String(a || "");
@@ -1348,33 +1416,59 @@ function renderNewTop() {
 
     const renderPendingMutations = () => {
       if (!pendingMutations.length) return "";
-      const rows = pendingMutations
-        .slice()
-        .map((m) => {
-          const issueId = String(m?.issueId || "");
-          const action = String(m?.action || "");
-          const title = String(m?.title || "");
-          const parsed = parseIssueMutationBody(String(m?.body || ""));
+      const groups = groupIssueMutationsByIssueId(pendingMutations);
+      const rows = groups
+        .map((g) => {
+          const rep = g.representative;
+          if (!rep) return "";
+          const issueId = String(g.issueId || "");
+          const repAction = String(rep?.action || "");
+          const title = normalizeMutationTitle(String(rep?.title || "")) || "-";
+          const parsed = extractMutationParsed(rep);
+
           const classification = classifyLabelJaFromIntent(parsed.intent);
           const entitiesText = summarizeEntitiesJa(parsed.entities);
           const confText = confidenceLabelJa(parsed.confidence);
+          const source = String(rep?.source || "").trim() || "Kimi AI分類";
 
-          return `<div class="pending-mutations__item" role="button" tabindex="0" data-mutation-open="${escapeHtml(String(m?.id || ""))}">
+          const extraActions = Array.isArray(g.others)
+            ? g.others
+                .map((x) => String(x?.action || ""))
+                .filter(Boolean)
+                .map(actionLabel)
+                .filter(Boolean)
+            : [];
+          const extraText = extraActions.length ? ` / ${[...new Set(extraActions)].join("・")}` : "";
+
+          const pills = [];
+          if (classification && classification !== "-") pills.push(`<span class="issue-pill">${escapeHtml(`分類: ${classification}`)}</span>`);
+          if (entitiesText && entitiesText !== "-") pills.push(`<span class="issue-pill">${escapeHtml(`関連: ${entitiesText}`)}</span>`);
+          if (confText && confText !== "-") pills.push(`<span class="issue-pill">${escapeHtml(`信頼度: ${confText}`)}</span>`);
+          pills.push(`<span class="issue-pill is-source">${escapeHtml(`source: ${source}`)}</span>`);
+
+          const baseAction = repAction === "mark_approval_required" ? "" : actionLabel(repAction);
+          const actionText = `${baseAction}${extraText}`.replace(/^\s*\/\s*/, "").trim();
+          const approvalMsgSource = `${String(rep?.title || "")}\n${String(rep?.body || "")}`;
+          const hasLegacyApprovalText = approvalMsgSource.includes("Approval required: low confidence classification");
+          const approvalMsg =
+            hasLegacyApprovalText || repAction === "mark_approval_required"
+              ? "AIが対応候補を整理しました。確認してください。"
+              : "";
+
+          return `<div class="pending-mutations__item" role="button" tabindex="0" data-mutation-open="${escapeHtml(String(rep?.id || ""))}">
             <div class="pending-mutations__top">
               <div class="pending-mutations__title-row">
-                <div class="pending-mutations__title">${escapeHtml(title || "-")}</div>
+                <div class="pending-mutations__title">${escapeHtml(title)}</div>
                 <span class="issue-pill is-approval">承認待ち</span>
               </div>
               <div class="pending-mutations__sub">
                 <span class="issue-pill nt-mono">#${escapeHtml(issueId || "-")}</span>
-                <span class="issue-pill">${escapeHtml(actionLabel(action))}</span>
+                ${actionText ? `<span class="issue-pill">${escapeHtml(actionText)}</span>` : ""}
+                ${approvalMsg ? `<span class="issue-pill is-message">${escapeHtml(approvalMsg)}</span>` : ""}
               </div>
             </div>
             <div class="pending-mutations__meta">
-              <span class="issue-pill">${escapeHtml(`分類: ${classification || "-"}`)}</span>
-              <span class="issue-pill">${escapeHtml(`関連: ${entitiesText || "-"}`)}</span>
-              <span class="issue-pill">${escapeHtml(`信頼度: ${confText || "-"}`)}</span>
-              <span class="issue-pill is-source">${escapeHtml("source: Kimi AI分類")}</span>
+              ${pills.join("")}
             </div>
           </div>`;
         })
@@ -1431,7 +1525,8 @@ function renderNewTop() {
         null;
       if (!mut) return `<div class="nt-muted">LLM候補が見つかりませんでした。</div>`;
 
-      const issueLike = buildIssueLikeFromMutation(mut);
+      const normalizedMut = { ...mut, title: normalizeMutationTitle(mut?.title) };
+      const issueLike = buildIssueLikeFromMutation(normalizedMut);
       const sev = String(issueLike.severity || "low").toLowerCase();
       const sevClass = sev === "critical" || sev === "high" ? "is-high" : sev === "medium" ? "is-medium" : "is-low";
 
@@ -1480,11 +1575,28 @@ function renderNewTop() {
       timeline.sort((a, b) => String(a?.at || "").localeCompare(String(b?.at || "")));
       const timelineHtml = timeline.length ? timeline.map(renderTimelineItem).join("") : `<div class="nt-muted">No timeline yet</div>`;
 
+      const sidebarRows = [];
+      if (cs.classification && cs.classification !== "-") {
+        sidebarRows.push(
+          `<div class="issue-sidebar-row"><div class="issue-sidebar__k">分類</div><div class="issue-sidebar__v">${escapeHtml(String(cs.classification))}</div></div>`
+        );
+      }
+      if (cs.entitiesText && cs.entitiesText !== "-") {
+        sidebarRows.push(
+          `<div class="issue-sidebar-row"><div class="issue-sidebar__k">関連エンティティ</div><div class="issue-sidebar__v">${escapeHtml(String(cs.entitiesText))}</div></div>`
+        );
+      }
+      if (cs.confidenceText && cs.confidenceText !== "-") {
+        sidebarRows.push(
+          `<div class="issue-sidebar-row"><div class="issue-sidebar__k">信頼度</div><div class="issue-sidebar__v">${escapeHtml(String(cs.confidenceText))}</div></div>`
+        );
+      }
+      sidebarRows.push(
+        `<div class="issue-sidebar-row"><div class="issue-sidebar__k">source</div><div class="issue-sidebar__v">${escapeHtml(String(cs.source || "Kimi AI分類"))}</div></div>`
+      );
+
       const metaPanelHtml = `<aside class="issue-meta-panel issue-meta-panel--sticky" aria-label="Meta Panel">
-        <div class="issue-sidebar-row"><div class="issue-sidebar__k">分類</div><div class="issue-sidebar__v">${escapeHtml(String(cs.classification || "-"))}</div></div>
-        <div class="issue-sidebar-row"><div class="issue-sidebar__k">関連エンティティ</div><div class="issue-sidebar__v">${escapeHtml(String(cs.entitiesText || "-"))}</div></div>
-        <div class="issue-sidebar-row"><div class="issue-sidebar__k">信頼度</div><div class="issue-sidebar__v">${escapeHtml(String(cs.confidenceText || "-"))}</div></div>
-        <div class="issue-sidebar-row"><div class="issue-sidebar__k">source</div><div class="issue-sidebar__v">${escapeHtml(String(cs.source || "Kimi AI分類"))}</div></div>
+        ${sidebarRows.join("")}
       </aside>`;
 
       return `<section class="issue-detail" aria-label="LLM mutation detail">
@@ -1921,7 +2033,7 @@ function renderNewTop() {
       { key: "teams", label: "Teams" },
       { key: "email", label: "Email" },
       { key: "aiProcessed", label: "AI processed" },
-      { key: "awaitingApproval", label: "Awaiting approval" },
+      { key: "awaitingApproval", label: "承認待ち" },
       { key: "failed", label: "Failed" },
       { key: "supplierReply", label: "Supplier reply" },
     ];
@@ -6500,6 +6612,10 @@ function setupNewTop() {
             action: m?.action,
             title: m?.title,
             body: m?.body,
+            linkedEntities: Array.isArray(m?.linkedEntities) ? m.linkedEntities : undefined,
+            confidence: typeof m?.confidence === "number" ? m.confidence : undefined,
+            threadId: m?.threadId,
+            source: m?.source,
           }));
           state.issueMutationItems = prependUniqueById(state.issueMutationItems, mutations);
         } catch (e) {
