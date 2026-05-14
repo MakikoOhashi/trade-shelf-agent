@@ -55,6 +55,11 @@ const state = {
    */
   latestIngestResult: null,
   /**
+   * Latest ingest result mode ("mock" | "llm")
+   * @type {"mock" | "llm" | null}
+   */
+  latestIngestResultMode: null,
+  /**
    * Active raw request id in Requests page
    * @type {string | null}
    */
@@ -246,92 +251,26 @@ async function submitMockIngest(rawText) {
   return response.json();
 }
 
-async function submitRealClassify(rawText) {
-  const response = await fetchWithTimeout(`${API_BASE_URL}/ai/classify`, {
+async function submitLlmIngest(rawText) {
+  const response = await fetchWithTimeout(`${API_BASE_URL}/ingest/llm`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
+      source: "teams",
+      senderName: "営業A",
+      channel: "Teams",
       rawText,
     }),
   });
 
   if (!response.ok) {
     const text = await response.text();
-    throw new Error(text || `LLM classify failed: ${response.status}`);
+    throw new Error(text || `LLM ingest failed: ${response.status}`);
   }
 
   return response.json();
-}
-
-function buildEntityLinksFromThread(thread) {
-  const t = thread && typeof thread === "object" ? thread : {};
-  const threadId = String(t.id || "").trim() || `thr-${shortId()}`;
-  const confidence = typeof t.confidence === "number" ? t.confidence : 0.3;
-  const entities = t.extractedEntities && typeof t.extractedEntities === "object" ? t.extractedEntities : {};
-
-  /** @type {Array<any>} */
-  const links = [];
-
-  for (const siId of entities.siIds || []) {
-    const v = String(siId ?? "").trim();
-    if (!v) continue;
-    links.push({
-      id: `llm-link-${threadId}-si-${v}`,
-      threadId,
-      entityType: "SI",
-      entityId: v,
-      confidence,
-      reason: "AIが依頼文からSI番号を抽出",
-    });
-  }
-
-  for (const shipmentId of entities.shipmentIds || []) {
-    const v = String(shipmentId ?? "").trim();
-    if (!v) continue;
-    links.push({
-      id: `llm-link-${threadId}-shipment-${v}`,
-      threadId,
-      entityType: "Shipment",
-      entityId: v,
-      confidence,
-      reason: "AIが依頼文からShipment番号を抽出",
-    });
-  }
-
-  for (const supplierName of entities.supplierNames || []) {
-    const v = String(supplierName ?? "").trim();
-    if (!v) continue;
-    links.push({
-      id: `llm-link-${threadId}-supplier-${v}`,
-      threadId,
-      entityType: "Supplier",
-      entityId: v,
-      confidence,
-      reason: "AIが依頼文からSupplier名を抽出",
-    });
-  }
-
-  for (const documentType of entities.documentTypes || []) {
-    const v = String(documentType ?? "").trim();
-    if (!v) continue;
-    links.push({
-      id: `llm-link-${threadId}-document-${v}`,
-      threadId,
-      entityType: "Document",
-      entityId: v,
-      confidence,
-      reason: "AIが依頼文から書類種別を抽出",
-    });
-  }
-
-  return links;
-}
-
-function buildEntityLinksFromThreads(threads) {
-  const list = Array.isArray(threads) ? threads.filter(Boolean) : [];
-  return list.flatMap(buildEntityLinksFromThread);
 }
 
 function formatEntityType(type) {
@@ -349,100 +288,6 @@ function formatEntityType(type) {
     issue: "Issue",
   };
   return map[t] || map[t.toLowerCase()] || t;
-}
-
-function transformThreadsToActivityEvents(threads) {
-  const list = Array.isArray(threads) ? threads.filter(Boolean) : [];
-  const occurredAt = nowIso();
-  const titles = list.map((t) => String(t?.title || "").trim()).filter(Boolean);
-
-  /** @type {Array<any>} */
-  const out = [];
-
-  out.push({
-    id: `act-${shortId()}`,
-    occurredAt,
-    type: "classified",
-    title: `${list.length}件の業務スレッドを検出`,
-    description: titles.slice(0, 6).join(" / "),
-    status: "ok",
-    actor: "Kimi AI分類",
-  });
-
-  for (const t of list) {
-    const links = buildEntityLinksFromThread(t);
-    const linkedEntities = links.map((l) => ({
-      entityType: l.entityType,
-      entityId: l.entityId,
-      confidence: l.confidence,
-    }));
-
-    if (linkedEntities.length) {
-      out.push({
-        id: `act-${shortId()}`,
-        occurredAt,
-        type: "entity_linked",
-        title: "紐付け先を抽出",
-        description: String(t?.title || ""),
-        status: "ok",
-        linkedEntities,
-        actor: "Kimi AI分類",
-      });
-    }
-
-    out.push({
-      id: `act-${shortId()}`,
-      occurredAt,
-      type: "approval_required",
-      title: "承認が必要",
-      description: `Review LLM thread: ${String(t?.title || "Untitled")}`,
-      status: "warning",
-      actor: "Kimi AI分類",
-    });
-  }
-
-  return out;
-}
-
-function transformThreadsToIssueMutations(threads, rawText) {
-  const list = Array.isArray(threads) ? threads.filter(Boolean) : [];
-  const raw = String(rawText || "").trim();
-
-  return list.map((t) => {
-    const id = String(t?.id || "").trim();
-    const confidence = typeof t?.confidence === "number" ? t.confidence : null;
-    const links = buildEntityLinksFromThread(t);
-
-    const lines = [
-      `Summary: ${String(t?.summary || "").trim() || "-"}`,
-      `Intent: ${String(t?.intent || "").trim() || "-"}`,
-      `Confidence: ${typeof confidence === "number" && Number.isFinite(confidence) ? confidence.toFixed(2) : "-"}`,
-    ];
-
-    if (links.length) {
-      const grouped = new Map();
-      for (const l of links) {
-        const k = formatEntityType(l.entityType);
-        const arr = grouped.get(k) || [];
-        arr.push(String(l.entityId));
-        grouped.set(k, arr);
-      }
-      for (const [k, arr] of grouped.entries()) {
-        const uniq = [...new Set(arr)].filter(Boolean);
-        if (!uniq.length) continue;
-        lines.push(`Entities(${k}): ${uniq.join(", ")}`);
-      }
-    }
-
-    if (raw) lines.push(`Raw: ${raw}`);
-
-    return {
-      issueId: `LLM-${id || shortId()}`,
-      action: "mark_approval_required",
-      title: String(t?.title || "Untitled"),
-      body: lines.join("\n"),
-    };
-  });
 }
 
 function parseIssueMutationBody(body) {
@@ -2369,9 +2214,9 @@ function renderNewTop() {
     const ingestEvents = Array.isArray(ingestResult?.activityEvents) ? ingestResult.activityEvents.filter(Boolean) : [];
     const ingestMutations = Array.isArray(ingestResult?.issueMutations) ? ingestResult.issueMutations.filter(Boolean) : [];
 
-    const isLlmResult = ingestResult && ingestResult.mode === "llm";
+    const isLlmResult = state.latestIngestResultMode === "llm";
     const llmThreads = isLlmResult ? ingestThreads : [];
-    const ingestLinks = isLlmResult ? buildEntityLinksFromThreads(ingestThreads) : rawIngestLinks;
+    const ingestLinks = rawIngestLinks;
 
     const intentLabel = (intent) => {
       const v = String(intent || "");
@@ -6634,25 +6479,15 @@ function setupNewTop() {
             }
             result = payload && payload.result ? payload.result : payload;
           } else {
-            const payload = await submitRealClassify(rawText);
+            const payload = await submitLlmIngest(rawText);
             if (payload && payload.ok === false) {
-              throw new Error(payload.error || "LLM classify failed");
+              throw new Error(payload.error || "LLM ingest failed");
             }
-            const threads = Array.isArray(payload?.threads) ? payload.threads : [];
-            const links = buildEntityLinksFromThreads(threads);
-            const activityEvents = transformThreadsToActivityEvents(threads);
-            const issueMutations = transformThreadsToIssueMutations(threads, rawText);
-            result = {
-              mode: "llm",
-              rawText,
-              threads,
-              links,
-              activityEvents,
-              issueMutations,
-            };
+            result = payload && payload.result ? payload.result : payload;
           }
 
           state.latestIngestResult = result || null;
+          state.latestIngestResultMode = state.classifyMode;
 
           const events = Array.isArray(result?.activityEvents) ? result.activityEvents.filter(Boolean) : [];
           const feedItems = events.map(activityEventToFeedItem);

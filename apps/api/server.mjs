@@ -5,7 +5,7 @@ import path from "node:path";
 import url from "node:url";
 
 import OpenAI from "openai";
-import { runMockIngest } from "../web/vendor/shared/index.js";
+import { buildIngestResultFromThreads, runMockIngest } from "../web/vendor/shared/index.js";
 
 const __dirname = path.dirname(url.fileURLToPath(import.meta.url));
 const webRoot = path.resolve(__dirname, "..", "web");
@@ -207,6 +207,48 @@ function normalizeThreads(parsed, rawText) {
   });
 }
 
+async function classifyThreadsWithLlm(rawText) {
+  const userPrompt = [
+    "Classify this input:",
+    String(rawText || "").trim(),
+    "",
+    "Return compact JSON only. Maximum 3 threads.",
+  ].join("\n");
+
+  const completion = await aiClient.chat.completions.create({
+    model: process.env.AZURE_OPENAI_DEPLOYMENT,
+    messages: [
+      { role: "system", content: CLASSIFY_SYSTEM_PROMPT },
+      { role: "user", content: userPrompt },
+    ],
+    temperature: 0,
+    max_tokens: 2000,
+  });
+
+  const finishReason = completion.choices?.[0]?.finish_reason;
+  console.log("LLM finish_reason:", finishReason);
+
+  const content = completion.choices?.[0]?.message?.content ?? "";
+  let parsed;
+  try {
+    parsed = JSON.parse(content);
+  } catch {
+    const err = new Error("Failed to parse LLM JSON");
+    err.finishReason = finishReason;
+    err.raw = String(content ?? "");
+    throw err;
+  }
+
+  const normalized = normalizeThreads(parsed, rawText);
+  if (!normalized) {
+    const err = new Error("Invalid LLM response shape");
+    err.raw = String(content ?? "");
+    throw err;
+  }
+
+  return normalized;
+}
+
 async function serveStatic(req, res) {
   const reqUrl = new URL(req.url || "/", "http://localhost");
   const pathname = decodeURIComponent(reqUrl.pathname);
@@ -304,6 +346,49 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
+  if (method === "POST" && reqUrl.pathname === "/ingest/llm") {
+    try {
+      const body = await readJsonBody(req);
+      const rawText = typeof body.rawText === "string" ? body.rawText : "";
+      if (!rawText.trim()) {
+        sendJson(res, 400, { ok: false, error: "rawText is required" });
+        return;
+      }
+
+      const rawInput = {
+        id: `raw-${Date.now()}`,
+        source: body.source ?? "teams",
+        receivedAt: new Date().toISOString(),
+        senderName: body.senderName,
+        senderEmail: body.senderEmail,
+        channel: body.channel,
+        subject: body.subject,
+        rawText,
+        attachmentNames: body.attachmentNames ?? [],
+        status: "received",
+      };
+
+      const threads = await classifyThreadsWithLlm(rawText);
+      const operationalThreads = threads.map((t) => ({
+        ...t,
+        rawInputId: rawInput.id,
+      }));
+
+      const result = buildIngestResultFromThreads(rawInput, operationalThreads, {
+        sourceLabel: "Kimi AI分類",
+        // TODO: Switch to confidence-based approval (low_confidence) after we refine the policy.
+        approvalPolicy: "all",
+      });
+
+      sendJson(res, 200, { ok: true, result });
+      return;
+    } catch (e) {
+      const message = e && e.message ? String(e.message) : "LLM ingest failed";
+      sendJson(res, 502, { ok: false, error: message });
+      return;
+    }
+  }
+
   if (method === "POST" && reqUrl.pathname === "/ai/classify") {
     try {
       const body = await readJsonBody(req);
@@ -313,50 +398,7 @@ const server = http.createServer(async (req, res) => {
         return;
       }
 
-      const userPrompt = [
-        "Classify this input:",
-        rawText.trim(),
-        "",
-        "Return compact JSON only. Maximum 3 threads.",
-      ].join("\n");
-
-      const completion = await aiClient.chat.completions.create({
-        model: process.env.AZURE_OPENAI_DEPLOYMENT,
-        messages: [
-          { role: "system", content: CLASSIFY_SYSTEM_PROMPT },
-          { role: "user", content: userPrompt },
-        ],
-        temperature: 0,
-        max_tokens: 2000,
-      });
-
-      const finishReason = completion.choices?.[0]?.finish_reason;
-      console.log("LLM finish_reason:", finishReason);
-
-      const content = completion.choices?.[0]?.message?.content ?? "";
-      let parsed;
-      try {
-        parsed = JSON.parse(content);
-      } catch {
-        sendJson(res, 502, {
-          ok: false,
-          error: "Failed to parse LLM JSON",
-          finishReason,
-          raw: String(content ?? ""),
-        });
-        return;
-      }
-
-      const normalized = normalizeThreads(parsed, rawText);
-      if (!normalized) {
-        sendJson(res, 502, {
-          ok: false,
-          error: "Invalid LLM response shape",
-          raw: String(content ?? ""),
-        });
-        return;
-      }
-
+      const normalized = await classifyThreadsWithLlm(rawText);
       sendJson(res, 200, { ok: true, threads: normalized });
       return;
     } catch (error) {

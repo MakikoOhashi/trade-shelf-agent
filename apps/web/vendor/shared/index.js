@@ -1240,8 +1240,10 @@ export function linkThreadsToEntities(threads) {
     }
     return links;
 }
-export function buildActivityEvents(input, threads, links) {
+export function buildActivityEvents(input, threads, links, options = {}) {
     const events = [];
+    const actor = options.sourceLabel || "mock ingest";
+    const approvalPolicy = options.approvalPolicy ?? "low_confidence";
     events.push({
         id: ingestStableId("ACT", `${input.id}:raw_input_received`),
         type: "raw_input_received",
@@ -1250,14 +1252,16 @@ export function buildActivityEvents(input, threads, links) {
         description: input.rawText.slice(0, 200),
         sourceRawInputId: input.id,
         status: "ok",
+        actor,
     });
     events.push({
         id: ingestStableId("ACT", `${input.id}:classified`),
         type: "classified",
         occurredAt: ingestNowIso(),
-        title: `Classified into ${threads.length} thread(s)`,
+        title: `${actor}: Classified into ${threads.length} thread(s)`,
         sourceRawInputId: input.id,
         status: "ok",
+        actor,
     });
     events.push({
         id: ingestStableId("ACT", `${input.id}:entity_linked`),
@@ -1267,28 +1271,42 @@ export function buildActivityEvents(input, threads, links) {
         sourceRawInputId: input.id,
         linkedEntities: links,
         status: "ok",
+        actor,
     });
     for (const thread of threads) {
-        if (thread.confidence >= 0.7)
+        const shouldRequireApproval = approvalPolicy === "all" ? true : approvalPolicy === "low_confidence" ? thread.confidence < 0.7 : false;
+        if (!shouldRequireApproval)
             continue;
         events.push({
             id: ingestStableId("ACT", `${input.id}:${thread.id}:approval_required`),
             type: "approval_required",
             occurredAt: ingestNowIso(),
             title: "Approval required",
-            description: `Low confidence thread (${thread.confidence.toFixed(2)}): ${thread.title}`,
+            description: approvalPolicy === "all"
+                ? `Review thread (${thread.confidence.toFixed(2)}): ${thread.title}`
+                : `Low confidence thread (${thread.confidence.toFixed(2)}): ${thread.title}`,
             sourceRawInputId: input.id,
             threadId: thread.id,
             linkedEntities: links.filter((l) => l.threadId === thread.id),
             status: "warning",
+            actor,
         });
     }
     return events;
 }
-export function buildIssueMutations(input, threads, links) {
+export function buildIssueMutations(input, threads, links, options = {}) {
     const mutations = [];
+    const approvalPolicy = options.approvalPolicy ?? "low_confidence";
+    const sourceLabel = options.sourceLabel || "mock ingest";
     for (const thread of threads) {
         const threadLinks = links.filter((l) => l.threadId === thread.id);
+        const baseFields = {
+            sourceRawInputId: input.id,
+            threadId: thread.id,
+            linkedEntities: threadLinks,
+            confidence: thread.confidence,
+            sourceLabel,
+        };
         if (thread.title.includes("PL未着")) {
             const shipmentIds = thread.extractedEntities.shipmentIds ?? [];
             const title = `PL未着確認: ${shipmentIds[0] ?? "shipment unknown"}`;
@@ -1306,13 +1324,16 @@ export function buildIssueMutations(input, threads, links) {
                 action: "append_comment",
                 title,
                 body: bodyLines.join("\n"),
+                ...baseFields,
             });
-            if (thread.confidence < 0.7) {
+            const shouldRequireApproval = approvalPolicy === "all" ? true : approvalPolicy === "low_confidence" ? thread.confidence < 0.7 : false;
+            if (shouldRequireApproval) {
                 mutations.push({
                     issueId: "ISS-0002",
                     action: "mark_approval_required",
                     title: "Approval required: low confidence classification",
                     body: `Thread ${thread.id} confidence=${thread.confidence.toFixed(2)} for "${thread.title}"`,
+                    ...baseFields,
                 });
             }
             continue;
@@ -1335,13 +1356,16 @@ export function buildIssueMutations(input, threads, links) {
                 action: "create_issue_candidate",
                 title,
                 body: bodyLines.join("\n"),
+                ...baseFields,
             });
-            if (thread.confidence < 0.7) {
+            const shouldRequireApproval = approvalPolicy === "all" ? true : approvalPolicy === "low_confidence" ? thread.confidence < 0.7 : false;
+            if (shouldRequireApproval) {
                 mutations.push({
                     issueId: candidateId,
                     action: "mark_approval_required",
                     title: "Approval required: low confidence classification",
                     body: `Thread ${thread.id} confidence=${thread.confidence.toFixed(2)} for "${thread.title}"`,
+                    ...baseFields,
                 });
             }
             continue;
@@ -1353,15 +1377,25 @@ export function buildIssueMutations(input, threads, links) {
             action: "create_issue_candidate",
             title: `Thread: ${thread.title}`,
             body: `Summary: ${thread.summary}\n\nRaw: ${input.rawText}`,
+            ...baseFields,
         });
+        const shouldRequireApproval = approvalPolicy === "all" ? true : approvalPolicy === "low_confidence" ? thread.confidence < 0.7 : false;
+        if (shouldRequireApproval) {
+            mutations.push({
+                issueId: candidateId,
+                action: "mark_approval_required",
+                title: "Approval required: low confidence classification",
+                body: `Thread ${thread.id} confidence=${thread.confidence.toFixed(2)} for "${thread.title}"`,
+                ...baseFields,
+            });
+        }
     }
     return mutations;
 }
-export function runMockIngest(input) {
-    const threads = classifyRawInput(input);
+export function buildIngestResultFromThreads(input, threads, options = {}) {
     const links = linkThreadsToEntities(threads);
-    const activityEvents = buildActivityEvents(input, threads, links);
-    const issueMutations = buildIssueMutations(input, threads, links);
+    const activityEvents = buildActivityEvents(input, threads, links, options);
+    const issueMutations = buildIssueMutations(input, threads, links, options);
     const issueUpdatedEvents = issueMutations.map((m) => ({
         id: ingestStableId("ACT", `${input.id}:issue_updated:${m.issueId}:${m.action}:${m.title}`),
         type: "issue_updated",
@@ -1370,6 +1404,7 @@ export function runMockIngest(input) {
         description: m.title,
         sourceRawInputId: input.id,
         status: m.action === "mark_approval_required" ? "warning" : "ok",
+        actor: options.sourceLabel || "mock ingest",
     }));
     return {
         rawInput: { ...input, status: "linked" },
@@ -1378,6 +1413,13 @@ export function runMockIngest(input) {
         activityEvents: [...activityEvents, ...issueUpdatedEvents],
         issueMutations,
     };
+}
+export function runMockIngest(input) {
+    const threads = classifyRawInput(input);
+    return buildIngestResultFromThreads(input, threads, {
+        sourceLabel: "mock ingest",
+        approvalPolicy: "low_confidence",
+    });
 }
 
 

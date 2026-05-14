@@ -719,6 +719,22 @@ export type ActivityEvent = {
   threadId?: string;
   linkedEntities?: EntityLink[];
   status: "ok" | "warning" | "failed";
+  /**
+   * UI display label (e.g. "mock ingest", "Kimi AI分類")
+   */
+  actor?: string;
+};
+
+export type IssueMutation = {
+  issueId: string;
+  action: "append_comment" | "create_issue_candidate" | "mark_approval_required";
+  title: string;
+  body: string;
+  sourceRawInputId?: string;
+  threadId?: string;
+  linkedEntities?: EntityLink[];
+  confidence?: number;
+  sourceLabel?: string;
 };
 
 export type MockIngestResult = {
@@ -726,10 +742,5 @@ export type MockIngestResult = {
   threads: OperationalThread[];
   links: EntityLink[];
   activityEvents: ActivityEvent[];
-  issueMutations: {
-    issueId: string;
-    action: "append_comment" | "create_issue_candidate" | "mark_approval_required";
-    title: string;
-    body: string;
-  }[];
+  issueMutations: IssueMutation[];
 };

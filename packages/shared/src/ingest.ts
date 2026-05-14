@@ -1,4 +1,4 @@
-import type { ActivityEvent, EntityLink, MockIngestResult, OperationalThread, RawInput } from "./domain";
+import type { ActivityEvent, EntityLink, IssueMutation, MockIngestResult, OperationalThread, RawInput } from "./domain";
 
 function ingestStableId(prefix: string, seed: string) {
   let h = 2166136261;
@@ -12,6 +12,11 @@ function ingestStableId(prefix: string, seed: string) {
 function ingestNowIso() {
   return new Date().toISOString();
 }
+
+export type IngestBuildOptions = {
+  sourceLabel?: string;
+  approvalPolicy?: "all" | "low_confidence" | "none";
+};
 
 export function classifyRawInput(input: RawInput): OperationalThread[] {
   if (input.rawText.includes("PLまだ")) {
@@ -96,8 +101,15 @@ export function linkThreadsToEntities(threads: OperationalThread[]): EntityLink[
   return links;
 }
 
-export function buildActivityEvents(input: RawInput, threads: OperationalThread[], links: EntityLink[]): ActivityEvent[] {
+export function buildActivityEvents(
+  input: RawInput,
+  threads: OperationalThread[],
+  links: EntityLink[],
+  options: IngestBuildOptions = {},
+): ActivityEvent[] {
   const events: ActivityEvent[] = [];
+  const actor = options.sourceLabel || "mock ingest";
+  const approvalPolicy = options.approvalPolicy ?? "low_confidence";
 
   events.push({
     id: ingestStableId("ACT", `${input.id}:raw_input_received`),
@@ -107,15 +119,17 @@ export function buildActivityEvents(input: RawInput, threads: OperationalThread[
     description: input.rawText.slice(0, 200),
     sourceRawInputId: input.id,
     status: "ok",
+    actor,
   });
 
   events.push({
     id: ingestStableId("ACT", `${input.id}:classified`),
     type: "classified",
     occurredAt: ingestNowIso(),
-    title: `Classified into ${threads.length} thread(s)`,
+    title: `${actor}: Classified into ${threads.length} thread(s)`,
     sourceRawInputId: input.id,
     status: "ok",
+    actor,
   });
 
   events.push({
@@ -126,20 +140,27 @@ export function buildActivityEvents(input: RawInput, threads: OperationalThread[
     sourceRawInputId: input.id,
     linkedEntities: links,
     status: "ok",
+    actor,
   });
 
   for (const thread of threads) {
-    if (thread.confidence >= 0.7) continue;
+    const shouldRequireApproval =
+      approvalPolicy === "all" ? true : approvalPolicy === "low_confidence" ? thread.confidence < 0.7 : false;
+    if (!shouldRequireApproval) continue;
     events.push({
       id: ingestStableId("ACT", `${input.id}:${thread.id}:approval_required`),
       type: "approval_required",
       occurredAt: ingestNowIso(),
       title: "Approval required",
-      description: `Low confidence thread (${thread.confidence.toFixed(2)}): ${thread.title}`,
+      description:
+        approvalPolicy === "all"
+          ? `Review thread (${thread.confidence.toFixed(2)}): ${thread.title}`
+          : `Low confidence thread (${thread.confidence.toFixed(2)}): ${thread.title}`,
       sourceRawInputId: input.id,
       threadId: thread.id,
       linkedEntities: links.filter((l) => l.threadId === thread.id),
       status: "warning",
+      actor,
     });
   }
 
@@ -150,11 +171,21 @@ export function buildIssueMutations(
   input: RawInput,
   threads: OperationalThread[],
   links: EntityLink[],
-): MockIngestResult["issueMutations"] {
-  const mutations: MockIngestResult["issueMutations"] = [];
+  options: IngestBuildOptions = {},
+): IssueMutation[] {
+  const mutations: IssueMutation[] = [];
+  const approvalPolicy = options.approvalPolicy ?? "low_confidence";
+  const sourceLabel = options.sourceLabel || "mock ingest";
 
   for (const thread of threads) {
     const threadLinks = links.filter((l) => l.threadId === thread.id);
+    const baseFields = {
+      sourceRawInputId: input.id,
+      threadId: thread.id,
+      linkedEntities: threadLinks,
+      confidence: thread.confidence,
+      sourceLabel,
+    } satisfies Partial<IssueMutation>;
 
     if (thread.title.includes("PL未着")) {
       const shipmentIds = thread.extractedEntities.shipmentIds ?? [];
@@ -174,14 +205,18 @@ export function buildIssueMutations(
         action: "append_comment",
         title,
         body: bodyLines.join("\n"),
+        ...baseFields,
       });
 
-      if (thread.confidence < 0.7) {
+      const shouldRequireApproval =
+        approvalPolicy === "all" ? true : approvalPolicy === "low_confidence" ? thread.confidence < 0.7 : false;
+      if (shouldRequireApproval) {
         mutations.push({
           issueId: "ISS-0002",
           action: "mark_approval_required",
           title: "Approval required: low confidence classification",
           body: `Thread ${thread.id} confidence=${thread.confidence.toFixed(2)} for "${thread.title}"`,
+          ...baseFields,
         });
       }
 
@@ -207,14 +242,18 @@ export function buildIssueMutations(
         action: "create_issue_candidate",
         title,
         body: bodyLines.join("\n"),
+        ...baseFields,
       });
 
-      if (thread.confidence < 0.7) {
+      const shouldRequireApproval =
+        approvalPolicy === "all" ? true : approvalPolicy === "low_confidence" ? thread.confidence < 0.7 : false;
+      if (shouldRequireApproval) {
         mutations.push({
           issueId: candidateId,
           action: "mark_approval_required",
           title: "Approval required: low confidence classification",
           body: `Thread ${thread.id} confidence=${thread.confidence.toFixed(2)} for "${thread.title}"`,
+          ...baseFields,
         });
       }
 
@@ -228,17 +267,33 @@ export function buildIssueMutations(
       action: "create_issue_candidate",
       title: `Thread: ${thread.title}`,
       body: `Summary: ${thread.summary}\n\nRaw: ${input.rawText}`,
+      ...baseFields,
     });
+
+    const shouldRequireApproval =
+      approvalPolicy === "all" ? true : approvalPolicy === "low_confidence" ? thread.confidence < 0.7 : false;
+    if (shouldRequireApproval) {
+      mutations.push({
+        issueId: candidateId,
+        action: "mark_approval_required",
+        title: "Approval required: low confidence classification",
+        body: `Thread ${thread.id} confidence=${thread.confidence.toFixed(2)} for "${thread.title}"`,
+        ...baseFields,
+      });
+    }
   }
 
   return mutations;
 }
 
-export function runMockIngest(input: RawInput): MockIngestResult {
-  const threads = classifyRawInput(input);
+export function buildIngestResultFromThreads(
+  input: RawInput,
+  threads: OperationalThread[],
+  options: IngestBuildOptions = {},
+): MockIngestResult {
   const links = linkThreadsToEntities(threads);
-  const activityEvents = buildActivityEvents(input, threads, links);
-  const issueMutations = buildIssueMutations(input, threads, links);
+  const activityEvents = buildActivityEvents(input, threads, links, options);
+  const issueMutations = buildIssueMutations(input, threads, links, options);
 
   const issueUpdatedEvents: ActivityEvent[] = issueMutations.map((m) => ({
     id: ingestStableId("ACT", `${input.id}:issue_updated:${m.issueId}:${m.action}:${m.title}`),
@@ -248,6 +303,7 @@ export function runMockIngest(input: RawInput): MockIngestResult {
     description: m.title,
     sourceRawInputId: input.id,
     status: m.action === "mark_approval_required" ? "warning" : "ok",
+    actor: options.sourceLabel || "mock ingest",
   }));
 
   return {
@@ -257,4 +313,12 @@ export function runMockIngest(input: RawInput): MockIngestResult {
     activityEvents: [...activityEvents, ...issueUpdatedEvents],
     issueMutations,
   };
+}
+
+export function runMockIngest(input: RawInput): MockIngestResult {
+  const threads = classifyRawInput(input);
+  return buildIngestResultFromThreads(input, threads, {
+    sourceLabel: "mock ingest",
+    approvalPolicy: "low_confidence",
+  });
 }
