@@ -102,6 +102,11 @@ const state = {
    */
   activityFeedItems: [],
   /**
+   * Activity Feed expanded state (id -> boolean)
+   * @type {Record<string, boolean>}
+   */
+  activityExpandedById: {},
+  /**
    * Latest Issue mutations (mock ingest)
    * @type {Array<any>}
    */
@@ -369,7 +374,7 @@ function summarizeEntitiesJa(entities) {
 function normalizeAiApprovalText(text) {
   const s = String(text || "");
   if (!s) return "";
-  return s.replaceAll("Approval required: low confidence classification", "AIが対応候補を整理しました。確認してください。");
+  return s;
 }
 
 function normalizeMutationTitle(title) {
@@ -407,28 +412,69 @@ function extractMutationParsed(mutation) {
   };
 }
 
-function groupIssueMutationsByIssueId(mutations) {
+function isGenericMutationTitle(title) {
+  const s = normalizeMutationTitle(String(title || "")).trim();
+  if (!s) return true;
+  if (s === "AIが対応候補を整理しました。確認してください。") return true;
+  if (/^承認待ち\s*:/i.test(s)) return true;
+  return false;
+}
+
+function chooseRepresentativeMutation(items) {
+  const list = Array.isArray(items) ? items.filter(Boolean) : [];
+  if (!list.length) return null;
+
+  const actionScore = (a) => {
+    const v = String(a || "");
+    if (v === "create_issue_candidate") return 30;
+    if (v === "append_comment") return 20;
+    if (v === "mark_approval_required") return 10;
+    return 0;
+  };
+
+  const score = (m) => {
+    const base = actionScore(m?.action);
+    const title = String(m?.title || "");
+    const titlePenalty = isGenericMutationTitle(title) ? 8 : 0;
+    return base - titlePenalty;
+  };
+
+  return list
+    .slice()
+    .sort((a, b) => score(b) - score(a))[0] || null;
+}
+
+function issueMutationGroupKey(mutation) {
+  const threadId = String(mutation?.threadId || "").trim();
+  if (threadId) return `thread:${threadId}`;
+  const issueId = String(mutation?.issueId || "").trim() || "LLM";
+  return `issue:${issueId}`;
+}
+
+function groupIssueMutationsForApproval(mutations) {
   const list = Array.isArray(mutations) ? mutations.filter(Boolean) : [];
   const groups = new Map();
   const order = [];
 
   for (const mut of list) {
-    const issueId = String(mut?.issueId || "").trim() || "LLM";
-    if (!groups.has(issueId)) {
-      groups.set(issueId, { issueId, items: [] });
-      order.push(issueId);
+    const key = issueMutationGroupKey(mut);
+    if (!groups.has(key)) {
+      groups.set(key, { key, items: [] });
+      order.push(key);
     }
-    groups.get(issueId).items.push(mut);
+    groups.get(key).items.push(mut);
   }
 
   return order
-    .map((issueId) => {
-      const g = groups.get(issueId);
+    .map((key) => {
+      const g = groups.get(key);
       if (!g) return null;
       const items = Array.isArray(g.items) ? g.items.filter(Boolean) : [];
-      const representative = items.find((x) => String(x?.action || "") === "mark_approval_required") || items[0] || null;
+      const representative = chooseRepresentativeMutation(items);
       const others = representative ? items.filter((x) => String(x?.id || "") !== String(representative?.id || "")) : items;
-      return { issueId, representative, others };
+      const issueId = String(representative?.issueId || "").trim() || (key.startsWith("issue:") ? key.slice("issue:".length) : "LLM");
+      const threadId = String(representative?.threadId || "").trim() || (key.startsWith("thread:") ? key.slice("thread:".length) : "");
+      return { key, issueId, threadId, representative, others };
     })
     .filter(Boolean);
 }
@@ -551,43 +597,76 @@ function activityEventToFeedItem(ev) {
   const at = occurredAt ? formatLocalTime(occurredAt) : formatLocalTime(nowIso());
   const rawType = String(ev?.type || "");
   const type = rawType === "issue_updated" ? "issueUpdated" : rawType || "aiProcessed";
-  const title = String(ev?.title || rawType || "Activity");
   const description = String(ev?.description || "");
   const status = String(ev?.status || "");
+  const sequence = typeof ev?.sequence === "number" ? ev.sequence : null;
   const linkedEntities = Array.isArray(ev?.linkedEntities) ? ev.linkedEntities.filter(Boolean) : [];
 
-  const linked = linkedEntities.map((l) => ({
+  const linkedDeduped = (() => {
+    const seen = new Set();
+    const out = [];
+    for (const l of linkedEntities) {
+      const et = String(l?.entityType || "").trim();
+      const eid = String(l?.entityId || "").trim();
+      if (!et || !eid) continue;
+      const key = `${et}::${eid}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({ entityType: et, entityId: eid, confidence: l?.confidence });
+    }
+    return out;
+  })();
+
+  const linked = linkedDeduped.map((l) => ({
     kind: String(l?.entityType || "").toLowerCase(),
-    label: `${formatEntityType(String(l?.entityType || ""))} ${String(l?.entityId || "")}`.trim(),
+    label: String(l?.entityId || "").trim(),
   }));
 
-  const linkedText = linkedEntities.length
-    ? `Linked: ${linkedEntities
-        .map((l) => {
-          const et = formatEntityType(String(l?.entityType || ""));
-          const eid = String(l?.entityId || "");
-          const cf = typeof l?.confidence === "number" ? l.confidence : null;
-          const cfText = typeof cf === "number" && Number.isFinite(cf) ? ` (${cf.toFixed(2)})` : "";
-          return `${et} ${eid}${cfText}`.trim();
-        })
-        .join(", ")}`
-    : "";
+  const activityTitleJa = (() => {
+    switch (rawType) {
+      case "raw_input_received":
+        return "依頼受信";
+      case "classified":
+        return "AI分類";
+      case "entity_linked":
+        return "関連紐付け";
+      case "approval_required":
+        return "承認待ちへ追加";
+      case "issue_updated":
+        return "Issue更新";
+      case "failed_processing":
+        return "処理失敗";
+      default:
+        return String(ev?.title || "活動");
+    }
+  })();
+
+  const summary = (() => {
+    if (rawType === "raw_input_received") return description;
+    if (description) return description;
+    return activityTitleJa;
+  })();
 
   const details = [
-    `type: ${type || "-"}`,
-    description ? `description: ${description}` : "",
-    status ? `status: ${status}` : "",
-    linkedText,
+    rawType ? `種別: ${activityTitleJa}${rawType ? ` (${rawType})` : ""}` : "",
+    status ? `状態: ${statusKeyFromIngestStatus(status)} (${status})` : "",
+    typeof sequence === "number" ? `順序: ${String(sequence)}` : "",
+    linkedDeduped.length
+      ? `紐付け: ${linkedDeduped.map((l) => `${formatEntityType(l.entityType)} ${l.entityId}`).join(", ")}`
+      : "",
+    description && rawType !== "raw_input_received" ? `詳細: ${description}` : "",
   ].filter(Boolean);
 
   return {
     id: String(ev?.id || `act-${shortId()}`),
     type,
     source: "ai",
-    title,
+    title: activityTitleJa,
     actor: String(ev?.actor || "") || "mock ingest",
     at,
-    summary: description || title,
+    occurredAt,
+    sequence,
+    summary,
     details,
     statusKey: statusKeyFromIngestStatus(status),
     linked,
@@ -1416,7 +1495,7 @@ function renderNewTop() {
 
     const renderPendingMutations = () => {
       if (!pendingMutations.length) return "";
-      const groups = groupIssueMutationsByIssueId(pendingMutations);
+      const groups = groupIssueMutationsForApproval(pendingMutations);
       const rows = groups
         .map((g) => {
           const rep = g.representative;
@@ -1448,12 +1527,12 @@ function renderNewTop() {
 
           const baseAction = repAction === "mark_approval_required" ? "" : actionLabel(repAction);
           const actionText = `${baseAction}${extraText}`.replace(/^\s*\/\s*/, "").trim();
-          const approvalMsgSource = `${String(rep?.title || "")}\n${String(rep?.body || "")}`;
-          const hasLegacyApprovalText = approvalMsgSource.includes("Approval required: low confidence classification");
-          const approvalMsg =
-            hasLegacyApprovalText || repAction === "mark_approval_required"
-              ? "AIが対応候補を整理しました。確認してください。"
-              : "";
+          const approvalMutation =
+            repAction === "mark_approval_required"
+              ? rep
+              : (Array.isArray(g?.others) ? g.others : []).find((x) => String(x?.action || "") === "mark_approval_required");
+          const approvalBody = String(approvalMutation?.body || "").trim();
+          const approvalMsg = approvalBody ? approvalBody.split("\n")[0].trim() : repAction === "mark_approval_required" ? "承認待ちの対応候補です。" : "";
 
           return `<div class="pending-mutations__item" role="button" tabindex="0" data-mutation-open="${escapeHtml(String(rep?.id || ""))}">
             <div class="pending-mutations__top">
@@ -2026,16 +2105,24 @@ function renderNewTop() {
     const itemsRaw = Array.isArray(state.activityFeedItems) ? state.activityFeedItems.filter(Boolean) : [];
     const items = itemsRaw
       .slice()
-      .sort((a, b) => String(b?.at || "").localeCompare(String(a?.at || "")));
+      .sort((a, b) => {
+        const atA = String(a?.occurredAt || "");
+        const atB = String(b?.occurredAt || "");
+        if (atA && atB && atA !== atB) return atA.localeCompare(atB);
+        const seqA = typeof a?.sequence === "number" ? a.sequence : null;
+        const seqB = typeof b?.sequence === "number" ? b.sequence : null;
+        if (typeof seqA === "number" && typeof seqB === "number" && seqA !== seqB) return seqA - seqB;
+        return String(a?.id || "").localeCompare(String(b?.id || ""));
+      });
 
     const filterDefs = [
-      { key: "all", label: "All" },
+      { key: "all", label: "全て" },
       { key: "teams", label: "Teams" },
       { key: "email", label: "Email" },
-      { key: "aiProcessed", label: "AI processed" },
+      { key: "aiProcessed", label: "AI処理" },
       { key: "awaitingApproval", label: "承認待ち" },
-      { key: "failed", label: "Failed" },
-      { key: "supplierReply", label: "Supplier reply" },
+      { key: "failed", label: "失敗" },
+      { key: "supplierReply", label: "仕入先返信" },
     ];
 
     const matchesFilter = (it) => {
@@ -2091,9 +2178,14 @@ function renderNewTop() {
       const at = String(it?.at || "");
       const summary = String(it?.summary || "");
       const details = Array.isArray(it?.details) ? it.details.filter(Boolean) : [];
-      const detailsHtml = details.length
-        ? `<ul class="activity-details">${details.map((d) => `<li>${escapeHtml(String(d))}</li>`).join("")}</ul>`
-        : "";
+      const id = String(it?.id || "");
+      const expanded = !!(state.activityExpandedById && state.activityExpandedById[id]);
+      const detailsHtml =
+        expanded && details.length
+          ? `<div class="activity-detail">
+              <ul class="activity-details">${details.map((d) => `<li>${escapeHtml(String(d))}</li>`).join("")}</ul>
+            </div>`
+          : "";
 
       return `<article class="activity-item" aria-label="Activity item">
         <div class="activity-tl" aria-hidden="true">
@@ -2104,13 +2196,18 @@ function renderNewTop() {
           <div class="activity-meta">
             <div class="activity-meta__left">
               <span class="activity-kind">${escapeHtml(title || "-")}</span>
-              ${actor ? `<span class="activity-actor">${escapeHtml(actor)}</span>` : ""}
             </div>
             <div class="activity-meta__right">${escapeHtml(at)}</div>
           </div>
+          ${actor ? `<div class="activity-actorline">${escapeHtml(actor)}</div>` : ""}
           ${summary ? `<div class="activity-summary">${escapeHtml(summary)}</div>` : ""}
-          ${detailsHtml}
           ${renderLinked(it)}
+          <div class="activity-actions">
+            <button class="btn btn--ghost btn--small" type="button" data-activity-toggle="${escapeHtml(id)}" aria-expanded="${expanded ? "true" : "false"}">
+              ${expanded ? "詳細を閉じる" : "詳細"}
+            </button>
+          </div>
+          ${detailsHtml}
           ${renderLinks(it)}
         </div>
       </article>`;
@@ -6524,6 +6621,17 @@ function setupNewTop() {
       return;
     }
 
+    const actToggleEl = target.closest && target.closest("[data-activity-toggle]");
+    if (actToggleEl) {
+      const id = actToggleEl.getAttribute("data-activity-toggle") || "";
+      if (id) {
+        if (!state.activityExpandedById || typeof state.activityExpandedById !== "object") state.activityExpandedById = {};
+        state.activityExpandedById[id] = !state.activityExpandedById[id];
+        renderApp();
+      }
+      return;
+    }
+
     const actAttachEl = target.closest && target.closest("[data-activity-attach-manual]");
     if (actAttachEl) {
       window.alert("(mock) Open manual attach flow.");
@@ -6607,15 +6715,16 @@ function setupNewTop() {
 
           const mutationsRaw = Array.isArray(result?.issueMutations) ? result.issueMutations.filter(Boolean) : [];
           const mutations = mutationsRaw.map((m) => ({
-            id: `mut:${String(m?.issueId || "")}:${String(m?.action || "")}:${String(m?.title || "")}`,
+            id: `mut:${String(m?.sourceRawInputId || "raw")}:${String(m?.threadId || "thread")}:${String(m?.issueId || "")}:${String(m?.action || "")}`,
             issueId: m?.issueId,
             action: m?.action,
             title: m?.title,
             body: m?.body,
             linkedEntities: Array.isArray(m?.linkedEntities) ? m.linkedEntities : undefined,
             confidence: typeof m?.confidence === "number" ? m.confidence : undefined,
+            sourceRawInputId: m?.sourceRawInputId,
             threadId: m?.threadId,
-            source: m?.source,
+            source: m?.sourceLabel,
           }));
           state.issueMutationItems = prependUniqueById(state.issueMutationItems, mutations);
         } catch (e) {

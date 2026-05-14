@@ -18,7 +18,11 @@ const aiClient = new OpenAI({
 const CLASSIFY_SYSTEM_PROMPT = [
   "You are an operations classification engine for international trade operations.",
   "Convert messy Teams or email messages into OperationalThread JSON.",
-  "Return JSON only. No markdown. No explanation.",
+  "Return compact valid JSON only.",
+  "Do not use markdown.",
+  "Do not use code fences.",
+  "Do not explain.",
+  "Do not include prose outside JSON.",
   "",
   "Intent values must be one of:",
   "- missing_document_check",
@@ -47,18 +51,17 @@ const CLASSIFY_SYSTEM_PROMPT = [
   "- Split one message into multiple threads if it contains multiple operational requests.",
   "- Normalize SI-224 to SI-2026-224 if year is not given.",
   '- If PL is mentioned, documentTypes should include "PL".',
-  "- Keep each summary under 40 Japanese characters.",
-  "- Return at most 3 threads.",
+  "- Maximum 3 threads.",
+  "- Each title must be under 20 Japanese characters.",
+  "- Each summary must be under 40 Japanese characters.",
   "- Use short Japanese titles.",
-  "- Do not include long explanations.",
-  "- Use compact JSON.",
+  "- Use arrays only when needed.",
+  "- Do not repeat the same entity unnecessarily.",
   "- Confidence must be a number between 0 and 1.",
   '- If unsure, use intent "unknown" and lower confidence.',
   "",
-  "Return only:",
-  "{",
-  '  "threads": [...]',
-  "}",
+  "Return ONLY this JSON shape:",
+  '{"threads":[{"id":"t1","title":"...","intent":"missing_document_check","summary":"...","extractedEntities":{"siIds":[],"shipmentIds":[],"invoiceIds":[],"supplierNames":[],"documentTypes":[]},"confidence":0.0}]}',
 ].join("\n");
 
 const CLASSIFY_INTENTS = new Set([
@@ -207,12 +210,30 @@ function normalizeThreads(parsed, rawText) {
   });
 }
 
+function sanitizeJsonContent(content) {
+  const trimmed = String(content || "")
+    .trim()
+    .replace(/^```json\s*/i, "")
+    .replace(/^```\s*/i, "")
+    .replace(/```$/i, "")
+    .trim();
+
+  const firstBrace = trimmed.indexOf("{");
+  const lastBrace = trimmed.lastIndexOf("}");
+
+  if (firstBrace >= 0 && lastBrace > firstBrace) {
+    return trimmed.slice(firstBrace, lastBrace + 1);
+  }
+
+  return trimmed;
+}
+
 async function classifyThreadsWithLlm(rawText) {
   const userPrompt = [
     "Classify this input:",
     String(rawText || "").trim(),
     "",
-    "Return compact JSON only. Maximum 3 threads.",
+    "Return compact JSON only. No explanation. Max 3 threads. Short Japanese title and summary.",
   ].join("\n");
 
   const completion = await aiClient.chat.completions.create({
@@ -222,19 +243,33 @@ async function classifyThreadsWithLlm(rawText) {
       { role: "user", content: userPrompt },
     ],
     temperature: 0,
-    max_tokens: 2000,
+    max_tokens: 3000,
   });
 
   const finishReason = completion.choices?.[0]?.finish_reason;
   console.log("LLM finish_reason:", finishReason);
 
   const content = completion.choices?.[0]?.message?.content ?? "";
+  console.log("LLM raw length:", String(content).length);
+
+  if (finishReason === "length") {
+    const err = new Error("LLM output truncated");
+    err.code = "LLM_TRUNCATED";
+    err.finishReason = finishReason;
+    err.hint = "The model output exceeded max_tokens before completing JSON.";
+    err.raw = String(content ?? "");
+    throw err;
+  }
+
+  const sanitized = sanitizeJsonContent(content);
   let parsed;
   try {
-    parsed = JSON.parse(content);
+    parsed = JSON.parse(sanitized);
   } catch {
     const err = new Error("Failed to parse LLM JSON");
+    err.code = "LLM_JSON_PARSE_FAILED";
     err.finishReason = finishReason;
+    err.hint = "The model returned non-JSON or incomplete JSON.";
     err.raw = String(content ?? "");
     throw err;
   }
@@ -384,6 +419,15 @@ const server = http.createServer(async (req, res) => {
       return;
     } catch (e) {
       const message = e && e.message ? String(e.message) : "LLM ingest failed";
+      const finishReason = e && e.finishReason ? String(e.finishReason) : undefined;
+      const hint = e && e.hint ? String(e.hint) : undefined;
+      const raw = e && e.raw ? String(e.raw) : undefined;
+
+      if (e && (e.code === "LLM_TRUNCATED" || e.code === "LLM_JSON_PARSE_FAILED")) {
+        sendJson(res, 502, { ok: false, error: message, finishReason, hint, raw });
+        return;
+      }
+
       sendJson(res, 502, { ok: false, error: message });
       return;
     }
@@ -403,6 +447,17 @@ const server = http.createServer(async (req, res) => {
       return;
     } catch (error) {
       console.error(error);
+      if (error && (error.code === "LLM_TRUNCATED" || error.code === "LLM_JSON_PARSE_FAILED")) {
+        sendJson(res, 502, {
+          ok: false,
+          error: error.message ? String(error.message) : "LLM classify failed",
+          finishReason: error.finishReason,
+          hint: error.hint,
+          raw: error.raw,
+        });
+        return;
+      }
+
       sendJson(res, 500, { ok: false, error: String(error) });
       return;
     }

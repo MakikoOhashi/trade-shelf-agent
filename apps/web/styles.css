@@ -5023,6 +5023,13 @@ body {
   font-size: 12px;
 }
 
+#app .activity-actorline {
+  margin-top: 4px;
+  color: #6e7781;
+  font-weight: 800;
+  font-size: 12px;
+}
+
 #app .activity-meta__right {
   color: #6e7781;
   font-weight: 800;
@@ -5032,7 +5039,17 @@ body {
 
 #app .activity-summary {
   margin-top: 8px;
-  font-weight: 700;
+  font-weight: 800;
+}
+
+#app .activity-actions {
+  margin-top: 10px;
+  display: flex;
+  justify-content: flex-end;
+}
+
+#app .activity-detail {
+  margin-top: 8px;
 }
 
 #app .activity-details {

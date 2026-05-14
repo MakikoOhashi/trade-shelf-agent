@@ -713,6 +713,11 @@ export type ActivityEvent = {
   id: string;
   type: ActivityEventType;
   occurredAt: string;
+  /**
+   * Sort key for events that share the same occurredAt.
+   * Smaller numbers appear first.
+   */
+  sequence?: number;
   title: string;
   description?: string;
   sourceRawInputId?: string;
