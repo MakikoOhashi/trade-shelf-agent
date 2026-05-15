@@ -701,10 +701,44 @@ export type EntityLink = {
   reason: string;
 };
 
+export type IntakeResolutionStatus =
+  | "resolved"
+  | "needs_clarification"
+  | "status_query"
+  | "issue_candidate_required"
+  | "informational_only";
+
+export type IntakeResolution = {
+  id: string;
+  sourceRawInputId: string;
+  threadId: string;
+
+  status: IntakeResolutionStatus;
+
+  shouldCreateIssue: boolean;
+
+  resolvedEntity?: {
+    entityType: EntityType;
+    entityId: string;
+  };
+
+  missingFields?: string[];
+
+  clarificationQuestion?: string;
+
+  statusAnswer?: string;
+
+  reason: string;
+  confidence: number;
+
+  sourceLabel?: string;
+};
+
 export type ActivityEventType =
   | "raw_input_received"
   | "classified"
   | "entity_linked"
+  | "intake_resolved"
   | "issue_updated"
   | "action_planned"
   | "approval_required"
@@ -820,6 +854,7 @@ export type MockIngestResult = {
   rawInput: RawInput;
   threads: OperationalThread[];
   links: EntityLink[];
+  intakeResolutions?: IntakeResolution[];
   activityEvents: ActivityEvent[];
   issueMutations: IssueMutation[];
   actionPlans?: ActionPlan[];

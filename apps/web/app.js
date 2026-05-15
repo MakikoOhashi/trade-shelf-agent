@@ -50,6 +50,11 @@ const state = {
    */
   ingestError: "",
   /**
+   * Mock ingest notice text (Requests page)
+   * @type {string}
+   */
+  ingestNotice: "",
+  /**
    * Latest mock ingest result payload (Requests page)
    * @type {any}
    */
@@ -91,6 +96,11 @@ const state = {
    * @type {string | null}
    */
   activeMutationId: null,
+  /**
+   * 承認センターで開いている「確認返信候補」の actionPlanId
+   * @type {string | null}
+   */
+  activeReplyCandidateId: null,
   /**
    * tradeCaseId -> sequential issue number (1-based)
    * @type {Record<string, number>}
@@ -751,6 +761,8 @@ function activityEventToFeedItem(ev) {
         return "AI分類";
       case "entity_linked":
         return "関連紐付け";
+      case "intake_resolved":
+        return "Intake判定";
       case "action_planned":
         return "次アクションを判定";
       case "draft_created":
@@ -1890,6 +1902,107 @@ function renderNewTop() {
       </section>`;
     };
 
+    const renderReplyCandidates = () => {
+      const resolutions = Array.isArray(state.latestIngestResult?.intakeResolutions) ? state.latestIngestResult.intakeResolutions.filter(Boolean) : [];
+      const list = resolutions.filter((r) => r && r.shouldCreateIssue === false && (r.status === "status_query" || r.status === "needs_clarification"));
+      if (!list.length) return "";
+
+      const plans = Array.isArray(state.latestIngestResult?.actionPlans) ? state.latestIngestResult.actionPlans.filter(Boolean) : [];
+      const drafts = Array.isArray(state.latestIngestResult?.drafts) ? state.latestIngestResult.drafts.filter(Boolean) : [];
+
+      const rows = list
+        .map((r) => {
+          const threadId = String(r?.threadId || "");
+          const plan = plans.find((p) => p && String(p.threadId || "") === threadId) || null;
+          if (!plan || !plan.id) return "";
+          const apId = String(plan.id);
+          const approvalEntry = state.approvalsByActionPlanId?.[apId] || null;
+          const approvalStatus = String((approvalEntry && approvalEntry.status) || plan.status || "pending_approval");
+
+          const draft = drafts.find((d) => d && String(d.actionPlanId || "") === apId && String(d.channel || "") === "teams") || null;
+          const summary = r?.status === "status_query" ? String(r.statusAnswer || "") : String(r.clarificationQuestion || "");
+          const summaryText = summary ? summary.replace(/\n/g, " ").slice(0, 90) : "";
+
+          return `<div class="pending-mutations__item" role="button" tabindex="0" data-reply-candidate-open="${escapeHtml(apId)}">
+            <div class="pending-mutations__top">
+              <div class="pending-mutations__title-row">
+                <div class="pending-mutations__title">${escapeHtml(String(plan.title || "確認返信候補"))}</div>
+                <span class="issue-pill is-approval">確認返信候補</span>
+              </div>
+              <div class="pending-mutations__sub">
+                <span class="issue-pill">${escapeHtml(approvalStatusLabelJa(approvalStatus))}</span>
+                ${draft ? `<span class="issue-pill">draft: ${escapeHtml(String(draft.channel || "teams"))}</span>` : ""}
+                ${summaryText ? `<span class="issue-pill is-message">${escapeHtml(summaryText)}</span>` : ""}
+              </div>
+            </div>
+          </div>`;
+        })
+        .join("");
+
+      return `<section class="pending-mutations" aria-label="Reply candidates">
+        <div class="pending-mutations__h">確認返信候補</div>
+        ${rows}
+      </section>`;
+    };
+
+    const renderReplyCandidateDetail = (actionPlanId) => {
+      const apId = String(actionPlanId || "").trim();
+      if (!apId) return `<div class="nt-muted">Not found</div>`;
+
+      const plans = Array.isArray(state.latestIngestResult?.actionPlans) ? state.latestIngestResult.actionPlans.filter(Boolean) : [];
+      const drafts = Array.isArray(state.latestIngestResult?.drafts) ? state.latestIngestResult.drafts.filter(Boolean) : [];
+      const resolutions = Array.isArray(state.latestIngestResult?.intakeResolutions) ? state.latestIngestResult.intakeResolutions.filter(Boolean) : [];
+      const links = Array.isArray(state.latestIngestResult?.links) ? state.latestIngestResult.links.filter(Boolean) : [];
+
+      const plan = plans.find((p) => p && String(p.id || "") === apId) || null;
+      if (!plan) return `<div class="nt-muted">確認返信候補が見つかりませんでした。</div>`;
+
+      const threadId = String(plan.threadId || "");
+      const resolution = resolutions.find((r) => r && String(r.threadId || "") === threadId) || null;
+      const threadLinks = threadId ? links.filter((l) => String(l?.threadId || "") === threadId) : [];
+
+      const approvalEntry = state.approvalsByActionPlanId?.[apId] || null;
+      const approvalStatus = String((approvalEntry && approvalEntry.status) || plan.status || "pending_approval");
+      const canApprove = approvalStatus === "pending_approval";
+      const canMockSend = approvalStatus === "approved";
+
+      const draft = drafts.find((d) => d && String(d.actionPlanId || "") === apId && String(d.channel || "") === "teams") || drafts.find((d) => d && String(d.actionPlanId || "") === apId) || null;
+      const bodyText = draft ? String(draft.body || "") : resolution?.status === "status_query" ? String(resolution.statusAnswer || "") : String(resolution?.clarificationQuestion || "");
+
+      const linked = threadLinks.length
+        ? `<div class="kv" style="margin-top:6px;"><span class="muted">linked</span> ${escapeHtml(threadLinks.map((l) => `${l.entityType}:${l.entityId}`).join(", "))}</div>`
+        : "";
+
+      const draftPreviewHtml = `<section class="detail-section issue-draft-preview" aria-label="Draft Preview">
+        <h3 class="detail-section__title">Draft Preview</h3>
+        <div class="kv">
+          <span class="muted">channel</span> teams
+        </div>
+        <pre class="pre pre--compact">${escapeHtml(bodyText || "")}</pre>
+      </section>`;
+
+      return `<section class="issue-history-page" aria-label="Reply candidate detail">
+        <div class="issue-history-header">
+          <button class="btn btn--small btn--ghost" type="button" data-reply-back="1">← Back</button>
+          <div class="issue-history-header__title">
+            <div class="issue-history-header__h">${escapeHtml(String(plan.title || "確認返信候補"))}</div>
+            <div class="issue-history-header__badges">
+              <span class="issue-pill">${escapeHtml(approvalStatusLabelJa(approvalStatus))}</span>
+              <span class="issue-pill">確認返信候補</span>
+            </div>
+          </div>
+        </div>
+        <div class="issue-current-actions" aria-label="Next actions" style="margin: 12px 0;">
+          <button class="btn btn--primary btn--small" type="button" data-reply-approve="${escapeHtml(apId)}" ${canApprove ? "" : "disabled"}>Approve</button>
+          <button class="btn btn--small" type="button" data-reply-edit="${escapeHtml(apId)}" ${canApprove ? "" : "disabled"}>Edit draft</button>
+          <button class="btn btn--small" type="button" data-reply-hold="${escapeHtml(apId)}" ${canApprove ? "" : "disabled"}>Hold</button>
+          <button class="btn btn--small" type="button" data-reply-mock-send="${escapeHtml(apId)}" ${canMockSend ? "" : "disabled"}>Mock send</button>
+        </div>
+        ${linked}
+        ${draftPreviewHtml}
+      </section>`;
+    };
+
     const renderIssueList = () => {
       const sorted = issues
         .slice()
@@ -1904,6 +2017,7 @@ function renderNewTop() {
         });
       const body = sorted.length ? sorted.map(issueRow).join("") : `<div class="nt-muted">No items</div>`;
       return `<section class="issue-list" aria-label="Issues list">
+        ${renderReplyCandidates()}
         ${renderPendingMutations()}
         <div class="issue-list__section-title">既存Issue</div>
         ${body}
@@ -2018,6 +2132,7 @@ function renderNewTop() {
         const hasRaw = Boolean(result && result.rawInput);
         const threads = Array.isArray(result?.threads) ? result.threads.filter(Boolean) : [];
         const links = Array.isArray(result?.links) ? result.links.filter(Boolean) : [];
+        const intake = Array.isArray(result?.intakeResolutions) ? result.intakeResolutions.filter(Boolean) : [];
         const muts = Array.isArray(result?.issueMutations) ? result.issueMutations.filter(Boolean) : [];
         const plans = Array.isArray(result?.actionPlans) ? result.actionPlans.filter(Boolean) : [];
         const drafts = Array.isArray(result?.drafts) ? result.drafts.filter(Boolean) : [];
@@ -2032,6 +2147,7 @@ function renderNewTop() {
           { key: "tagger", label: "Tagger", done: threads.length > 0 },
           { key: "splitter", label: "Thread Splitter", done: threads.length > 0 },
           { key: "linker", label: "Entity Linker", done: links.length > 0 },
+          { key: "intake", label: "Intake Resolver", done: intake.length > 0 },
           { key: "issue", label: "Issue Planner", done: muts.length > 0 },
           { key: "action", label: "Action Planner", done: plans.length > 0 },
           { key: "draft", label: "Draft Writer", done: drafts.length > 0 },
@@ -2044,6 +2160,7 @@ function renderNewTop() {
           if (!drafts.length) return "draft";
           if (!plans.length) return "action";
           if (!muts.length) return "issue";
+          if (!intake.length) return "intake";
           if (!links.length) return "linker";
           if (!threads.length) return "tagger";
           if (!hasRaw) return "request";
@@ -2153,7 +2270,7 @@ function renderNewTop() {
       </aside>`;
 
       const actionCardHtml =
-        draftPreview && approvalStatus === "pending_approval"
+        draftPreview && (approvalStatus === "pending_approval" || approvalStatus === "approved" || approvalStatus === "planned")
           ? `<div class="issue-action-card" aria-label="Human action card">
               <div class="issue-action-card__title">AIが仕入先確認メールを作成しました。</div>
               <div class="issue-draft-preview">
@@ -2173,16 +2290,24 @@ function renderNewTop() {
             </div>`
           : "";
 
-      const timeline2 = Array.isArray(issueLike.timeline) ? issueLike.timeline.slice() : [];
-      const lines = timeline2
-        .map((t) => {
-          const label = String(t?.label || t?.type || "log");
-          const msg = String(t?.message || "").trim();
-          const text = msg || label;
-          return { id: String(t?.id || shortId()), at: String(t?.at || ""), textHtml: escapeHtml(text) };
+      const ingestEvents = Array.isArray(state.latestIngestResult?.activityEvents) ? state.latestIngestResult.activityEvents.filter(Boolean) : [];
+      const threadIdForEvents = mut?.threadId ? String(mut.threadId) : "";
+      const relatedEvents = threadIdForEvents ? ingestEvents.filter((e) => String(e?.threadId || "") === threadIdForEvents) : ingestEvents;
+      const lines = relatedEvents
+        .slice()
+        .sort((a, b) => {
+          const atA = String(a?.occurredAt || "");
+          const atB = String(b?.occurredAt || "");
+          if (atA !== atB) return atB.localeCompare(atA);
+          return (b?.sequence ?? -999) - (a?.sequence ?? -999) || String(a?.id || "").localeCompare(String(b?.id || ""));
         })
-        .filter(Boolean);
-      lines.sort((a, b) => String(b?.at || "").localeCompare(String(a?.at || "")) || String(a?.id || "").localeCompare(String(b?.id || "")));
+        .map((e) => {
+          const at = String(e?.occurredAt || "");
+          const label = String(e?.title || e?.type || "log");
+          const desc = String(e?.description || "").trim();
+          const text = desc ? `${label}：${desc}` : label;
+          return { id: String(e?.id || shortId()), at, textHtml: escapeHtml(text) };
+        });
 
       const historyItems = [];
       if (actionCardHtml) historyItems.push({ id: `card:${actionKey}`, at: nowIso(), isCard: true, bodyHtml: actionCardHtml });
@@ -2483,6 +2608,7 @@ function renderNewTop() {
     };
 
     if (state.activeIssueId) return renderIssueDetail(state.activeIssueId);
+    if (state.activeReplyCandidateId) return renderReplyCandidateDetail(state.activeReplyCandidateId);
     if (state.activeMutationId) return renderMutationDetail(state.activeMutationId);
     return renderIssueList();
   };
@@ -2948,6 +3074,7 @@ function renderNewTop() {
     const ingestResult = state.latestIngestResult;
     const ingestThreads = Array.isArray(ingestResult?.threads) ? ingestResult.threads.filter(Boolean) : [];
     const rawIngestLinks = Array.isArray(ingestResult?.links) ? ingestResult.links.filter(Boolean) : [];
+    const ingestResolutions = Array.isArray(ingestResult?.intakeResolutions) ? ingestResult.intakeResolutions.filter(Boolean) : [];
     const ingestEvents = Array.isArray(ingestResult?.activityEvents) ? ingestResult.activityEvents.filter(Boolean) : [];
     const ingestMutations = Array.isArray(ingestResult?.issueMutations) ? ingestResult.issueMutations.filter(Boolean) : [];
     const ingestActionPlans = Array.isArray(ingestResult?.actionPlans) ? ingestResult.actionPlans.filter(Boolean) : [];
@@ -3012,57 +3139,72 @@ function renderNewTop() {
 
     const ingestSummaryHtml = ingestResult
       ? `<div class="ingest-result" aria-label="Latest ingest result">
-          <div class="ingest-result__stats">
+          <div class="ingest-result__stats" aria-label="Ingest summary stats">
             <div><span class="k">業務スレッド</span><span class="v nt-mono">${escapeHtml(String(ingestThreads.length))}</span></div>
             <div><span class="k">紐付け先</span><span class="v nt-mono">${escapeHtml(String(ingestLinks.length))}</span></div>
+            <div><span class="k">Intake</span><span class="v nt-mono">${escapeHtml(String(ingestResolutions.length))}</span></div>
             <div><span class="k">活動ログ</span><span class="v nt-mono">${escapeHtml(String(ingestEvents.length))}</span></div>
             <div><span class="k">Issue更新候補</span><span class="v nt-mono">${escapeHtml(String(ingestMutations.length))}</span></div>
             <div><span class="k">ActionPlans</span><span class="v nt-mono">${escapeHtml(String(ingestActionPlans.length))}</span></div>
             <div><span class="k">Drafts</span><span class="v nt-mono">${escapeHtml(String(ingestDrafts.length))}</span></div>
           </div>
-          ${llmResultHtml}
-          ${
-            ingestActionPlans.length
-              ? `<div class="ingest-result__threads">
-                  <div class="ingest-result__h">Action Plans</div>
-                  <ul class="ingest-result__list">${ingestActionPlans
-                    .map((p) => {
-                      const title = String(p?.title || "ActionPlan");
-                      const types = Array.isArray(p?.actionTypes) ? p.actionTypes.map((t) => String(t ?? "").trim()).filter(Boolean) : [];
-                      const meta = types.length ? `(${types.join(", ")})` : "";
-                      return `<li>${escapeHtml(title)} <span class="muted nt-mono">${escapeHtml(meta)}</span></li>`;
-                    })
-                    .join("")}</ul>
-                </div>`
-              : ""
-          }
-          ${
-            ingestDrafts.length
-              ? `<div class="ingest-result__threads">
-                  <div class="ingest-result__h">Drafts</div>
-                  <ul class="ingest-result__list">${ingestDrafts
-                    .map((d) => {
-                      const ch = String(d?.channel || "-");
-                      const to = d?.to ? String(d.to) : "";
-                      const subj = d?.subject ? String(d.subject) : "";
-                      const label = ch === "email" ? `email${to ? ` → ${to}` : ""}` : "teams";
-                      const meta = subj ? `(${subj})` : "";
-                      return `<li>${escapeHtml(label)} <span class="muted nt-mono">${escapeHtml(meta)}</span></li>`;
-                    })
-                    .join("")}</ul>
-                </div>`
-              : ""
-          }
-          ${
-            ingestThreads.length
-              ? `<div class="ingest-result__threads">
-                  <div class="ingest-result__h">スレッド</div>
-                  <ul class="ingest-result__list">${ingestThreads
-                    .map((t) => `<li>${escapeHtml(String(t?.title || t?.id || "Thread"))}</li>`)
-                    .join("")}</ul>
-                </div>`
-              : ""
-          }
+          <div class="ingest-result__note muted">詳細は Issues（承認センター）で確認してください。</div>
+          <div class="ingest-result__actions">
+            <button class="btn btn--primary btn--small" type="button" data-open-approval-center="1">Open Issues（承認センター）</button>
+          </div>
+          <div class="accordion" data-accordion-root>
+            <div class="accordion__item">
+              <button class="accordion__trigger" type="button" data-accordion-trigger aria-expanded="false">
+                <span class="pill pill--mini">詳細（debug）</span>
+                <span class="accordion__summary">threads / actionPlans / drafts / LLM result</span>
+              </button>
+              <div class="accordion__panel" hidden>
+                ${llmResultHtml}
+                ${
+                  ingestActionPlans.length
+                    ? `<div class="ingest-result__threads">
+                        <div class="ingest-result__h">Action Plans</div>
+                        <ul class="ingest-result__list">${ingestActionPlans
+                          .map((p) => {
+                            const title = String(p?.title || "ActionPlan");
+                            const types = Array.isArray(p?.actionTypes) ? p.actionTypes.map((t) => String(t ?? "").trim()).filter(Boolean) : [];
+                            const meta = types.length ? `(${types.join(", ")})` : "";
+                            return `<li>${escapeHtml(title)} <span class="muted nt-mono">${escapeHtml(meta)}</span></li>`;
+                          })
+                          .join("")}</ul>
+                      </div>`
+                    : ""
+                }
+                ${
+                  ingestDrafts.length
+                    ? `<div class="ingest-result__threads">
+                        <div class="ingest-result__h">Drafts</div>
+                        <ul class="ingest-result__list">${ingestDrafts
+                          .map((d) => {
+                            const ch = String(d?.channel || "-");
+                            const to = d?.to ? String(d.to) : "";
+                            const subj = d?.subject ? String(d.subject) : "";
+                            const label = ch === "email" ? `email${to ? ` → ${to}` : ""}` : "teams";
+                            const meta = subj ? `(${subj})` : "";
+                            return `<li>${escapeHtml(label)} <span class="muted nt-mono">${escapeHtml(meta)}</span></li>`;
+                          })
+                          .join("")}</ul>
+                      </div>`
+                    : ""
+                }
+                ${
+                  ingestThreads.length
+                    ? `<div class="ingest-result__threads">
+                        <div class="ingest-result__h">スレッド</div>
+                        <ul class="ingest-result__list">${ingestThreads
+                          .map((t) => `<li>${escapeHtml(String(t?.title || t?.id || "Thread"))}</li>`)
+                          .join("")}</ul>
+                      </div>`
+                    : ""
+                }
+              </div>
+            </div>
+          </div>
         </div>`
       : "";
 
@@ -3104,6 +3246,7 @@ function renderNewTop() {
               : ""
           }
         </div>
+        ${state.ingestNotice ? `<div class="ingest-notice">${escapeHtml(String(state.ingestNotice))}</div>` : ""}
         ${state.ingestError ? `<div class="ingest-error">${escapeHtml(String(state.ingestError))}</div>` : ""}
         ${ingestSummaryHtml}
       </div>
@@ -7332,6 +7475,13 @@ function setupNewTop() {
           state.latestIngestResult = result || null;
           state.latestIngestResultMode = state.classifyMode;
           ensureApprovalsInitializedFromIngestResult(result);
+          state.ingestNotice = (() => {
+            const muts = Array.isArray(result?.issueMutations) ? result.issueMutations.filter(Boolean) : [];
+            const plans = Array.isArray(result?.actionPlans) ? result.actionPlans.filter(Boolean) : [];
+            const count = muts.length || plans.length || 0;
+            const label = state.classifyMode === "llm" ? "AI分類" : "モック";
+            return `(${label}) 承認センターに反映しました${count ? `（${count}件）` : ""}。`;
+          })();
 
           const events = Array.isArray(result?.activityEvents) ? result.activityEvents.filter(Boolean) : [];
           const feedItems = events.map(activityEventToFeedItem);
@@ -7353,6 +7503,7 @@ function setupNewTop() {
           state.issueMutationItems = prependUniqueById(state.issueMutationItems, mutations);
         } catch (e) {
           state.ingestError = e && e.message ? String(e.message) : state.classifyMode === "llm" ? "LLM classify failed" : "Mock ingest failed";
+          state.ingestNotice = "";
         } finally {
           state.ingestLoading = false;
           renderApp();
@@ -7427,6 +7578,7 @@ function setupNewTop() {
       const id = issueOpenEl.getAttribute("data-issue-open") || "";
       state.activeIssueId = id || null;
       state.activeMutationId = null;
+      state.activeReplyCandidateId = null;
       renderApp();
       return;
     }
@@ -7443,6 +7595,7 @@ function setupNewTop() {
       const id = mutationOpenEl.getAttribute("data-mutation-open") || "";
       state.activeMutationId = id || null;
       state.activeIssueId = null;
+      state.activeReplyCandidateId = null;
       renderApp();
       return;
     }
@@ -7450,6 +7603,59 @@ function setupNewTop() {
     const mutationBackEl = target.closest && target.closest("[data-mutation-back]");
     if (mutationBackEl) {
       state.activeMutationId = null;
+      renderApp();
+      return;
+    }
+
+    const replyCandidateOpenEl = target.closest && target.closest("[data-reply-candidate-open]");
+    if (replyCandidateOpenEl) {
+      const id = replyCandidateOpenEl.getAttribute("data-reply-candidate-open") || "";
+      state.activeReplyCandidateId = id || null;
+      state.activeIssueId = null;
+      state.activeMutationId = null;
+      renderApp();
+      return;
+    }
+
+    const replyBackEl = target.closest && target.closest("[data-reply-back]");
+    if (replyBackEl) {
+      state.activeReplyCandidateId = null;
+      renderApp();
+      return;
+    }
+
+    const replyApproveEl = target.closest && target.closest("[data-reply-approve]");
+    if (replyApproveEl) {
+      const id = replyApproveEl.getAttribute("data-reply-approve") || "";
+      const res = applyApprovalAction(id, "approve");
+      if (!res.ok) window.alert(`(mock) ${res.error}`);
+      renderApp();
+      return;
+    }
+
+    const replyHoldEl = target.closest && target.closest("[data-reply-hold]");
+    if (replyHoldEl) {
+      const id = replyHoldEl.getAttribute("data-reply-hold") || "";
+      const res = applyApprovalAction(id, "hold");
+      if (!res.ok) window.alert(`(mock) ${res.error}`);
+      renderApp();
+      return;
+    }
+
+    const replyEditEl = target.closest && target.closest("[data-reply-edit]");
+    if (replyEditEl) {
+      const id = replyEditEl.getAttribute("data-reply-edit") || "";
+      const res = applyApprovalAction(id, "edit");
+      if (!res.ok) window.alert(`(mock) ${res.error}`);
+      renderApp();
+      return;
+    }
+
+    const replyMockSendEl = target.closest && target.closest("[data-reply-mock-send]");
+    if (replyMockSendEl) {
+      const id = replyMockSendEl.getAttribute("data-reply-mock-send") || "";
+      const res = applyApprovalAction(id, "mock_send");
+      if (!res.ok) window.alert(`(mock) ${res.error}`);
       renderApp();
       return;
     }

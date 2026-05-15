@@ -46,11 +46,12 @@ flowchart TD
 A[RawInput] --> B[Tagger]
 B --> C[Thread Splitter]
 C --> D[Entity Linker]
-D --> E[Issue Planner]
-E --> F[Action Planner]
-F --> G[Draft Writer]
-G --> H[Approval Handler]
-H --> I[Event Logger]
+D --> E[Intake Resolver]
+E --> F[Issue Planner]
+F --> G[Action Planner]
+G --> H[Draft Writer]
+H --> I[Approval Handler]
+I --> J[Event Logger]
 ```
 
 各 Processor は、処理結果を Orchestrator / Router に返す。
@@ -105,6 +106,18 @@ output:
 
 - `EntityLink[]`
 
+### Intake Resolver
+
+input:
+
+- `RawInput`
+- `OperationalThread[]`
+- `EntityLink[]`
+
+output:
+
+- `IntakeResolution[]`
+
 ### Issue Planner
 
 input:
@@ -112,6 +125,7 @@ input:
 - `RawInput`
 - `OperationalThread[]`
 - `EntityLink[]`
+ - `IntakeResolution[]`
 
 output:
 
@@ -124,6 +138,7 @@ input:
 - `RawInput`
 - `OperationalThread[]`
 - `EntityLink[]`
+ - `IntakeResolution[]`
 - `IssueMutation[]`
 
 output:
@@ -313,7 +328,30 @@ PLまだ？あとSI-224も確認して
 
 ---
 
-## 4. Issue Planner
+## 4. Intake Resolver
+
+### 役割
+
+営業・Teams・メール由来の雑な入力を、すぐ Issue 化せずに「業務的に解決可能な形」へ整理する。
+
+- 既存 SI / Shipment / Document / Issue に紐付けられるか判定する
+- 情報不足なら `needs_clarification` にする
+- ただの状況照会なら `status_query` にする
+- 本当に業務上の異常・対応が必要な場合だけ `issue_candidate_required` にして Issue Planner に渡す
+
+### 例
+
+- 「SI-224の状況を教えて」→ `status_query`（Issue化しない、状況返信候補を作る）
+- 「PLまだ？」→ `needs_clarification`（Issue化しない、「どのSI/ShipmentのPLか」を返す）
+- 「INVがSIと数量違う」→ `issue_candidate_required`（Issue Planner へ進む）
+
+### Output
+
+- IntakeResolution[]
+
+---
+
+## 5. Issue Planner
 
 ### 役割
 
@@ -350,7 +388,7 @@ PLまだ？あとSI-224も確認して
 
 ---
 
-## 5. Action Planner
+## 6. Action Planner
 
 ### 役割
 
@@ -382,7 +420,7 @@ PLまだ？あとSI-224も確認して
 
 ---
 
-## 6. Draft Writer
+## 7. Draft Writer
 
 ### 役割
 
@@ -414,7 +452,7 @@ Action Planner が:
 
 ---
 
-## 7. Approval Handler
+## 8. Approval Handler
 
 ### 役割
 
@@ -452,7 +490,7 @@ AI提案に対し、人間が:
 
 ---
 
-## 8. Event Logger
+## 9. Event Logger
 
 ### 役割
 

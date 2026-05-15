@@ -1177,9 +1177,15 @@ const ACTIVITY_SEQUENCE = {
     raw_input_received: 10,
     classified: 20,
     entity_linked: 30,
+    intake_resolved: 35,
     action_planned: 40,
     approval_required: 50,
+    draft_created: 45,
     issue_updated: 60,
+    approved: 70,
+    edited: 71,
+    held: 72,
+    mock_sent: 80,
     failed_processing: 90,
 };
 function normalizeOperationalThreads(input, threads) {
@@ -1252,16 +1258,26 @@ function issueIdForThread(thread, threadLinks, mode) {
     const existingIssue = (threadLinks || []).find((l) => l?.entityType === "Issue" && String(l?.entityId || "").trim());
     return existingIssue ? String(existingIssue.entityId).trim() : issueCandidateIdFromThread(thread.id);
 }
-export function planNextActions(input, threads, links, issueMutations, options = {}) {
+export function planNextActions(input, threads, links, intakeResolutions, issueMutations, options = {}) {
     const list = Array.isArray(threads) ? threads.filter(Boolean) : [];
     const allLinks = Array.isArray(links) ? links.filter(Boolean) : [];
+    const resolutions = Array.isArray(intakeResolutions) ? intakeResolutions.filter(Boolean) : [];
     const mutations = Array.isArray(issueMutations) ? issueMutations.filter(Boolean) : [];
+    const resolutionForThreadId = (threadId) => resolutions.find((r) => String(r?.threadId || "") === String(threadId || "")) || null;
     const docHasCore = (types) => {
         const arr = Array.isArray(types) ? types : [];
         const normalized = arr.map((v) => String(v ?? "").trim().toUpperCase()).filter(Boolean);
         return normalized.includes("PL") || normalized.includes("INV") || normalized.includes("BL");
     };
     const actionTypesForThread = (thread) => {
+        const r = resolutionForThreadId(thread.id);
+        const st = r ? String(r.status || "") : "";
+        if (st === "status_query")
+            return ["teams_reply_required"];
+        if (st === "needs_clarification")
+            return ["teams_reply_required"];
+        if (st === "informational_only")
+            return ["no_action"];
         switch (thread.intent) {
             case "missing_document_check": {
                 const types = thread.extractedEntities?.documentTypes ?? [];
@@ -1272,16 +1288,24 @@ export function planNextActions(input, threads, links, issueMutations, options =
             case "quantity_mismatch":
                 return ["supplier_confirmation_required", "email_required"];
             case "eta_change":
-                return ["teams_reply_required", "human_review_only"];
+                return ["teams_reply_required"];
             case "shipment_status_check":
                 return ["human_review_only"];
             case "air_change_check":
-                return ["teams_reply_required", "human_review_only"];
+                return ["teams_reply_required"];
             default:
                 return ["human_review_only"];
         }
     };
     const titleForThread = (thread, actionTypes) => {
+        const r = resolutionForThreadId(thread.id);
+        const st = r ? String(r.status || "") : "";
+        if (st === "status_query")
+            return "状況返信が必要です";
+        if (st === "needs_clarification")
+            return "不足情報の確認が必要です";
+        if (st === "informational_only")
+            return "情報共有として記録";
         if (thread.intent === "missing_document_check" && actionTypes.includes("supplier_confirmation_required")) {
             return "仕入先への書類確認が必要です";
         }
@@ -1317,44 +1341,195 @@ export function planNextActions(input, threads, links, issueMutations, options =
     });
 }
 export function classifyRawInput(input) {
-    if (input.rawText.includes("PLまだ")) {
-        return [
-            {
-                id: `${input.id}-thr-001`,
-                rawInputId: input.id,
-                title: "PL未着確認",
-                intent: "missing_document_check",
-                summary: "PLの未着状況を確認する依頼",
-                extractedEntities: {
-                    shipmentIds: ["SHP-2026-009"],
-                    documentTypes: ["PL"],
-                },
-                confidence: 0.82,
-            },
-            {
-                id: `${input.id}-thr-002`,
-                rawInputId: input.id,
-                title: "SI-224確認",
-                intent: "shipment_status_check",
-                summary: "SI-224の状況確認依頼",
-                extractedEntities: {
-                    siIds: ["SI-2026-224"],
-                },
-                confidence: 0.62,
-            },
-        ];
-    }
-    return [
-        {
+    const text = String(input.rawText || "");
+    const shipmentIds = Array.from(new Set((text.match(/SHP-\d{4}-\d{3}/g) || []).map((v) => String(v).trim())));
+    const normalizeSi = (raw) => {
+        const v = String(raw || "").trim().toUpperCase();
+        const m1 = v.match(/^SI-(\d{4})-(\d{3})$/);
+        if (m1)
+            return `SI-${m1[1]}-${m1[2]}`;
+        const m2 = v.match(/^SI-(\d{3})$/);
+        if (m2)
+            return `SI-2026-${m2[1]}`;
+        return v.startsWith("SI-") ? v : "";
+    };
+    const siIds = Array.from(new Set((text.match(/SI-\d{4}-\d{3}|SI-\d{3}/gi) || []).map(normalizeSi).filter(Boolean)));
+    const threads = [];
+    const addThread = (t) => {
+        threads.push({ ...t, rawInputId: input.id });
+    };
+    const wantsStatus = /状況|どうなってる|教えて|確認して|ステータス/i.test(text);
+    if (/INV|インボイス|請求/i.test(text) && /PO|発注|指図/i.test(text) && /違|差|ズレ/i.test(text)) {
+        addThread({
             id: `${input.id}-thr-001`,
-            rawInputId: input.id,
+            title: "数量・金額差異確認",
+            intent: "quantity_mismatch",
+            summary: "SI/PO と INV の差異確認依頼",
+            extractedEntities: {
+                shipmentIds,
+                siIds: Array.from(siIds),
+                invoiceIds: Array.from(new Set((text.match(/INV-\d+/gi) || []).map((v) => String(v).toUpperCase()))),
+            },
+            confidence: 0.78,
+        });
+    }
+    if (/PL|packing\s*list|パッキング/i.test(text)) {
+        addThread({
+            id: `${input.id}-thr-${String(threads.length + 1).padStart(3, "0")}`,
+            title: "PL未着確認",
+            intent: "missing_document_check",
+            summary: "PLの未着状況を確認する依頼",
+            extractedEntities: {
+                shipmentIds,
+                siIds: Array.from(siIds),
+                documentTypes: ["PL"],
+            },
+            confidence: 0.82,
+        });
+    }
+    if (wantsStatus && Array.from(siIds).length) {
+        addThread({
+            id: `${input.id}-thr-${String(threads.length + 1).padStart(3, "0")}`,
+            title: `${Array.from(siIds)[0]}状況確認`,
+            intent: "shipment_status_check",
+            summary: "SIの状況確認依頼",
+            extractedEntities: {
+                siIds: Array.from(siIds),
+            },
+            confidence: 0.72,
+        });
+    }
+    else if (wantsStatus && shipmentIds.length) {
+        addThread({
+            id: `${input.id}-thr-${String(threads.length + 1).padStart(3, "0")}`,
+            title: `${shipmentIds[0]}状況確認`,
+            intent: "shipment_status_check",
+            summary: "Shipmentの状況確認依頼",
+            extractedEntities: {
+                shipmentIds,
+            },
+            confidence: 0.7,
+        });
+    }
+    if (!threads.length) {
+        addThread({
+            id: `${input.id}-thr-001`,
             title: "未分類依頼",
             intent: "unknown",
-            summary: input.rawText,
+            summary: text,
             extractedEntities: {},
             confidence: 0.3,
-        },
-    ];
+        });
+    }
+    return threads;
+}
+function intakeResolutionId(threadId) {
+    return `INT-${ingestHash8(String(threadId || ""))}`.toUpperCase();
+}
+function primaryEntityForThread(thread, threadLinks) {
+    const si = (threadLinks || []).find((l) => l?.entityType === "SI" && l?.entityId) || null;
+    if (si)
+        return { entityType: "SI", entityId: String(si.entityId) };
+    const sh = (threadLinks || []).find((l) => l?.entityType === "Shipment" && l?.entityId) || null;
+    if (sh)
+        return { entityType: "Shipment", entityId: String(sh.entityId) };
+    const directSi = Array.isArray(thread?.extractedEntities?.siIds) ? thread.extractedEntities.siIds.find(Boolean) : "";
+    if (directSi)
+        return { entityType: "SI", entityId: String(directSi) };
+    const directSh = Array.isArray(thread?.extractedEntities?.shipmentIds) ? thread.extractedEntities.shipmentIds.find(Boolean) : "";
+    if (directSh)
+        return { entityType: "Shipment", entityId: String(directSh) };
+    return null;
+}
+export function resolveIntake(input, threads, links, options = {}) {
+    const tList = Array.isArray(threads) ? threads.filter(Boolean) : [];
+    const allLinks = Array.isArray(links) ? links.filter(Boolean) : [];
+    const sourceLabel = options.sourceLabel || "AI";
+    const text = String(input.rawText || "");
+    const containsStatusQueryWords = /状況|どうなってる|教えて|確認して|ステータス/i.test(text);
+    const informational = /共有|FYI|参考|念のため|取り急ぎ/i.test(text);
+    const out = [];
+    for (const thread of tList) {
+        const threadLinks = allLinks.filter((l) => l.threadId === thread.id);
+        const hasSiOrShipment = threadLinks.some((l) => l.entityType === "SI" || l.entityType === "Shipment");
+        const primary = primaryEntityForThread(thread, threadLinks);
+        if (thread.intent === "shipment_status_check" && hasSiOrShipment && containsStatusQueryWords) {
+            const label = primary ? `${primary.entityType}:${primary.entityId}` : "対象";
+            out.push({
+                id: intakeResolutionId(thread.id),
+                sourceRawInputId: input.id,
+                threadId: thread.id,
+                status: "status_query",
+                shouldCreateIssue: false,
+                resolvedEntity: primary || undefined,
+                statusAnswer: primary?.entityType === "SI"
+                    ? `${primary.entityId} は現在、船積準備中です。必要に応じて詳細確認してください。`
+                    : `Shipment ${primary?.entityId || "-"} は現在、船積準備中です。必要に応じて詳細確認してください。`,
+                reason: `${label} の状況照会として処理`,
+                confidence: typeof thread.confidence === "number" ? thread.confidence : 0.6,
+                sourceLabel,
+            });
+            continue;
+        }
+        if (thread.intent === "missing_document_check" && !hasSiOrShipment) {
+            out.push({
+                id: intakeResolutionId(thread.id),
+                sourceRawInputId: input.id,
+                threadId: thread.id,
+                status: "needs_clarification",
+                shouldCreateIssue: false,
+                missingFields: ["SI or Shipment"],
+                clarificationQuestion: "どのSIまたはShipmentのPLでしょうか？対象を教えてください。",
+                reason: "書類名はあるが対象が特定できないため",
+                confidence: typeof thread.confidence === "number" ? thread.confidence : 0.6,
+                sourceLabel,
+            });
+            continue;
+        }
+        if (thread.intent === "quantity_mismatch" ||
+            thread.intent === "eta_change" ||
+            thread.intent === "air_change_check" ||
+            (thread.intent === "missing_document_check" && hasSiOrShipment)) {
+            out.push({
+                id: intakeResolutionId(thread.id),
+                sourceRawInputId: input.id,
+                threadId: thread.id,
+                status: "issue_candidate_required",
+                shouldCreateIssue: true,
+                resolvedEntity: primary || undefined,
+                reason: "業務上の対応が必要な可能性が高いため",
+                confidence: typeof thread.confidence === "number" ? thread.confidence : 0.6,
+                sourceLabel,
+            });
+            continue;
+        }
+        if (informational || thread.intent === "unknown") {
+            out.push({
+                id: intakeResolutionId(thread.id),
+                sourceRawInputId: input.id,
+                threadId: thread.id,
+                status: "informational_only",
+                shouldCreateIssue: false,
+                reason: "情報共有として記録",
+                confidence: typeof thread.confidence === "number" ? thread.confidence : 0.5,
+                sourceLabel,
+            });
+            continue;
+        }
+        out.push({
+            id: intakeResolutionId(thread.id),
+            sourceRawInputId: input.id,
+            threadId: thread.id,
+            status: "needs_clarification",
+            shouldCreateIssue: false,
+            missingFields: ["SI or Shipment"],
+            clarificationQuestion: "対象のSI、Shipment、または書類番号を教えてください。",
+            reason: "解決に必要な情報が不足しているため",
+            confidence: typeof thread.confidence === "number" ? thread.confidence : 0.5,
+            sourceLabel,
+        });
+    }
+    return out;
 }
 export function linkThreadsToEntities(threads) {
     const links = [];
@@ -1489,11 +1664,15 @@ export function buildActivityEvents(input, threads, links, occurredAt, options =
     }
     return events;
 }
-export function buildIssueMutations(input, threads, links, options = {}) {
+export function buildIssueMutations(input, threads, links, intakeResolutions, options = {}) {
     const mutations = [];
     const approvalPolicy = options.approvalPolicy ?? "low_confidence";
     const sourceLabel = options.sourceLabel || "mock ingest";
+    const resolutions = Array.isArray(intakeResolutions) ? intakeResolutions.filter(Boolean) : [];
     for (const thread of threads) {
+        const res = resolutions.find((r) => String(r?.threadId || "") === String(thread.id || ""));
+        if (res && res.shouldCreateIssue === false)
+            continue;
         const threadLinks = links.filter((l) => l.threadId === thread.id);
         const threadTitle = chooseThreadTitle(thread, threadLinks);
         const baseFields = {
@@ -1605,15 +1784,169 @@ export function buildIssueMutations(input, threads, links, options = {}) {
     }
     return mutations;
 }
+function draftIdFromActionPlan(actionPlanId) {
+    return `DRF-${ingestHash8(String(actionPlanId || ""))}`.toUpperCase();
+}
+function primarySiLabelForThread(thread, threadLinks) {
+    const direct = Array.isArray(thread?.extractedEntities?.siIds) ? thread.extractedEntities.siIds.find(Boolean) : "";
+    if (direct)
+        return String(direct);
+    const fromLinks = (threadLinks || []).find((l) => l?.entityType === "SI" && l?.entityId);
+    return fromLinks ? String(fromLinks.entityId) : "SI-UNKNOWN";
+}
+export function buildDraftDocuments(input, threads, links, intakeResolutions, issueMutations, actionPlans, options = {}) {
+    const tList = Array.isArray(threads) ? threads.filter(Boolean) : [];
+    const allLinks = Array.isArray(links) ? links.filter(Boolean) : [];
+    const resolutions = Array.isArray(intakeResolutions) ? intakeResolutions.filter(Boolean) : [];
+    const plans = Array.isArray(actionPlans) ? actionPlans.filter(Boolean) : [];
+    const mutations = Array.isArray(issueMutations) ? issueMutations.filter(Boolean) : [];
+    const generatedBy = options.sourceLabel || "AI";
+    const generatedAt = ingestNowIso();
+    const issueIdForThreadFromMutations = (threadId) => {
+        const created = mutations.find((m) => m?.threadId === threadId && m?.action === "create_issue_candidate");
+        const issueId = created ? String(created.issueId || "").trim() : "";
+        return issueId || undefined;
+    };
+    const emailTemplate = (intent, thread, threadLinks) => {
+        if (intent === "missing_document_check") {
+            const si = primarySiLabelForThread(thread, threadLinks);
+            return {
+                subject: `Confirmation required: PL status for ${si}`,
+                body: `${si} の PL状況をご確認ください。\n未発行の場合は予定日をご共有ください。`,
+            };
+        }
+        if (intent === "quantity_mismatch") {
+            return {
+                subject: "Confirmation required: Quantity mismatch",
+                body: "SI と INV の数量差異をご確認ください。",
+            };
+        }
+        return {
+            subject: "Confirmation required",
+            body: "状況をご確認ください。",
+        };
+    };
+    const teamsTemplate = (thread) => {
+        const r = resolutions.find((x) => String(x?.threadId || "") === String(thread.id || "")) || null;
+        if (r && String(r.status || "") === "status_query") {
+            return { body: String(r.statusAnswer || "状況をご確認ください。") };
+        }
+        if (r && String(r.status || "") === "needs_clarification") {
+            return { body: String(r.clarificationQuestion || "対象のSI、Shipment、または書類番号を教えてください。") };
+        }
+        if (thread.intent === "eta_change") {
+            return { body: "ETA変更を確認しました。顧客影響をご確認ください。" };
+        }
+        return { body: "状況を確認しました。影響をご確認ください。" };
+    };
+    const drafts = [];
+    for (const ap of plans) {
+        const thread = tList.find((t) => String(t?.id || "") === String(ap.threadId || ""));
+        if (!thread)
+            continue;
+        const types = Array.isArray(ap.actionTypes) ? ap.actionTypes.map((t) => String(t ?? "").trim()).filter(Boolean) : [];
+        if (types.includes("human_review_only"))
+            continue;
+        if (types.includes("no_action"))
+            continue;
+        const threadLinks = allLinks.filter((l) => l.threadId === ap.threadId);
+        const issueId = ap.issueId || issueIdForThreadFromMutations(ap.threadId);
+        if (types.includes("email_required")) {
+            const t = emailTemplate(thread.intent, thread, threadLinks);
+            drafts.push({
+                id: draftIdFromActionPlan(ap.id),
+                sourceRawInputId: input.id,
+                threadId: ap.threadId,
+                issueId,
+                actionPlanId: ap.id,
+                channel: "email",
+                to: "supplier@example.invalid",
+                subject: t.subject,
+                body: t.body,
+                status: "drafted",
+                generatedBy,
+                generatedAt,
+                confidence: typeof ap.confidence === "number" ? ap.confidence : 0.3,
+            });
+        }
+        if (types.includes("teams_reply_required")) {
+            const t = teamsTemplate(thread);
+            drafts.push({
+                id: `${draftIdFromActionPlan(ap.id)}-TEAMS`,
+                sourceRawInputId: input.id,
+                threadId: ap.threadId,
+                issueId,
+                actionPlanId: ap.id,
+                channel: "teams",
+                body: t.body,
+                status: "drafted",
+                generatedBy,
+                generatedAt,
+                confidence: typeof ap.confidence === "number" ? ap.confidence : 0.3,
+            });
+        }
+    }
+    return drafts;
+}
 export function runIngestPipeline(input, options = {}) {
     const threads = Array.isArray(options.threads) ? options.threads : classifyRawInput(input);
     const normalizedThreads = normalizeOperationalThreads(input, threads);
     const links = dedupeEntityLinks(linkThreadsToEntities(normalizedThreads));
-    const issueMutations = buildIssueMutations(input, normalizedThreads, links, options);
-    const actionPlans = planNextActions(input, normalizedThreads, links, issueMutations, options);
+    const intakeResolutions = resolveIntake(input, normalizedThreads, links, options);
+    const issueMutations = buildIssueMutations(input, normalizedThreads, links, intakeResolutions, options);
+    const actionPlansBase = planNextActions(input, normalizedThreads, links, intakeResolutions, issueMutations, options);
+    const approvalPolicy = options.approvalPolicy ?? "low_confidence";
+    const isApprovalRequired = (thread) => approvalPolicy === "all" ? true : approvalPolicy === "low_confidence" ? thread.confidence < 0.7 : false;
+    const actionPlans = actionPlansBase.map((ap) => {
+        const thread = normalizedThreads.find((t) => t.id === ap.threadId);
+        if (!thread)
+            return ap;
+        const status = isApprovalRequired(thread) ? "pending_approval" : "planned";
+        return { ...ap, status };
+    });
     const pipelineOccurredAt = input.receivedAt || ingestNowIso();
     const activityEventsBase = buildActivityEvents(input, normalizedThreads, links, pipelineOccurredAt, options);
     const actor = options.sourceLabel || "AI";
+    const intakeResolvedEvents = intakeResolutions.map((r) => {
+        const threadId = String(r?.threadId || "").trim();
+        const st = String(r?.status || "");
+        const summary = st === "status_query"
+            ? "状況照会として処理"
+            : st === "needs_clarification"
+                ? "不足情報の確認が必要"
+                : st === "issue_candidate_required"
+                    ? "Issue候補として整理"
+                    : st === "informational_only"
+                        ? "情報共有として記録"
+                        : "Intakeを解決";
+        return {
+            id: ingestStableId("ACT", `${input.id}:${threadId}:intake_resolved`),
+            type: "intake_resolved",
+            occurredAt: pipelineOccurredAt,
+            sequence: ACTIVITY_SEQUENCE.intake_resolved,
+            title: "Intake Resolver",
+            description: summary,
+            sourceRawInputId: input.id,
+            threadId: threadId || undefined,
+            linkedEntities: threadId ? links.filter((l) => l.threadId === threadId) : undefined,
+            status: "ok",
+            actor,
+        };
+    });
+    const drafts = buildDraftDocuments(input, normalizedThreads, links, intakeResolutions, issueMutations, actionPlans, options);
+    const draftCreatedEvents = drafts.map((d) => ({
+        id: ingestStableId("ACT", `${input.id}:${d.threadId}:${d.id}:draft_created`),
+        type: "draft_created",
+        occurredAt: pipelineOccurredAt,
+        sequence: ACTIVITY_SEQUENCE.draft_created,
+        title: "下書きを生成",
+        description: d.channel === "email" ? "email下書きを生成" : "Teams下書きを生成",
+        sourceRawInputId: input.id,
+        threadId: d.threadId,
+        linkedEntities: links.filter((l) => l.threadId === d.threadId),
+        status: "ok",
+        actor,
+    }));
     const actionPlannedEvents = actionPlans.map((ap) => ({
         id: ingestStableId("ACT", `${input.id}:${ap.threadId}:${ap.id}:action_planned`),
         type: "action_planned",
@@ -1654,9 +1987,11 @@ export function runIngestPipeline(input, options = {}) {
         rawInput: { ...input, status: "linked" },
         threads: normalizedThreads,
         links,
-        activityEvents: [...activityEventsBase, ...actionPlannedEvents, ...issueUpdatedEvents],
+        intakeResolutions,
+        activityEvents: [...activityEventsBase, ...intakeResolvedEvents, ...draftCreatedEvents, ...actionPlannedEvents, ...issueUpdatedEvents],
         issueMutations,
         actionPlans,
+        drafts,
     };
 }
 export function buildIngestResultFromThreads(input, threads, options = {}) {
