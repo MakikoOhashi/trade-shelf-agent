@@ -65,16 +65,6 @@ const state = {
    */
   approvalsByActionPlanId: {},
   /**
-   * 承認センターβで選択中の step key
-   * @type {string | null}
-   */
-  selectedFlowBetaStep: null,
-  /**
-   * 承認センターβの右パネル mini tab
-   * @type {"setup" | "configure" | "test"}
-   */
-  flowBetaPanelTab: "setup",
-  /**
    * Active raw request id in Requests page
    * @type {string | null}
    */
@@ -92,12 +82,12 @@ const state = {
   proposalApprovalStatusById: {},
   modalTradeCaseId: null,
   /**
-   * Issues（AI承認センター）で開いている Issue detail の tradeCaseId
+   * Issues（承認センター）で開いている Issue detail の tradeCaseId
    * @type {string | null}
    */
   activeIssueId: null,
   /**
-   * AI承認センターで開いている LLM mutation detail の id
+   * 承認センターで開いている LLM mutation detail の id
    * @type {string | null}
    */
   activeMutationId: null,
@@ -108,7 +98,7 @@ const state = {
   issueSeqByTradeCaseId: {},
   /**
    * New TOP (GitHub-like) active tab
-   * @type {"shelf" | "issues" | "approvalsAlpha" | "approvalsBeta" | "requests" | "activity" | "documents" | "settings"}
+   * @type {"shelf" | "issues" | "requests" | "activity" | "documents" | "settings"}
    */
   topActiveTab: "shelf",
   /**
@@ -178,9 +168,7 @@ const state = {
 
 const newTopTabs = [
   { key: "shelf", label: "棚", subLabel: "Shelf" },
-  { key: "issues", label: "AI承認センター", subLabel: "Approvals" },
-  { key: "approvalsAlpha", label: "承認センターα", subLabel: "Flow Alpha" },
-  { key: "approvalsBeta", label: "承認センターβ", subLabel: "Flow Beta" },
+  { key: "issues", label: "承認センター", subLabel: "Approvals" },
   { key: "requests", label: "変更・確認依頼", subLabel: "Requests" },
   { key: "activity", label: "活動ログ", subLabel: "Activity" },
   { key: "documents", label: "Documents", subLabel: "" },
@@ -230,20 +218,6 @@ function openNewWindow(url) {
   } catch {
     window.open(u, "_blank");
   }
-}
-
-function openIngestionModal() {
-  const modal = document.getElementById("ingestion-modal");
-  if (!modal) return;
-  modal.classList.add("is-open");
-  modal.setAttribute("aria-hidden", "false");
-}
-
-function closeIngestionModal() {
-  const modal = document.getElementById("ingestion-modal");
-  if (!modal) return;
-  modal.classList.remove("is-open");
-  modal.setAttribute("aria-hidden", "true");
 }
 
 function fetchWithTimeout(url, options, timeoutMs = 20000) {
@@ -1246,13 +1220,12 @@ function agentRunEdit(tradeCaseId) {
 }
 
 function renderNewTop() {
-  const tab = state.topActiveTab || "shelf";
+  const rawTab = state.topActiveTab || "shelf";
+  const tab = newTopTabs.some((t) => t && String(t.key) === String(rawTab)) ? rawTab : "shelf";
 
   const navIconByKey = {
     shelf: "🗂️",
     issues: "⚠️",
-    approvalsAlpha: "🧪",
-    approvalsBeta: "🧩",
     requests: "💬",
     activity: "📡",
     documents: "📚",
@@ -2957,553 +2930,11 @@ function renderNewTop() {
     </section>`;
   };
 
-  const renderApprovalFlowAlpha = () => {
-    const sample = {
-      rawInput: {
-        rawText: "PLまだ？あとSI-224も確認して",
-      },
-      thread: {
-        title: "PL確認",
-      },
-      links: [
-        { entityType: "SI", entityId: "SI-2026-224" },
-        { entityType: "Document", entityId: "PL" },
-      ],
-      actionPlan: {
-        id: "AP-SAMPLE",
-        title: "仕入先への書類確認が必要です",
-        status: "pending_approval",
-      },
-      draft: {
-        channel: "email",
-        to: "ops@example.com",
-        subject: "Confirmation required: PL status for SI-2026-224",
-        body: "SI-2026-224 の PL状況をご確認ください。未発行の場合は予定日をご共有ください。",
-      },
-    };
-
-    const ingest = state.latestIngestResult && typeof state.latestIngestResult === "object" ? state.latestIngestResult : null;
-    const rawInput = ingest && ingest.rawInput ? ingest.rawInput : sample.rawInput;
-    const threads = ingest && Array.isArray(ingest.threads) ? ingest.threads.filter(Boolean) : [];
-    const thread = threads[0] || sample.thread;
-    const links = ingest && Array.isArray(ingest.links) ? ingest.links.filter(Boolean) : [];
-    const actionPlans = ingest && Array.isArray(ingest.actionPlans) ? ingest.actionPlans.filter(Boolean) : [];
-    const actionPlan = actionPlans[0] || sample.actionPlan;
-
-    const actionPlanId = String(actionPlan?.id || sample.actionPlan.id);
-    const approvalEntry = actionPlanId ? state.approvalsByActionPlanId?.[actionPlanId] : null;
-    const approvalStatus = String((approvalEntry && approvalEntry.status) || actionPlan?.status || "pending_approval");
-
-    const drafts = ingest && Array.isArray(ingest.drafts) ? ingest.drafts.filter(Boolean) : [];
-    const relatedDrafts = drafts.filter((d) => String(d?.actionPlanId || "") === actionPlanId);
-    const preferredDraft = relatedDrafts.find((d) => String(d?.channel || "") === "email") || relatedDrafts[0] || null;
-    const draft = preferredDraft
-      ? {
-          channel: String(preferredDraft.channel || "-"),
-          to: preferredDraft.to ? String(preferredDraft.to) : "",
-          subject: preferredDraft.subject ? String(preferredDraft.subject) : "",
-          body: String(preferredDraft.body || ""),
-        }
-      : ingest
-        ? null
-        : sample.draft;
-
-    const linkedEntities = (() => {
-      const list = Array.isArray(links) && thread && thread.id ? links.filter((l) => String(l?.threadId || "") === String(thread.id)) : [];
-      if (list.length) return list;
-      return Array.isArray(sample.links) ? sample.links : [];
-    })();
-
-    const steps = [
-      { key: "raw", label: "依頼受信" },
-      { key: "tagger", label: "Tagger" },
-      { key: "splitter", label: "Thread Splitter" },
-      { key: "linker", label: "Entity Linker" },
-      { key: "issuePlanner", label: "Issue Planner" },
-      { key: "actionPlanner", label: "Action Planner" },
-      { key: "draftWriter", label: "Draft Writer" },
-      { key: "approval", label: "Approval" },
-    ];
-
-    const hasFailed = (() => {
-      const evs = ingest && Array.isArray(ingest.activityEvents) ? ingest.activityEvents.filter(Boolean) : [];
-      return evs.some((e) => String(e?.type || "") === "failed_processing");
-    })();
-
-    const stepIndexByKey = Object.fromEntries(steps.map((s, i) => [s.key, i]));
-    const first = (arr) => (Array.isArray(arr) ? arr.filter(Boolean)[0] : null);
-
-    const threadSummaries = threads.map((t) => ({
-      title: String(t?.title || t?.summary || t?.id || "").trim(),
-      intent: String(t?.intent || "").trim(),
-    }));
-    const intentsJa = Array.from(new Set(threadSummaries.map((t) => t.intent).filter(Boolean)))
-      .map((x) => classifyLabelJaFromIntent(x) || x)
-      .filter(Boolean);
-
-    const threadTitles = threadSummaries.map((t) => t.title).filter(Boolean);
-
-    const issueMutations = ingest && Array.isArray(ingest.issueMutations) ? ingest.issueMutations.filter(Boolean) : [];
-    const createdIssueIds = Array.from(
-      new Set(
-        issueMutations
-          .filter((m) => String(m?.action || "") === "create_issue_candidate")
-          .map((m) => String(m?.issueId || "").trim())
-          .filter(Boolean),
-      ),
-    );
-
-    const draftChannels = (() => {
-      const list = relatedDrafts && relatedDrafts.length ? relatedDrafts : drafts;
-      const ch = Array.from(new Set((list || []).map((d) => String(d?.channel || "").trim()).filter(Boolean)));
-      return ch.length ? ch : [];
-    })();
-
-    const inferCurrentKey = () => {
-      if (!ingest) return "raw";
-      if (!rawInput || !String(rawInput?.rawText || "").trim()) return "raw";
-      if (!threads.length) return "tagger";
-      if (threads.length && !threadTitles.length) return "splitter";
-      if (!links.length) return "linker";
-      if (!issueMutations.length) return "issuePlanner";
-      if (!actionPlans.length) return "actionPlanner";
-      if (!drafts.length) return "draftWriter";
-      if (approvalStatus === "mock_sent") return "__done__";
-      return "approval";
-    };
-
-    const currentKey = inferCurrentKey();
-    const currentIndex = currentKey === "__done__" ? steps.length : stepIndexByKey[currentKey] ?? steps.length - 1;
-
-    const stepStatus = (key) => {
-      const idx = stepIndexByKey[key];
-      if (typeof idx !== "number") return "pending";
-      if (hasFailed && idx === currentIndex) return "failed";
-      if (idx < currentIndex) return "done";
-      if (idx === currentIndex && currentKey !== "__done__") return "current";
-      return "pending";
-    };
-
-    const stepDetailLines = (key) => {
-      if (key === "raw") {
-        const t = String(rawInput?.rawText || "-").trim();
-        return t ? [t] : ["-"];
-      }
-      if (key === "tagger") {
-        if (!intentsJa.length) return ["-"];
-        return intentsJa;
-      }
-      if (key === "splitter") {
-        if (!threadTitles.length) return ["-"];
-        return threadTitles.slice(0, 3);
-      }
-      if (key === "linker") {
-        const list = linkedEntities.length
-          ? linkedEntities
-              .map((l) => `${formatEntityType(String(l?.entityType || ""))} ${String(l?.entityId || "").trim()}`.trim())
-              .filter(Boolean)
-          : [];
-        return list.length ? list.slice(0, 3) : ["-"];
-      }
-      if (key === "issuePlanner") {
-        if (!createdIssueIds.length) return issueMutations.length ? ["Issue更新候補あり"] : ["-"];
-        const id = createdIssueIds.length <= 2 ? createdIssueIds.join(", ") : `${createdIssueIds[0]} ほか${createdIssueIds.length - 1}件`;
-        return [`${id} を作成`];
-      }
-      if (key === "actionPlanner") {
-        const t = String(actionPlan?.title || "").trim();
-        return t ? [t] : ["-"];
-      }
-      if (key === "draftWriter") {
-        if (!draftChannels.length) return ["下書き未生成"];
-        return draftChannels.map((c) => (c === "email" ? "email下書き生成済み" : c === "teams" ? "Teams下書き生成済み" : `${c} 下書き生成済み`));
-      }
-      if (key === "approval") {
-        return [approvalStatusLabelJa(approvalStatus) || "-"];
-      }
-      return ["-"];
-    };
-
-    const flowHtml = `<div class="flow-step-list" aria-label="Processor Flow">
-      ${steps
-        .map((s, i) => {
-          const st = stepStatus(s.key);
-          const marker = st === "done" ? "✓" : st === "failed" ? "!" : st === "current" ? "●" : "○";
-          const detailLines = stepDetailLines(s.key);
-          const detailsHtml = detailLines.length
-            ? `<ul class="flow-step-details">${detailLines.map((x) => `<li>${escapeHtml(String(x))}</li>`).join("")}</ul>`
-            : "";
-          return `<div class="flow-step ${escapeHtml(st)}" aria-label="Flow step">
-            <div class="flow-step-rail" aria-hidden="true">
-              ${i === 0 ? "" : `<div class="flow-step-line flow-step-line--up"></div>`}
-              <div class="flow-step-marker" aria-hidden="true">${escapeHtml(marker)}</div>
-              ${i === steps.length - 1 ? "" : `<div class="flow-step-line flow-step-line--down"></div>`}
-            </div>
-            <div class="flow-step-content">
-              <div class="flow-step-title">${escapeHtml(String(s.label))}</div>
-              ${detailsHtml}
-            </div>
-          </div>`;
-        })
-        .join("")}
-    </div>`;
-
-    const linkedText = linkedEntities.length
-      ? linkedEntities
-          .map((l) => `${formatEntityType(String(l?.entityType || ""))} ${String(l?.entityId || "").trim()}`.trim())
-          .filter(Boolean)
-          .join(", ")
-      : "-";
-
-    const canApprove = approvalStatus === "pending_approval";
-    const canMockSend = approvalStatus === "approved";
-
-    const activeStepLabel = (() => {
-      if (currentKey === "__done__") return "Done";
-      const found = steps.find((s) => s.key === currentKey);
-      return found ? found.label : "Approval";
-    })();
-
-    const sideHtml = `<aside class="flow-side-panel" aria-label="Workspace panel">
-      <div class="approval-flow-alpha__panel-head">
-        <div class="approval-flow-alpha__panel-title">Workspace</div>
-        <div class="muted">${escapeHtml(String(activeStepLabel))}</div>
-      </div>
-
-      <section class="detail-section" aria-label="Current Status">
-        <h3 class="detail-section__title">Current Status</h3>
-        <div class="current-status-mini">
-          <div class="current-status-mini__row">
-            <span class="pill">${escapeHtml(approvalStatusLabelJa(approvalStatus) || "-")}</span>
-            <span class="muted">${escapeHtml(String(thread?.title || sample.thread.title || "-"))}</span>
-          </div>
-          <div class="current-status-mini__row muted">${escapeHtml(String(actionPlan?.title || sample.actionPlan.title || "-"))}</div>
-          <div class="current-status-mini__row muted">${escapeHtml(linkedText || "-")}</div>
-        </div>
-      </section>
-
-      ${
-        currentKey === "approval"
-          ? `<section class="draft-preview-card" aria-label="Draft Preview">
-              <div class="draft-preview-card__head">
-                <div class="draft-preview-card__title">Draft Preview</div>
-                <div class="draft-preview-card__meta muted">${escapeHtml(String((draft && draft.channel) || "-"))}</div>
-              </div>
-              ${
-                draft
-                  ? `<div class="kv" style="margin-top:8px;">
-                      <span class="muted">to</span> ${escapeHtml(String(draft.to || "-"))}
-                      ${draft.subject ? `<span class="muted">subject</span> ${escapeHtml(String(draft.subject))}` : ""}
-                    </div>
-                    <pre class="pre pre--compact" style="margin-top:10px;">${escapeHtml(String(draft.body || ""))}</pre>`
-                  : `<div class="nt-muted">下書き未生成</div>`
-              }
-            </section>
-
-            <div class="issue-current-actions" aria-label="Actions">
-              <button class="btn btn--primary btn--small" type="button" data-alpha-approve="${escapeHtml(actionPlanId)}" ${canApprove ? "" : "disabled"}>Approve</button>
-              <button class="btn btn--small" type="button" data-alpha-edit="${escapeHtml(actionPlanId)}" ${canApprove ? "" : "disabled"}>Edit</button>
-              <button class="btn btn--small" type="button" data-alpha-hold="${escapeHtml(actionPlanId)}" ${canApprove ? "" : "disabled"}>Hold</button>
-              <button class="btn btn--small" type="button" data-alpha-mock-send="${escapeHtml(actionPlanId)}" ${canMockSend ? "" : "disabled"}>Mock send</button>
-            </div>`
-          : `<section class="draft-preview-card" aria-label="Draft Preview">
-              <div class="draft-preview-card__head">
-                <div class="draft-preview-card__title">Draft Preview</div>
-                <div class="draft-preview-card__meta muted">-</div>
-              </div>
-              <div class="nt-muted">現在の step は Approval ではありません。</div>
-            </section>`
-      }
-    </aside>`;
-
-    return `<section class="approval-flow-alpha" aria-label="承認センターα">
-      <div class="approval-flow-alpha__head">
-        <div>
-          <div class="approval-flow-alpha__title">承認センターα</div>
-          <div class="approval-flow-alpha__sub muted">Zapier風 Processor Flow Workspace（試作）</div>
-        </div>
-      </div>
-      <div class="flow-alpha-layout">
-        <div class="approval-flow-alpha__flow" aria-label="Processor Flow">
-          <div class="approval-flow-alpha__flow-title">Processor Flow</div>
-          ${flowHtml}
-        </div>
-        ${sideHtml}
-      </div>
-    </section>`;
-  };
-
-  const renderApprovalFlowBeta = () => {
-    const steps = [
-      { key: "request_received", title: "依頼受信", summary: "RawInput を受領" },
-      { key: "tagger", title: "Tagger", summary: "intent / tags を推定" },
-      { key: "thread_splitter", title: "Thread Splitter", summary: "業務スレッドへ分解" },
-      { key: "entity_linker", title: "Entity Linker", summary: "関連エンティティへ紐付け" },
-      { key: "issue_planner", title: "Issue Planner", summary: "Issue candidate を作成" },
-      { key: "action_planner", title: "Action Planner", summary: "次のアクションを判定" },
-      { key: "draft_writer", title: "Draft Writer", summary: "外部送信の下書きを生成" },
-      { key: "approval", title: "Approval", summary: "承認・修正・保留・mock送信" },
-    ];
-
-    const sample = {
-      rawText: "PLまだ？あとSI-224も確認して",
-      channel: "teams",
-      sender: "sales@example.com",
-      threadTitle: "PL確認",
-      entities: [
-        { kind: "SI", id: "SI-2026-224" },
-        { kind: "Document", id: "PL" },
-      ],
-      issueCandidateId: "ISS-CAND-SI-2026-224",
-      actionTitle: "仕入先への書類確認が必要です",
-      actionTypes: ["supplier_confirmation_required", "email_required"],
-      draft: {
-        channel: "email",
-        to: "ops@example.com",
-        subject: "Confirmation required: PL status for SI-2026-224",
-        body: "SI-2026-224 の PL状況をご確認ください。未発行の場合は予定日をご共有ください。",
-      },
-      actionPlanId: "AP-SAMPLE",
-      approvalStatus: "pending_approval",
-    };
-
-    const pickData = () => {
-      const r = state.latestIngestResult;
-      if (!r) return { source: "sample", ...sample, doneSteps: new Set(), currentStep: "approval" };
-
-      const raw = r.rawInput || null;
-      const threads = Array.isArray(r.threads) ? r.threads.filter(Boolean) : [];
-      const links = Array.isArray(r.links) ? r.links.filter(Boolean) : [];
-      const actionPlans = Array.isArray(r.actionPlans) ? r.actionPlans.filter(Boolean) : [];
-      const drafts = Array.isArray(r.drafts) ? r.drafts.filter(Boolean) : [];
-      const issueMutations = Array.isArray(r.issueMutations) ? r.issueMutations.filter(Boolean) : [];
-      const activityEvents = Array.isArray(r.activityEvents) ? r.activityEvents.filter(Boolean) : [];
-
-      const thread = threads[0] || null;
-      const threadId = thread && thread.id ? String(thread.id) : "";
-      const threadLinks = threadId ? links.filter((l) => String(l?.threadId || "") === threadId) : [];
-
-      const actionPlan = actionPlans.find((p) => String(p?.threadId || "") === threadId) || actionPlans[0] || null;
-      const actionPlanId = actionPlan && actionPlan.id ? String(actionPlan.id) : "";
-      const approvalEntry = actionPlanId ? state.approvalsByActionPlanId?.[actionPlanId] : null;
-      const approvalStatus = String((approvalEntry && approvalEntry.status) || (actionPlan && actionPlan.status) || "planned");
-
-      const draft =
-        (actionPlanId ? drafts.find((d) => String(d?.actionPlanId || "") === actionPlanId) : null) ||
-        (threadId ? drafts.find((d) => String(d?.threadId || "") === threadId) : null) ||
-        null;
-
-      const issueCandidateId =
-        String(actionPlan?.issueId || "").trim() ||
-        String(issueMutations.find((m) => m && m.action === "create_issue_candidate")?.issueId || "").trim() ||
-        "";
-
-      const doneByEvent = (t) => activityEvents.some((e) => String(e?.type || "") === t);
-      const done = new Set();
-      if (doneByEvent("raw_input_received")) done.add("request_received");
-      if (doneByEvent("classified")) done.add("tagger");
-      if (threads.length) done.add("thread_splitter");
-      if (doneByEvent("entity_linked")) done.add("entity_linker");
-      if (issueCandidateId) done.add("issue_planner");
-      if (actionPlans.length || doneByEvent("action_planned")) done.add("action_planner");
-      if (drafts.length || doneByEvent("draft_created")) done.add("draft_writer");
-      if (["approved", "held", "edited", "mock_sent"].includes(approvalStatus)) done.add("approval");
-
-      return {
-        source: "latestIngestResult",
-        rawText: String(raw?.rawText || ""),
-        channel: String(raw?.channel || raw?.source || ""),
-        sender: String(raw?.senderEmail || raw?.senderName || ""),
-        threadTitle: String(thread?.title || threadId || ""),
-        entities: threadLinks.map((l) => ({ kind: String(l?.entityType || ""), id: String(l?.entityId || "") })).filter((x) => x.kind && x.id),
-        issueCandidateId,
-        actionTitle: String(actionPlan?.title || ""),
-        actionTypes: Array.isArray(actionPlan?.actionTypes) ? actionPlan.actionTypes.map((x) => String(x ?? "")).filter(Boolean) : [],
-        draft: draft
-          ? {
-              channel: String(draft.channel || ""),
-              to: draft.to ? String(draft.to) : "",
-              subject: draft.subject ? String(draft.subject) : "",
-              body: String(draft.body || ""),
-            }
-          : null,
-        actionPlanId,
-        approvalStatus,
-        doneSteps: done,
-        currentStep: "approval",
-      };
-    };
-
-    const data = pickData();
-    const selected = String(state.selectedFlowBetaStep || data.currentStep || "approval");
-    const tabKey = String(state.flowBetaPanelTab || "setup");
-
-    const iconFor = (cls) => (cls === "done" ? "✓" : cls === "current" ? "!" : cls === "pending" ? "…" : "•");
-
-    const statusClassFor = (stepKey) => {
-      if (data.doneSteps && data.doneSteps.has(stepKey)) return "done";
-      if (stepKey === String(data.currentStep || "approval")) return "current";
-      const order = steps.map((s) => s.key);
-      const idx = order.indexOf(stepKey);
-      const curIdx = order.indexOf(String(data.currentStep || "approval"));
-      if (idx > curIdx) return "pending";
-      return "done";
-    };
-
-    const nodeStackHtml = `<div class="flow-beta-node-stack" aria-label="Flow steps">
-      ${steps
-        .map((s, idx) => {
-          const cls = statusClassFor(s.key);
-          const selectedClass = s.key === selected ? " selected" : "";
-          const connector =
-            idx === steps.length - 1 ? "" : `<div class="flow-beta-connector" aria-hidden="true"><div class="flow-beta-plus">+</div></div>`;
-          return `<div class="flow-beta-node-wrap">
-            <button class="flow-beta-node ${escapeHtml(cls)}${selectedClass}" type="button" data-flow-beta-step="${escapeHtml(String(s.key))}">
-              <div class="flow-beta-node-icon" aria-hidden="true">${escapeHtml(iconFor(cls))}</div>
-              <div class="flow-beta-node-body">
-                <div class="flow-beta-node-title">${escapeHtml(String(s.title))}</div>
-                <div class="flow-beta-node-summary">${escapeHtml(String(s.summary || ""))}</div>
-              </div>
-              <div class="flow-beta-node-menu" aria-hidden="true">⋮</div>
-            </button>
-            ${connector}
-          </div>`;
-        })
-        .join("")}
-    </div>`;
-
-    const panelTitle = (steps.find((s) => s.key === selected) || steps[steps.length - 1]).title;
-    const safeDraft = data.draft || (data.source === "sample" ? sample.draft : null);
-
-    const panelBodyByStep = () => {
-      if (selected === "request_received") {
-        return `<div class="kv">
-          <span class="muted">rawText</span> ${escapeHtml(String(data.rawText || "-"))}
-          <span class="muted">channel</span> ${escapeHtml(String(data.channel || "-"))}
-          <span class="muted">sender</span> ${escapeHtml(String(data.sender || "-"))}
-        </div>`;
-      }
-      if (selected === "tagger") {
-        const threads = state.latestIngestResult && Array.isArray(state.latestIngestResult.threads) ? state.latestIngestResult.threads.filter(Boolean) : [];
-        const t = threads[0] || null;
-        const intent = t && t.intent ? String(t.intent) : "-";
-        return `<div class="kv">
-          <span class="muted">intent</span> ${escapeHtml(intent)}
-          <span class="muted">tags</span> ${escapeHtml("-")}
-        </div>`;
-      }
-      if (selected === "thread_splitter") {
-        return `<div class="kv"><span class="muted">thread title</span> ${escapeHtml(String(data.threadTitle || "-"))}</div>`;
-      }
-      if (selected === "entity_linker") {
-        const list = Array.isArray(data.entities) ? data.entities : [];
-        return list.length
-          ? `<ul class="mini-list">${list.map((e) => `<li>${escapeHtml(`${e.kind} ${e.id}`)}</li>`).join("")}</ul>`
-          : `<div class="muted">（no linked entities）</div>`;
-      }
-      if (selected === "issue_planner") {
-        return `<div class="kv"><span class="muted">issue candidate id</span> ${escapeHtml(String(data.issueCandidateId || "-"))}</div>`;
-      }
-      if (selected === "action_planner") {
-        const types = Array.isArray(data.actionTypes) ? data.actionTypes : [];
-        return `<div class="kv">
-          <span class="muted">action</span> ${escapeHtml(String(data.actionTitle || "-"))}
-          <span class="muted">action types</span> ${escapeHtml(types.join(", ") || "-")}
-        </div>`;
-      }
-      if (selected === "draft_writer") {
-        if (!safeDraft) return `<div class="muted">（no draft）</div>`;
-        return `<div class="flow-beta-draft-card" aria-label="Draft preview">
-          <div class="kv">
-            <span class="muted">channel</span> ${escapeHtml(String(safeDraft.channel || "-"))}
-            <span class="muted">to</span> ${escapeHtml(String(safeDraft.to || "-"))}
-            ${safeDraft.subject ? `<span class="muted">subject</span> ${escapeHtml(String(safeDraft.subject))}` : ""}
-          </div>
-          <pre class="pre pre--compact">${escapeHtml(String(safeDraft.body || ""))}</pre>
-        </div>`;
-      }
-      if (selected === "approval") {
-        const actionPlanId = String(data.actionPlanId || (data.source === "sample" ? sample.actionPlanId : "") || "");
-        const approvalStatus = String(data.approvalStatus || (data.source === "sample" ? sample.approvalStatus : "") || "planned");
-        const canApprove = approvalStatus === "pending_approval";
-        const canMockSend = approvalStatus === "approved";
-        const isSample = data.source === "sample";
-        return `<div>
-          <div class="kv"><span class="muted">Current Status</span> ${escapeHtml(approvalStatusLabelJa(approvalStatus))}</div>
-          <div class="flow-beta-panel-footer" style="padding:0; border:0; background:transparent;">
-            <div class="flow-beta-panel-footer-actions">
-              <button class="btn btn--primary btn--small" type="button" data-flow-beta-approve="${escapeHtml(actionPlanId)}" ${!isSample && canApprove ? "" : "disabled"}>Approve</button>
-              <button class="btn btn--small" type="button" data-flow-beta-edit="${escapeHtml(actionPlanId)}" ${!isSample && canApprove ? "" : "disabled"}>Edit</button>
-              <button class="btn btn--small" type="button" data-flow-beta-hold="${escapeHtml(actionPlanId)}" ${!isSample && canApprove ? "" : "disabled"}>Hold</button>
-              <button class="btn btn--small" type="button" data-flow-beta-mock-send="${escapeHtml(actionPlanId)}" ${!isSample && canMockSend ? "" : "disabled"}>Mock send</button>
-            </div>
-          </div>
-          ${isSample ? `<div class="muted" style="margin-top:10px;">latestIngestResult が無いため sample 表示（承認操作は無効）</div>` : ""}
-        </div>`;
-      }
-      return `<div class="muted">Select a step</div>`;
-    };
-
-    const tabs = [
-      { key: "setup", label: "Setup" },
-      { key: "configure", label: "Configure" },
-      { key: "test", label: "Test" },
-    ];
-
-    const tabsHtml = `<div class="flow-beta-panel-tabs" role="tablist" aria-label="Flow Beta Tabs">
-      ${tabs
-        .map((t) => {
-          const active = t.key === tabKey;
-          return `<button class="mode-chip ${active ? "is-active" : ""}" type="button" data-flow-beta-tab="${escapeHtml(
-            String(t.key),
-          )}">${escapeHtml(String(t.label))}</button>`;
-        })
-        .join("")}
-    </div>`;
-
-    return `<section class="approval-flow-beta" aria-label="承認センターβ">
-      <div class="flow-beta-layout">
-        <div class="flow-beta-canvas" aria-label="Flow canvas">
-          ${nodeStackHtml}
-        </div>
-        <aside class="flow-beta-panel" aria-label="Selected node panel">
-          <div class="flow-beta-panel-header">
-            <div>
-              <div class="nt-h3">承認センターβ</div>
-              <div class="muted">Flow Beta（完全新規UI）</div>
-            </div>
-          </div>
-          <div class="flow-beta-panel-body">
-            <div class="flow-beta-panel-step-title">${escapeHtml(String(panelTitle || "-"))}</div>
-            ${tabsHtml}
-            <div class="flow-beta-panel-content">
-              ${
-                tabKey === "configure"
-                  ? `<div class="muted" style="margin-bottom:10px;">Configure: パラメータ調整（mock）</div>`
-                  : tabKey === "test"
-                    ? `<div class="muted" style="margin-bottom:10px;">Test: この step の動作確認（mock）</div>`
-                    : ""
-              }
-              ${panelBodyByStep()}
-            </div>
-          </div>
-          <div class="flow-beta-panel-footer">
-            <div class="muted">${escapeHtml(String(data.source || ""))}</div>
-          </div>
-        </aside>
-      </div>
-    </section>`;
-  };
-
   const mainHtml =
     tab === "shelf"
       ? renderShelf()
       : tab === "issues"
         ? renderIssues()
-        : tab === "approvalsAlpha"
-          ? renderApprovalFlowAlpha()
-        : tab === "approvalsBeta"
-          ? renderApprovalFlowBeta()
         : tab === "requests"
           ? renderRequests()
           : tab === "activity"
@@ -3512,20 +2943,15 @@ function renderNewTop() {
           ? renderDocumentsEvidenceArchive()
           : renderPlaceholder("Settings");
 
-  return `
-    <div class="new-top">
-      <header class="top-header">
-        <div class="top-header__brand">Trade Shelf Agent</div>
-        <div class="top-header__actions">
-          <button class="top-header__action-btn" type="button" data-open-ingestion="1" aria-label="Ingestion settings" title="Ingestion settings">
-            <span class="top-header__action-icon" aria-hidden="true">⚙</span>
-          </button>
-        </div>
-      </header>
-      ${navHtml}
-      <main class="nt-main" aria-label="Main">${mainHtml}</main>
-    </div>
-  `;
+	  return `
+	    <div class="new-top">
+	      <header class="top-header">
+	        <div class="top-header__brand">Trade Shelf Agent</div>
+	      </header>
+	      ${navHtml}
+	      <main class="nt-main" aria-label="Main">${mainHtml}</main>
+	    </div>
+	  `;
 }
 
 function renderApp() {
@@ -6756,9 +6182,9 @@ function renderTradeCaseDetail(tradeCase) {
           ${renderStakeholderCoordinationPreview(tradeCase)}
           <section class="detail-section">
             <h3 class="detail-section__title">Actions / 承認と実行</h3>
-            <div class="muted">承認・下書き編集・保留などの実務アクションは、Issues（AI承認センター）で行ってください。</div>
+            <div class="muted">承認・下書き編集・保留などの実務アクションは、Issues（承認センター）で行ってください。</div>
             <div style="margin-top:10px;">
-              <button class="btn btn--primary" type="button" data-open-approval-center="1">Open Issues（AI承認センター）</button>
+              <button class="btn btn--primary" type="button" data-open-approval-center="1">Open Issues（承認センター）</button>
             </div>
           </section>
         </main>
@@ -7534,10 +6960,6 @@ function setupNewTop() {
       const key = tabEl.getAttribute("data-nt-tab") || "";
       if (newTopTabs.some((t) => t.key === key)) {
         state.topActiveTab = key;
-        if (key === "approvalsBeta") {
-          if (!state.selectedFlowBetaStep) state.selectedFlowBetaStep = "approval";
-          if (!state.flowBetaPanelTab) state.flowBetaPanelTab = "setup";
-        }
         if (key !== "issues") {
           state.activeIssueId = null;
           state.activeMutationId = null;
@@ -7545,24 +6967,6 @@ function setupNewTop() {
         if (key !== "requests") state.isOperationalThreadModalOpen = false;
         renderApp();
       }
-      return;
-    }
-
-    const flowBetaStepEl = target.closest && target.closest("[data-flow-beta-step]");
-    if (flowBetaStepEl) {
-      const k = flowBetaStepEl.getAttribute("data-flow-beta-step") || "";
-      if (k) {
-        state.selectedFlowBetaStep = k;
-        renderApp();
-      }
-      return;
-    }
-
-    const flowBetaTabEl = target.closest && target.closest("[data-flow-beta-tab]");
-    if (flowBetaTabEl) {
-      const k = flowBetaTabEl.getAttribute("data-flow-beta-tab") || "setup";
-      state.flowBetaPanelTab = k === "configure" ? "configure" : k === "test" ? "test" : "setup";
-      renderApp();
       return;
     }
 
@@ -7860,42 +7264,6 @@ function setupNewTop() {
       return;
     }
 
-    const flowBetaApproveEl = target.closest && target.closest("[data-flow-beta-approve]");
-    if (flowBetaApproveEl) {
-      const id = flowBetaApproveEl.getAttribute("data-flow-beta-approve") || "";
-      const res = applyApprovalAction(id, "approve");
-      if (!res.ok) window.alert(`(mock) ${res.error}`);
-      renderApp();
-      return;
-    }
-
-    const flowBetaEditEl = target.closest && target.closest("[data-flow-beta-edit]");
-    if (flowBetaEditEl) {
-      const id = flowBetaEditEl.getAttribute("data-flow-beta-edit") || "";
-      const res = applyApprovalAction(id, "edit");
-      if (!res.ok) window.alert(`(mock) ${res.error}`);
-      renderApp();
-      return;
-    }
-
-    const flowBetaHoldEl = target.closest && target.closest("[data-flow-beta-hold]");
-    if (flowBetaHoldEl) {
-      const id = flowBetaHoldEl.getAttribute("data-flow-beta-hold") || "";
-      const res = applyApprovalAction(id, "hold");
-      if (!res.ok) window.alert(`(mock) ${res.error}`);
-      renderApp();
-      return;
-    }
-
-    const flowBetaMockSendEl = target.closest && target.closest("[data-flow-beta-mock-send]");
-    if (flowBetaMockSendEl) {
-      const id = flowBetaMockSendEl.getAttribute("data-flow-beta-mock-send") || "";
-      const res = applyApprovalAction(id, "mock_send");
-      if (!res.ok) window.alert(`(mock) ${res.error}`);
-      renderApp();
-      return;
-    }
-
     const issueAddCommentEl = target.closest && target.closest("[data-issue-add-comment]");
     if (issueAddCommentEl) {
       const id = issueAddCommentEl.getAttribute("data-issue-add-comment") || "";
@@ -8052,11 +7420,6 @@ function setupNewTop() {
       return;
     }
 
-    const ingestionEl = target.closest && target.closest("[data-open-ingestion]");
-    if (ingestionEl) {
-      openIngestionModal();
-      return;
-    }
   });
 
   root.addEventListener("input", (e) => {
@@ -8113,15 +7476,6 @@ function setupNewTop() {
     }
   });
 
-  const modal = document.getElementById("ingestion-modal");
-  if (modal) {
-    modal.addEventListener("click", (e) => {
-      const t = e.target;
-      if (!t) return;
-      const closeEl = t.closest && t.closest("[data-close]");
-      if (closeEl) closeIngestionModal();
-    });
-  }
 }
 
 function main() {
