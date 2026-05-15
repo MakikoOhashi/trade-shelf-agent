@@ -65,6 +65,16 @@ const state = {
    */
   approvalsByActionPlanId: {},
   /**
+   * 承認センターβで選択中の step key
+   * @type {string | null}
+   */
+  selectedFlowBetaStep: null,
+  /**
+   * 承認センターβの右パネル mini tab
+   * @type {"setup" | "configure" | "test"}
+   */
+  flowBetaPanelTab: "setup",
+  /**
    * Active raw request id in Requests page
    * @type {string | null}
    */
@@ -98,7 +108,7 @@ const state = {
   issueSeqByTradeCaseId: {},
   /**
    * New TOP (GitHub-like) active tab
-   * @type {"shelf" | "issues" | "requests" | "activity" | "documents" | "settings"}
+   * @type {"shelf" | "issues" | "approvalsAlpha" | "approvalsBeta" | "requests" | "activity" | "documents" | "settings"}
    */
   topActiveTab: "shelf",
   /**
@@ -169,6 +179,8 @@ const state = {
 const newTopTabs = [
   { key: "shelf", label: "棚", subLabel: "Shelf" },
   { key: "issues", label: "AI承認センター", subLabel: "Approvals" },
+  { key: "approvalsAlpha", label: "承認センターα", subLabel: "Flow Alpha" },
+  { key: "approvalsBeta", label: "承認センターβ", subLabel: "Flow Beta" },
   { key: "requests", label: "変更・確認依頼", subLabel: "Requests" },
   { key: "activity", label: "活動ログ", subLabel: "Activity" },
   { key: "documents", label: "Documents", subLabel: "" },
@@ -567,48 +579,6 @@ function updateIngestResultStatusesForActionPlan(actionPlanId, nextStatus) {
   }
 }
 
-function recordApprovalActivityEvent(actionPlanId, nextStatus) {
-  const apId = String(actionPlanId || "").trim();
-  if (!apId) return;
-
-  const status = String(nextStatus || "").trim();
-  const typeByStatus = {
-    approved: "approved",
-    held: "held",
-    edited: "edited",
-    mock_sent: "mock_sent",
-  };
-  const rawType = typeByStatus[status] || "";
-  if (!rawType) return;
-
-  const sequenceByType = { approved: 70, edited: 71, held: 72, mock_sent: 80 };
-  const occurredAt = nowIso();
-
-  const plans = Array.isArray(state.latestIngestResult?.actionPlans) ? state.latestIngestResult.actionPlans.filter(Boolean) : [];
-  const plan = plans.find((p) => String(p?.id || "") === apId) || null;
-  const threadId = plan && plan.threadId ? String(plan.threadId) : "";
-
-  const links = Array.isArray(state.latestIngestResult?.links) ? state.latestIngestResult.links.filter(Boolean) : [];
-  const linkedEntities = threadId ? links.filter((l) => String(l?.threadId || "") === threadId) : [];
-
-  const ev = {
-    id: `act:${shortId()}`,
-    type: rawType,
-    occurredAt,
-    sequence: sequenceByType[rawType] ?? undefined,
-    title: rawType,
-    description: "",
-    sourceRawInputId: plan && plan.sourceRawInputId ? String(plan.sourceRawInputId) : undefined,
-    threadId: threadId || undefined,
-    linkedEntities,
-    status: "ok",
-    actor: "human",
-  };
-
-  const item = activityEventToFeedItem(ev);
-  state.activityFeedItems = prependUniqueById(state.activityFeedItems, [item]);
-}
-
 function applyApprovalAction(idLike, action) {
   const actionPlanId = findActionPlanIdFromAnyId(idLike);
   if (!actionPlanId) return { ok: false, error: "ActionPlan が見つかりませんでした。" };
@@ -620,7 +590,6 @@ function applyApprovalAction(idLike, action) {
 
   state.approvalsByActionPlanId[actionPlanId] = { status: next, updatedAt: nowIso() };
   updateIngestResultStatusesForActionPlan(actionPlanId, next);
-  recordApprovalActivityEvent(actionPlanId, next);
 
   return { ok: true, actionPlanId, next };
 }
@@ -1282,6 +1251,8 @@ function renderNewTop() {
   const navIconByKey = {
     shelf: "🗂️",
     issues: "⚠️",
+    approvalsAlpha: "🧪",
+    approvalsBeta: "🧩",
     requests: "💬",
     activity: "📡",
     documents: "📚",
@@ -1783,6 +1754,31 @@ function renderNewTop() {
       </div>`;
     };
 
+    const renderIssueHistoryTimeline = (items) => {
+      const list = Array.isArray(items) ? items.filter(Boolean) : [];
+      if (!list.length) return `<div class="nt-muted">No history</div>`;
+
+      const rows = list
+        .map((it, idx) => {
+          const at = it?.at ? formatLocalTime(String(it.at)) : "";
+          const timeHtml = at ? `<div class="issue-history-time">${escapeHtml(at)}</div>` : `<div class="issue-history-time"></div>`;
+          const isCard = Boolean(it?.isCard);
+          const bodyHtml = isCard ? String(it?.bodyHtml || "") : `<div class="issue-history-text">${String(it?.textHtml || "")}</div>`;
+          const isLast = idx === list.length - 1;
+          return `<div class="issue-history-item ${isCard ? "is-card" : "is-log"}">
+            <div class="issue-history-rail" aria-hidden="true">
+              <div class="issue-history-dot"></div>
+              ${isLast ? "" : `<div class="issue-history-line"></div>`}
+            </div>
+            <div class="issue-history-main">${bodyHtml}</div>
+            ${timeHtml}
+          </div>`;
+        })
+        .join("");
+
+      return `<div class="issue-history-timeline" aria-label="Issue history timeline">${rows}</div>`;
+    };
+
     const renderMutationDetail = (mutationId) => {
       const mut =
         pendingMutations.find((x) => x && String(x.id) === String(mutationId)) ||
@@ -1841,6 +1837,79 @@ function renderNewTop() {
           }>Mock send</button>
         </div>
       </section>`;
+
+      const processorFlowHtml = (() => {
+        const result = state.latestIngestResult || null;
+        const hasRaw = Boolean(result && result.rawInput);
+        const threads = Array.isArray(result?.threads) ? result.threads.filter(Boolean) : [];
+        const links = Array.isArray(result?.links) ? result.links.filter(Boolean) : [];
+        const muts = Array.isArray(result?.issueMutations) ? result.issueMutations.filter(Boolean) : [];
+        const plans = Array.isArray(result?.actionPlans) ? result.actionPlans.filter(Boolean) : [];
+        const drafts = Array.isArray(result?.drafts) ? result.drafts.filter(Boolean) : [];
+        const events = Array.isArray(result?.activityEvents) ? result.activityEvents.filter(Boolean) : [];
+
+        const threadId = mut?.threadId ? String(mut.threadId) : "";
+        const threadEvents = threadId ? events.filter((e) => String(e?.threadId || "") === threadId) : events;
+        const hasFailed = threadEvents.some((e) => String(e?.type || "") === "failed_processing");
+
+        const stepDefs = [
+          { key: "request", label: "依頼受信", done: hasRaw },
+          { key: "tagger", label: "Tagger", done: threads.length > 0 },
+          { key: "splitter", label: "Thread Splitter", done: threads.length > 0 },
+          { key: "linker", label: "Entity Linker", done: links.length > 0 },
+          { key: "issue", label: "Issue Planner", done: muts.length > 0 },
+          { key: "action", label: "Action Planner", done: plans.length > 0 },
+          { key: "draft", label: "Draft Writer", done: drafts.length > 0 },
+          { key: "approval", label: "Approval", done: approvalStatus !== "pending_approval" && Boolean(approvalStatus) },
+        ];
+
+        const currentKey = (() => {
+          if (hasFailed) return "";
+          if (approvalStatus === "pending_approval") return "approval";
+          if (!drafts.length) return "draft";
+          if (!plans.length) return "action";
+          if (!muts.length) return "issue";
+          if (!links.length) return "linker";
+          if (!threads.length) return "tagger";
+          if (!hasRaw) return "request";
+          return "";
+        })();
+
+        const classFor = (d) => {
+          if (hasFailed && d.key === currentKey) return "failed";
+          if (d.key === currentKey) return "current";
+          if (d.done) return "done";
+          return "pending";
+        };
+
+        const statusText = (cls) => {
+          if (cls === "done") return "done";
+          if (cls === "current") return "current";
+          if (cls === "failed") return "failed";
+          return "pending";
+        };
+
+        const stepsHtml = stepDefs
+          .map((d) => {
+            const cls = classFor(d);
+            return `<li class="processor-step ${escapeHtml(cls)}">
+              <div class="processor-step__left">
+                <div class="processor-step__dot" aria-hidden="true"></div>
+                <div class="processor-step__line" aria-hidden="true"></div>
+              </div>
+              <div class="processor-step__body">
+                <div class="processor-step__label">${escapeHtml(d.label)}</div>
+                <div class="processor-step__meta muted">${escapeHtml(statusText(cls))}</div>
+              </div>
+            </li>`;
+          })
+          .join("");
+
+        return `<section class="detail-section processor-flow" aria-label="Processor Flow">
+          <h3 class="detail-section__title">Processor Flow</h3>
+          <ul class="processor-flow__steps">${stepsHtml}</ul>
+        </section>`;
+      })();
 
       const draftPreviewHtml = draftPreview
         ? `<section class="detail-section issue-draft-preview" aria-label="Draft Preview">
@@ -1904,36 +1973,62 @@ function renderNewTop() {
         `<div class="issue-sidebar-row"><div class="issue-sidebar__k">source</div><div class="issue-sidebar__v">${escapeHtml(String(cs.source || "Kimi AI分類"))}</div></div>`
       );
 
-      const metaPanelHtml = `<aside class="issue-meta-panel issue-meta-panel--sticky" aria-label="Meta Panel">
+      const metaPanelHtml = `<aside class="issue-meta-panel" aria-label="Meta Panel">
         ${sidebarRows.join("")}
       </aside>`;
 
-      return `<section class="issue-detail" aria-label="LLM mutation detail">
-        <div class="issue-detail-layout" aria-label="Issue detail layout">
-          <div class="issue-main-column" aria-label="Issue conversation">
-            <div class="issue-detail__top">
-              <button class="btn btn--small btn--ghost" type="button" data-mutation-back="1">← Back</button>
-              <div class="issue-detail__title">
-                <div class="issue-detail__h">${escapeHtml(issueLike.title)}</div>
-                <div class="issue-detail__sub">
-                  <span class="issue-pill nt-mono">#${escapeHtml(issueLike.issueNo)}</span>
-                  <span class="issue-pill ${sevClass}">${escapeHtml(sev.toUpperCase())}</span>
-                  <span class="issue-pill">${escapeHtml(statusText)}</span>
+      const actionCardHtml =
+        draftPreview && approvalStatus === "pending_approval"
+          ? `<div class="issue-action-card" aria-label="Human action card">
+              <div class="issue-action-card__title">AIが仕入先確認メールを作成しました。</div>
+              <div class="issue-draft-preview">
+                <div class="kv">
+                  <span class="muted">channel</span> ${escapeHtml(String(draftPreview.channel || "-"))}
+                  <span class="muted">to</span> ${escapeHtml((Array.isArray(draftPreview.to) ? draftPreview.to : []).join(", ") || "-")}
+                  ${draftPreview.subject ? `<span class="muted">subject</span> ${escapeHtml(String(draftPreview.subject))}` : ""}
                 </div>
+                <pre class="pre pre--compact">${escapeHtml(String(draftPreview.body || ""))}</pre>
               </div>
+              <div class="issue-action-buttons">
+                <button class="btn btn--primary btn--small" type="button" data-mutation-approve="${escapeHtml(actionKey)}" ${canApprove ? "" : "disabled"}>Approve</button>
+                <button class="btn btn--small" type="button" data-mutation-edit="${escapeHtml(actionKey)}" ${canApprove ? "" : "disabled"}>Edit</button>
+                <button class="btn btn--small" type="button" data-mutation-hold="${escapeHtml(actionKey)}" ${canApprove ? "" : "disabled"}>Hold</button>
+                <button class="btn btn--small" type="button" data-mutation-mock-send="${escapeHtml(actionKey)}" ${canMockSend ? "" : "disabled"}>Mock send</button>
+              </div>
+            </div>`
+          : "";
+
+      const timeline2 = Array.isArray(issueLike.timeline) ? issueLike.timeline.slice() : [];
+      const lines = timeline2
+        .map((t) => {
+          const label = String(t?.label || t?.type || "log");
+          const msg = String(t?.message || "").trim();
+          const text = msg || label;
+          return { id: String(t?.id || shortId()), at: String(t?.at || ""), textHtml: escapeHtml(text) };
+        })
+        .filter(Boolean);
+      lines.sort((a, b) => String(b?.at || "").localeCompare(String(a?.at || "")) || String(a?.id || "").localeCompare(String(b?.id || "")));
+
+      const historyItems = [];
+      if (actionCardHtml) historyItems.push({ id: `card:${actionKey}`, at: nowIso(), isCard: true, bodyHtml: actionCardHtml });
+      historyItems.push(...lines);
+
+      const historyHtml = renderIssueHistoryTimeline(historyItems);
+
+      return `<section class="issue-history-page" aria-label="LLM mutation detail">
+        <div class="issue-history-header">
+          <button class="btn btn--small btn--ghost" type="button" data-mutation-back="1">← Back</button>
+          <div class="issue-history-header__title">
+            <div class="issue-history-header__h">${escapeHtml(issueLike.title)}</div>
+            <div class="issue-history-header__badges">
+              <span class="issue-pill nt-mono">#${escapeHtml(issueLike.issueNo)}</span>
+              <span class="issue-pill ${sevClass}">${escapeHtml(sev.toUpperCase())}</span>
+              <span class="issue-pill">${escapeHtml(statusText)}</span>
+              <span class="issue-pill">${escapeHtml(approvalStatusLabelJa(approvalStatus) || approvalStatus)}</span>
             </div>
-            ${currentStatusHtml}
-            ${draftPreviewHtml}
-            <section class="detail-section issue-timeline-section" aria-label="Timeline">
-              <h3 class="detail-section__title">Timeline / 対応履歴</h3>
-              <div class="nt-muted">古い順に記録。現在の対応は上部の Current Status を確認。</div>
-              <div class="issue-timeline">${timelineHtml}</div>
-            </section>
-          </div>
-          <div class="issue-sidebar-column" aria-label="Issue sidebar">
-            ${metaPanelHtml}
           </div>
         </div>
+        <div class="issue-history-body">${historyHtml}</div>
       </section>`;
     };
 
@@ -2148,38 +2243,67 @@ function renderNewTop() {
           ${dueHtml}
         </aside>`;
 
-	      return `<section class="issue-detail" aria-label="Issue detail">
-          <div class="issue-detail-layout" aria-label="Issue detail layout">
-            <div class="issue-main-column" aria-label="Issue conversation">
-              <div class="issue-detail__top">
-                <button class="btn btn--small btn--ghost" type="button" data-issue-back="1">← Back</button>
-                <div class="issue-detail__title">
-                  <div class="issue-detail__h">${escapeHtml(it.title)}</div>
-                  <div class="issue-detail__sub">
-                    <span class="issue-pill nt-mono">#${escapeHtml(it.issueNo)}</span>
-                    <span class="issue-pill ${sevClass}">${escapeHtml(sev.toUpperCase())}</span>
-                    <span class="issue-pill">${escapeHtml(statusText)}</span>
-                  </div>
-                </div>
+	      const actionCardHtml =
+	        it.statusKey === "requiresApproval" && it.draft && it.draft.body
+	          ? `<div class="issue-action-card" aria-label="Human action card">
+	              <div class="issue-action-card__title">AIが仕入先確認メールを作成しました。</div>
+	              <div class="issue-draft-preview">
+	                <div class="kv">
+	                  <span class="muted">channel</span> ${escapeHtml(String(it.draft.channel || "-"))}
+	                  <span class="muted">to</span> ${escapeHtml((it.draft.to || []).join(", ") || "-")}
+	                  ${it.draft.subject ? `<span class="muted">subject</span> ${escapeHtml(String(it.draft.subject))}` : ""}
+	                </div>
+	                <pre class="pre pre--compact">${escapeHtml(String(it.draft.body || ""))}</pre>
+	              </div>
+	              <div class="issue-action-buttons">
+	                <button class="btn btn--primary btn--small" type="button" data-issue-approve="${escapeHtml(it.tradeCaseId)}" ${canAct ? "" : "disabled"}>Approve</button>
+	                <button class="btn btn--small" type="button" data-issue-edit="${escapeHtml(it.tradeCaseId)}" ${canAct ? "" : "disabled"}>Edit</button>
+	                <button class="btn btn--small" type="button" data-issue-hold="${escapeHtml(it.tradeCaseId)}">Hold</button>
+	                <button class="btn btn--small" type="button" disabled>Mock send</button>
+	              </div>
+	            </div>`
+	          : "";
+
+	      const issueTimeline = derived.concat(
+	        rawTimeline.map((x) => ({
+	          id: x?.id || shortId(),
+	          at: x?.at || "",
+	          type: x?.type || "comment",
+	          label: x?.label || x?.type || "comment",
+	          actor: x?.actor || "",
+	          message: x?.message || "",
+	        })),
+	      );
+
+	      const lines = issueTimeline
+	        .map((t) => {
+	          const label = String(t?.label || t?.type || "log");
+	          const msg = String(t?.message || "").trim();
+	          const text = msg || label;
+	          return { id: String(t?.id || shortId()), at: String(t?.at || ""), textHtml: escapeHtml(text) };
+	        })
+	        .filter(Boolean);
+	      lines.sort((a, b) => String(b?.at || "").localeCompare(String(a?.at || "")) || String(a?.id || "").localeCompare(String(b?.id || "")));
+
+	      const historyItems = [];
+	      if (actionCardHtml) historyItems.push({ id: `card:${it.tradeCaseId}`, at: nowIso(), isCard: true, bodyHtml: actionCardHtml });
+	      historyItems.push(...lines);
+
+	      const historyHtml = renderIssueHistoryTimeline(historyItems);
+
+	      return `<section class="issue-history-page" aria-label="Issue detail">
+          <div class="issue-history-header">
+            <button class="btn btn--small btn--ghost" type="button" data-issue-back="1">← Back</button>
+            <div class="issue-history-header__title">
+              <div class="issue-history-header__h">${escapeHtml(it.title)}</div>
+              <div class="issue-history-header__badges">
+                <span class="issue-pill nt-mono">#${escapeHtml(it.issueNo)}</span>
+                <span class="issue-pill ${sevClass}">${escapeHtml(sev.toUpperCase())}</span>
+                <span class="issue-pill">${escapeHtml(statusText)}</span>
               </div>
-              ${currentStatusHtml}
-              <section class="detail-section issue-timeline-section" aria-label="Timeline">
-                <h3 class="detail-section__title">Timeline / 対応履歴</h3>
-                <div class="nt-muted">古い順に記録。現在の対応は上部の Current Status を確認。</div>
-                <div class="issue-timeline">${timelineHtml}</div>
-                <div class="issue-comment">
-                  <div class="issue-comment__label">Comment</div>
-                  <textarea class="issue-comment__box" rows="3" placeholder="手動メモ・補足・判断理由を残す" data-issue-comment-box="1"></textarea>
-                  <div class="issue-comment__actions">
-                    <button class="btn btn--primary btn--small" type="button" data-issue-add-comment="${escapeHtml(it.tradeCaseId)}">Add comment</button>
-                  </div>
-                </div>
-              </section>
-            </div>
-            <div class="issue-sidebar-column" aria-label="Issue sidebar">
-              ${metaPanelHtml}
             </div>
           </div>
+          <div class="issue-history-body">${historyHtml}</div>
       </section>`;
     };
 
@@ -2515,7 +2639,6 @@ function renderNewTop() {
           <li>unknown shipment reference</li>
           <li>unreadable attachment</li>
         </ul>
-        <button class="btn btn--small" type="button" data-activity-attach-manual="1">Attach manually</button>
       </section>
     </aside>`;
 
@@ -2834,11 +2957,553 @@ function renderNewTop() {
     </section>`;
   };
 
+  const renderApprovalFlowAlpha = () => {
+    const sample = {
+      rawInput: {
+        rawText: "PLまだ？あとSI-224も確認して",
+      },
+      thread: {
+        title: "PL確認",
+      },
+      links: [
+        { entityType: "SI", entityId: "SI-2026-224" },
+        { entityType: "Document", entityId: "PL" },
+      ],
+      actionPlan: {
+        id: "AP-SAMPLE",
+        title: "仕入先への書類確認が必要です",
+        status: "pending_approval",
+      },
+      draft: {
+        channel: "email",
+        to: "ops@example.com",
+        subject: "Confirmation required: PL status for SI-2026-224",
+        body: "SI-2026-224 の PL状況をご確認ください。未発行の場合は予定日をご共有ください。",
+      },
+    };
+
+    const ingest = state.latestIngestResult && typeof state.latestIngestResult === "object" ? state.latestIngestResult : null;
+    const rawInput = ingest && ingest.rawInput ? ingest.rawInput : sample.rawInput;
+    const threads = ingest && Array.isArray(ingest.threads) ? ingest.threads.filter(Boolean) : [];
+    const thread = threads[0] || sample.thread;
+    const links = ingest && Array.isArray(ingest.links) ? ingest.links.filter(Boolean) : [];
+    const actionPlans = ingest && Array.isArray(ingest.actionPlans) ? ingest.actionPlans.filter(Boolean) : [];
+    const actionPlan = actionPlans[0] || sample.actionPlan;
+
+    const actionPlanId = String(actionPlan?.id || sample.actionPlan.id);
+    const approvalEntry = actionPlanId ? state.approvalsByActionPlanId?.[actionPlanId] : null;
+    const approvalStatus = String((approvalEntry && approvalEntry.status) || actionPlan?.status || "pending_approval");
+
+    const drafts = ingest && Array.isArray(ingest.drafts) ? ingest.drafts.filter(Boolean) : [];
+    const relatedDrafts = drafts.filter((d) => String(d?.actionPlanId || "") === actionPlanId);
+    const preferredDraft = relatedDrafts.find((d) => String(d?.channel || "") === "email") || relatedDrafts[0] || null;
+    const draft = preferredDraft
+      ? {
+          channel: String(preferredDraft.channel || "-"),
+          to: preferredDraft.to ? String(preferredDraft.to) : "",
+          subject: preferredDraft.subject ? String(preferredDraft.subject) : "",
+          body: String(preferredDraft.body || ""),
+        }
+      : ingest
+        ? null
+        : sample.draft;
+
+    const linkedEntities = (() => {
+      const list = Array.isArray(links) && thread && thread.id ? links.filter((l) => String(l?.threadId || "") === String(thread.id)) : [];
+      if (list.length) return list;
+      return Array.isArray(sample.links) ? sample.links : [];
+    })();
+
+    const steps = [
+      { key: "raw", label: "依頼受信" },
+      { key: "tagger", label: "Tagger" },
+      { key: "splitter", label: "Thread Splitter" },
+      { key: "linker", label: "Entity Linker" },
+      { key: "issuePlanner", label: "Issue Planner" },
+      { key: "actionPlanner", label: "Action Planner" },
+      { key: "draftWriter", label: "Draft Writer" },
+      { key: "approval", label: "Approval" },
+    ];
+
+    const hasFailed = (() => {
+      const evs = ingest && Array.isArray(ingest.activityEvents) ? ingest.activityEvents.filter(Boolean) : [];
+      return evs.some((e) => String(e?.type || "") === "failed_processing");
+    })();
+
+    const stepIndexByKey = Object.fromEntries(steps.map((s, i) => [s.key, i]));
+    const first = (arr) => (Array.isArray(arr) ? arr.filter(Boolean)[0] : null);
+
+    const threadSummaries = threads.map((t) => ({
+      title: String(t?.title || t?.summary || t?.id || "").trim(),
+      intent: String(t?.intent || "").trim(),
+    }));
+    const intentsJa = Array.from(new Set(threadSummaries.map((t) => t.intent).filter(Boolean)))
+      .map((x) => classifyLabelJaFromIntent(x) || x)
+      .filter(Boolean);
+
+    const threadTitles = threadSummaries.map((t) => t.title).filter(Boolean);
+
+    const issueMutations = ingest && Array.isArray(ingest.issueMutations) ? ingest.issueMutations.filter(Boolean) : [];
+    const createdIssueIds = Array.from(
+      new Set(
+        issueMutations
+          .filter((m) => String(m?.action || "") === "create_issue_candidate")
+          .map((m) => String(m?.issueId || "").trim())
+          .filter(Boolean),
+      ),
+    );
+
+    const draftChannels = (() => {
+      const list = relatedDrafts && relatedDrafts.length ? relatedDrafts : drafts;
+      const ch = Array.from(new Set((list || []).map((d) => String(d?.channel || "").trim()).filter(Boolean)));
+      return ch.length ? ch : [];
+    })();
+
+    const inferCurrentKey = () => {
+      if (!ingest) return "raw";
+      if (!rawInput || !String(rawInput?.rawText || "").trim()) return "raw";
+      if (!threads.length) return "tagger";
+      if (threads.length && !threadTitles.length) return "splitter";
+      if (!links.length) return "linker";
+      if (!issueMutations.length) return "issuePlanner";
+      if (!actionPlans.length) return "actionPlanner";
+      if (!drafts.length) return "draftWriter";
+      if (approvalStatus === "mock_sent") return "__done__";
+      return "approval";
+    };
+
+    const currentKey = inferCurrentKey();
+    const currentIndex = currentKey === "__done__" ? steps.length : stepIndexByKey[currentKey] ?? steps.length - 1;
+
+    const stepStatus = (key) => {
+      const idx = stepIndexByKey[key];
+      if (typeof idx !== "number") return "pending";
+      if (hasFailed && idx === currentIndex) return "failed";
+      if (idx < currentIndex) return "done";
+      if (idx === currentIndex && currentKey !== "__done__") return "current";
+      return "pending";
+    };
+
+    const stepDetailLines = (key) => {
+      if (key === "raw") {
+        const t = String(rawInput?.rawText || "-").trim();
+        return t ? [t] : ["-"];
+      }
+      if (key === "tagger") {
+        if (!intentsJa.length) return ["-"];
+        return intentsJa;
+      }
+      if (key === "splitter") {
+        if (!threadTitles.length) return ["-"];
+        return threadTitles.slice(0, 3);
+      }
+      if (key === "linker") {
+        const list = linkedEntities.length
+          ? linkedEntities
+              .map((l) => `${formatEntityType(String(l?.entityType || ""))} ${String(l?.entityId || "").trim()}`.trim())
+              .filter(Boolean)
+          : [];
+        return list.length ? list.slice(0, 3) : ["-"];
+      }
+      if (key === "issuePlanner") {
+        if (!createdIssueIds.length) return issueMutations.length ? ["Issue更新候補あり"] : ["-"];
+        const id = createdIssueIds.length <= 2 ? createdIssueIds.join(", ") : `${createdIssueIds[0]} ほか${createdIssueIds.length - 1}件`;
+        return [`${id} を作成`];
+      }
+      if (key === "actionPlanner") {
+        const t = String(actionPlan?.title || "").trim();
+        return t ? [t] : ["-"];
+      }
+      if (key === "draftWriter") {
+        if (!draftChannels.length) return ["下書き未生成"];
+        return draftChannels.map((c) => (c === "email" ? "email下書き生成済み" : c === "teams" ? "Teams下書き生成済み" : `${c} 下書き生成済み`));
+      }
+      if (key === "approval") {
+        return [approvalStatusLabelJa(approvalStatus) || "-"];
+      }
+      return ["-"];
+    };
+
+    const flowHtml = `<div class="flow-step-list" aria-label="Processor Flow">
+      ${steps
+        .map((s, i) => {
+          const st = stepStatus(s.key);
+          const marker = st === "done" ? "✓" : st === "failed" ? "!" : st === "current" ? "●" : "○";
+          const detailLines = stepDetailLines(s.key);
+          const detailsHtml = detailLines.length
+            ? `<ul class="flow-step-details">${detailLines.map((x) => `<li>${escapeHtml(String(x))}</li>`).join("")}</ul>`
+            : "";
+          return `<div class="flow-step ${escapeHtml(st)}" aria-label="Flow step">
+            <div class="flow-step-rail" aria-hidden="true">
+              ${i === 0 ? "" : `<div class="flow-step-line flow-step-line--up"></div>`}
+              <div class="flow-step-marker" aria-hidden="true">${escapeHtml(marker)}</div>
+              ${i === steps.length - 1 ? "" : `<div class="flow-step-line flow-step-line--down"></div>`}
+            </div>
+            <div class="flow-step-content">
+              <div class="flow-step-title">${escapeHtml(String(s.label))}</div>
+              ${detailsHtml}
+            </div>
+          </div>`;
+        })
+        .join("")}
+    </div>`;
+
+    const linkedText = linkedEntities.length
+      ? linkedEntities
+          .map((l) => `${formatEntityType(String(l?.entityType || ""))} ${String(l?.entityId || "").trim()}`.trim())
+          .filter(Boolean)
+          .join(", ")
+      : "-";
+
+    const canApprove = approvalStatus === "pending_approval";
+    const canMockSend = approvalStatus === "approved";
+
+    const activeStepLabel = (() => {
+      if (currentKey === "__done__") return "Done";
+      const found = steps.find((s) => s.key === currentKey);
+      return found ? found.label : "Approval";
+    })();
+
+    const sideHtml = `<aside class="flow-side-panel" aria-label="Workspace panel">
+      <div class="approval-flow-alpha__panel-head">
+        <div class="approval-flow-alpha__panel-title">Workspace</div>
+        <div class="muted">${escapeHtml(String(activeStepLabel))}</div>
+      </div>
+
+      <section class="detail-section" aria-label="Current Status">
+        <h3 class="detail-section__title">Current Status</h3>
+        <div class="current-status-mini">
+          <div class="current-status-mini__row">
+            <span class="pill">${escapeHtml(approvalStatusLabelJa(approvalStatus) || "-")}</span>
+            <span class="muted">${escapeHtml(String(thread?.title || sample.thread.title || "-"))}</span>
+          </div>
+          <div class="current-status-mini__row muted">${escapeHtml(String(actionPlan?.title || sample.actionPlan.title || "-"))}</div>
+          <div class="current-status-mini__row muted">${escapeHtml(linkedText || "-")}</div>
+        </div>
+      </section>
+
+      ${
+        currentKey === "approval"
+          ? `<section class="draft-preview-card" aria-label="Draft Preview">
+              <div class="draft-preview-card__head">
+                <div class="draft-preview-card__title">Draft Preview</div>
+                <div class="draft-preview-card__meta muted">${escapeHtml(String((draft && draft.channel) || "-"))}</div>
+              </div>
+              ${
+                draft
+                  ? `<div class="kv" style="margin-top:8px;">
+                      <span class="muted">to</span> ${escapeHtml(String(draft.to || "-"))}
+                      ${draft.subject ? `<span class="muted">subject</span> ${escapeHtml(String(draft.subject))}` : ""}
+                    </div>
+                    <pre class="pre pre--compact" style="margin-top:10px;">${escapeHtml(String(draft.body || ""))}</pre>`
+                  : `<div class="nt-muted">下書き未生成</div>`
+              }
+            </section>
+
+            <div class="issue-current-actions" aria-label="Actions">
+              <button class="btn btn--primary btn--small" type="button" data-alpha-approve="${escapeHtml(actionPlanId)}" ${canApprove ? "" : "disabled"}>Approve</button>
+              <button class="btn btn--small" type="button" data-alpha-edit="${escapeHtml(actionPlanId)}" ${canApprove ? "" : "disabled"}>Edit</button>
+              <button class="btn btn--small" type="button" data-alpha-hold="${escapeHtml(actionPlanId)}" ${canApprove ? "" : "disabled"}>Hold</button>
+              <button class="btn btn--small" type="button" data-alpha-mock-send="${escapeHtml(actionPlanId)}" ${canMockSend ? "" : "disabled"}>Mock send</button>
+            </div>`
+          : `<section class="draft-preview-card" aria-label="Draft Preview">
+              <div class="draft-preview-card__head">
+                <div class="draft-preview-card__title">Draft Preview</div>
+                <div class="draft-preview-card__meta muted">-</div>
+              </div>
+              <div class="nt-muted">現在の step は Approval ではありません。</div>
+            </section>`
+      }
+    </aside>`;
+
+    return `<section class="approval-flow-alpha" aria-label="承認センターα">
+      <div class="approval-flow-alpha__head">
+        <div>
+          <div class="approval-flow-alpha__title">承認センターα</div>
+          <div class="approval-flow-alpha__sub muted">Zapier風 Processor Flow Workspace（試作）</div>
+        </div>
+      </div>
+      <div class="flow-alpha-layout">
+        <div class="approval-flow-alpha__flow" aria-label="Processor Flow">
+          <div class="approval-flow-alpha__flow-title">Processor Flow</div>
+          ${flowHtml}
+        </div>
+        ${sideHtml}
+      </div>
+    </section>`;
+  };
+
+  const renderApprovalFlowBeta = () => {
+    const steps = [
+      { key: "request_received", title: "依頼受信", summary: "RawInput を受領" },
+      { key: "tagger", title: "Tagger", summary: "intent / tags を推定" },
+      { key: "thread_splitter", title: "Thread Splitter", summary: "業務スレッドへ分解" },
+      { key: "entity_linker", title: "Entity Linker", summary: "関連エンティティへ紐付け" },
+      { key: "issue_planner", title: "Issue Planner", summary: "Issue candidate を作成" },
+      { key: "action_planner", title: "Action Planner", summary: "次のアクションを判定" },
+      { key: "draft_writer", title: "Draft Writer", summary: "外部送信の下書きを生成" },
+      { key: "approval", title: "Approval", summary: "承認・修正・保留・mock送信" },
+    ];
+
+    const sample = {
+      rawText: "PLまだ？あとSI-224も確認して",
+      channel: "teams",
+      sender: "sales@example.com",
+      threadTitle: "PL確認",
+      entities: [
+        { kind: "SI", id: "SI-2026-224" },
+        { kind: "Document", id: "PL" },
+      ],
+      issueCandidateId: "ISS-CAND-SI-2026-224",
+      actionTitle: "仕入先への書類確認が必要です",
+      actionTypes: ["supplier_confirmation_required", "email_required"],
+      draft: {
+        channel: "email",
+        to: "ops@example.com",
+        subject: "Confirmation required: PL status for SI-2026-224",
+        body: "SI-2026-224 の PL状況をご確認ください。未発行の場合は予定日をご共有ください。",
+      },
+      actionPlanId: "AP-SAMPLE",
+      approvalStatus: "pending_approval",
+    };
+
+    const pickData = () => {
+      const r = state.latestIngestResult;
+      if (!r) return { source: "sample", ...sample, doneSteps: new Set(), currentStep: "approval" };
+
+      const raw = r.rawInput || null;
+      const threads = Array.isArray(r.threads) ? r.threads.filter(Boolean) : [];
+      const links = Array.isArray(r.links) ? r.links.filter(Boolean) : [];
+      const actionPlans = Array.isArray(r.actionPlans) ? r.actionPlans.filter(Boolean) : [];
+      const drafts = Array.isArray(r.drafts) ? r.drafts.filter(Boolean) : [];
+      const issueMutations = Array.isArray(r.issueMutations) ? r.issueMutations.filter(Boolean) : [];
+      const activityEvents = Array.isArray(r.activityEvents) ? r.activityEvents.filter(Boolean) : [];
+
+      const thread = threads[0] || null;
+      const threadId = thread && thread.id ? String(thread.id) : "";
+      const threadLinks = threadId ? links.filter((l) => String(l?.threadId || "") === threadId) : [];
+
+      const actionPlan = actionPlans.find((p) => String(p?.threadId || "") === threadId) || actionPlans[0] || null;
+      const actionPlanId = actionPlan && actionPlan.id ? String(actionPlan.id) : "";
+      const approvalEntry = actionPlanId ? state.approvalsByActionPlanId?.[actionPlanId] : null;
+      const approvalStatus = String((approvalEntry && approvalEntry.status) || (actionPlan && actionPlan.status) || "planned");
+
+      const draft =
+        (actionPlanId ? drafts.find((d) => String(d?.actionPlanId || "") === actionPlanId) : null) ||
+        (threadId ? drafts.find((d) => String(d?.threadId || "") === threadId) : null) ||
+        null;
+
+      const issueCandidateId =
+        String(actionPlan?.issueId || "").trim() ||
+        String(issueMutations.find((m) => m && m.action === "create_issue_candidate")?.issueId || "").trim() ||
+        "";
+
+      const doneByEvent = (t) => activityEvents.some((e) => String(e?.type || "") === t);
+      const done = new Set();
+      if (doneByEvent("raw_input_received")) done.add("request_received");
+      if (doneByEvent("classified")) done.add("tagger");
+      if (threads.length) done.add("thread_splitter");
+      if (doneByEvent("entity_linked")) done.add("entity_linker");
+      if (issueCandidateId) done.add("issue_planner");
+      if (actionPlans.length || doneByEvent("action_planned")) done.add("action_planner");
+      if (drafts.length || doneByEvent("draft_created")) done.add("draft_writer");
+      if (["approved", "held", "edited", "mock_sent"].includes(approvalStatus)) done.add("approval");
+
+      return {
+        source: "latestIngestResult",
+        rawText: String(raw?.rawText || ""),
+        channel: String(raw?.channel || raw?.source || ""),
+        sender: String(raw?.senderEmail || raw?.senderName || ""),
+        threadTitle: String(thread?.title || threadId || ""),
+        entities: threadLinks.map((l) => ({ kind: String(l?.entityType || ""), id: String(l?.entityId || "") })).filter((x) => x.kind && x.id),
+        issueCandidateId,
+        actionTitle: String(actionPlan?.title || ""),
+        actionTypes: Array.isArray(actionPlan?.actionTypes) ? actionPlan.actionTypes.map((x) => String(x ?? "")).filter(Boolean) : [],
+        draft: draft
+          ? {
+              channel: String(draft.channel || ""),
+              to: draft.to ? String(draft.to) : "",
+              subject: draft.subject ? String(draft.subject) : "",
+              body: String(draft.body || ""),
+            }
+          : null,
+        actionPlanId,
+        approvalStatus,
+        doneSteps: done,
+        currentStep: "approval",
+      };
+    };
+
+    const data = pickData();
+    const selected = String(state.selectedFlowBetaStep || data.currentStep || "approval");
+    const tabKey = String(state.flowBetaPanelTab || "setup");
+
+    const iconFor = (cls) => (cls === "done" ? "✓" : cls === "current" ? "!" : cls === "pending" ? "…" : "•");
+
+    const statusClassFor = (stepKey) => {
+      if (data.doneSteps && data.doneSteps.has(stepKey)) return "done";
+      if (stepKey === String(data.currentStep || "approval")) return "current";
+      const order = steps.map((s) => s.key);
+      const idx = order.indexOf(stepKey);
+      const curIdx = order.indexOf(String(data.currentStep || "approval"));
+      if (idx > curIdx) return "pending";
+      return "done";
+    };
+
+    const nodeStackHtml = `<div class="flow-beta-node-stack" aria-label="Flow steps">
+      ${steps
+        .map((s, idx) => {
+          const cls = statusClassFor(s.key);
+          const selectedClass = s.key === selected ? " selected" : "";
+          const connector =
+            idx === steps.length - 1 ? "" : `<div class="flow-beta-connector" aria-hidden="true"><div class="flow-beta-plus">+</div></div>`;
+          return `<div class="flow-beta-node-wrap">
+            <button class="flow-beta-node ${escapeHtml(cls)}${selectedClass}" type="button" data-flow-beta-step="${escapeHtml(String(s.key))}">
+              <div class="flow-beta-node-icon" aria-hidden="true">${escapeHtml(iconFor(cls))}</div>
+              <div class="flow-beta-node-body">
+                <div class="flow-beta-node-title">${escapeHtml(String(s.title))}</div>
+                <div class="flow-beta-node-summary">${escapeHtml(String(s.summary || ""))}</div>
+              </div>
+              <div class="flow-beta-node-menu" aria-hidden="true">⋮</div>
+            </button>
+            ${connector}
+          </div>`;
+        })
+        .join("")}
+    </div>`;
+
+    const panelTitle = (steps.find((s) => s.key === selected) || steps[steps.length - 1]).title;
+    const safeDraft = data.draft || (data.source === "sample" ? sample.draft : null);
+
+    const panelBodyByStep = () => {
+      if (selected === "request_received") {
+        return `<div class="kv">
+          <span class="muted">rawText</span> ${escapeHtml(String(data.rawText || "-"))}
+          <span class="muted">channel</span> ${escapeHtml(String(data.channel || "-"))}
+          <span class="muted">sender</span> ${escapeHtml(String(data.sender || "-"))}
+        </div>`;
+      }
+      if (selected === "tagger") {
+        const threads = state.latestIngestResult && Array.isArray(state.latestIngestResult.threads) ? state.latestIngestResult.threads.filter(Boolean) : [];
+        const t = threads[0] || null;
+        const intent = t && t.intent ? String(t.intent) : "-";
+        return `<div class="kv">
+          <span class="muted">intent</span> ${escapeHtml(intent)}
+          <span class="muted">tags</span> ${escapeHtml("-")}
+        </div>`;
+      }
+      if (selected === "thread_splitter") {
+        return `<div class="kv"><span class="muted">thread title</span> ${escapeHtml(String(data.threadTitle || "-"))}</div>`;
+      }
+      if (selected === "entity_linker") {
+        const list = Array.isArray(data.entities) ? data.entities : [];
+        return list.length
+          ? `<ul class="mini-list">${list.map((e) => `<li>${escapeHtml(`${e.kind} ${e.id}`)}</li>`).join("")}</ul>`
+          : `<div class="muted">（no linked entities）</div>`;
+      }
+      if (selected === "issue_planner") {
+        return `<div class="kv"><span class="muted">issue candidate id</span> ${escapeHtml(String(data.issueCandidateId || "-"))}</div>`;
+      }
+      if (selected === "action_planner") {
+        const types = Array.isArray(data.actionTypes) ? data.actionTypes : [];
+        return `<div class="kv">
+          <span class="muted">action</span> ${escapeHtml(String(data.actionTitle || "-"))}
+          <span class="muted">action types</span> ${escapeHtml(types.join(", ") || "-")}
+        </div>`;
+      }
+      if (selected === "draft_writer") {
+        if (!safeDraft) return `<div class="muted">（no draft）</div>`;
+        return `<div class="flow-beta-draft-card" aria-label="Draft preview">
+          <div class="kv">
+            <span class="muted">channel</span> ${escapeHtml(String(safeDraft.channel || "-"))}
+            <span class="muted">to</span> ${escapeHtml(String(safeDraft.to || "-"))}
+            ${safeDraft.subject ? `<span class="muted">subject</span> ${escapeHtml(String(safeDraft.subject))}` : ""}
+          </div>
+          <pre class="pre pre--compact">${escapeHtml(String(safeDraft.body || ""))}</pre>
+        </div>`;
+      }
+      if (selected === "approval") {
+        const actionPlanId = String(data.actionPlanId || (data.source === "sample" ? sample.actionPlanId : "") || "");
+        const approvalStatus = String(data.approvalStatus || (data.source === "sample" ? sample.approvalStatus : "") || "planned");
+        const canApprove = approvalStatus === "pending_approval";
+        const canMockSend = approvalStatus === "approved";
+        const isSample = data.source === "sample";
+        return `<div>
+          <div class="kv"><span class="muted">Current Status</span> ${escapeHtml(approvalStatusLabelJa(approvalStatus))}</div>
+          <div class="flow-beta-panel-footer" style="padding:0; border:0; background:transparent;">
+            <div class="flow-beta-panel-footer-actions">
+              <button class="btn btn--primary btn--small" type="button" data-flow-beta-approve="${escapeHtml(actionPlanId)}" ${!isSample && canApprove ? "" : "disabled"}>Approve</button>
+              <button class="btn btn--small" type="button" data-flow-beta-edit="${escapeHtml(actionPlanId)}" ${!isSample && canApprove ? "" : "disabled"}>Edit</button>
+              <button class="btn btn--small" type="button" data-flow-beta-hold="${escapeHtml(actionPlanId)}" ${!isSample && canApprove ? "" : "disabled"}>Hold</button>
+              <button class="btn btn--small" type="button" data-flow-beta-mock-send="${escapeHtml(actionPlanId)}" ${!isSample && canMockSend ? "" : "disabled"}>Mock send</button>
+            </div>
+          </div>
+          ${isSample ? `<div class="muted" style="margin-top:10px;">latestIngestResult が無いため sample 表示（承認操作は無効）</div>` : ""}
+        </div>`;
+      }
+      return `<div class="muted">Select a step</div>`;
+    };
+
+    const tabs = [
+      { key: "setup", label: "Setup" },
+      { key: "configure", label: "Configure" },
+      { key: "test", label: "Test" },
+    ];
+
+    const tabsHtml = `<div class="flow-beta-panel-tabs" role="tablist" aria-label="Flow Beta Tabs">
+      ${tabs
+        .map((t) => {
+          const active = t.key === tabKey;
+          return `<button class="mode-chip ${active ? "is-active" : ""}" type="button" data-flow-beta-tab="${escapeHtml(
+            String(t.key),
+          )}">${escapeHtml(String(t.label))}</button>`;
+        })
+        .join("")}
+    </div>`;
+
+    return `<section class="approval-flow-beta" aria-label="承認センターβ">
+      <div class="flow-beta-layout">
+        <div class="flow-beta-canvas" aria-label="Flow canvas">
+          ${nodeStackHtml}
+        </div>
+        <aside class="flow-beta-panel" aria-label="Selected node panel">
+          <div class="flow-beta-panel-header">
+            <div>
+              <div class="nt-h3">承認センターβ</div>
+              <div class="muted">Flow Beta（完全新規UI）</div>
+            </div>
+          </div>
+          <div class="flow-beta-panel-body">
+            <div class="flow-beta-panel-step-title">${escapeHtml(String(panelTitle || "-"))}</div>
+            ${tabsHtml}
+            <div class="flow-beta-panel-content">
+              ${
+                tabKey === "configure"
+                  ? `<div class="muted" style="margin-bottom:10px;">Configure: パラメータ調整（mock）</div>`
+                  : tabKey === "test"
+                    ? `<div class="muted" style="margin-bottom:10px;">Test: この step の動作確認（mock）</div>`
+                    : ""
+              }
+              ${panelBodyByStep()}
+            </div>
+          </div>
+          <div class="flow-beta-panel-footer">
+            <div class="muted">${escapeHtml(String(data.source || ""))}</div>
+          </div>
+        </aside>
+      </div>
+    </section>`;
+  };
+
   const mainHtml =
     tab === "shelf"
       ? renderShelf()
       : tab === "issues"
         ? renderIssues()
+        : tab === "approvalsAlpha"
+          ? renderApprovalFlowAlpha()
+        : tab === "approvalsBeta"
+          ? renderApprovalFlowBeta()
         : tab === "requests"
           ? renderRequests()
           : tab === "activity"
@@ -6869,6 +7534,10 @@ function setupNewTop() {
       const key = tabEl.getAttribute("data-nt-tab") || "";
       if (newTopTabs.some((t) => t.key === key)) {
         state.topActiveTab = key;
+        if (key === "approvalsBeta") {
+          if (!state.selectedFlowBetaStep) state.selectedFlowBetaStep = "approval";
+          if (!state.flowBetaPanelTab) state.flowBetaPanelTab = "setup";
+        }
         if (key !== "issues") {
           state.activeIssueId = null;
           state.activeMutationId = null;
@@ -6876,6 +7545,24 @@ function setupNewTop() {
         if (key !== "requests") state.isOperationalThreadModalOpen = false;
         renderApp();
       }
+      return;
+    }
+
+    const flowBetaStepEl = target.closest && target.closest("[data-flow-beta-step]");
+    if (flowBetaStepEl) {
+      const k = flowBetaStepEl.getAttribute("data-flow-beta-step") || "";
+      if (k) {
+        state.selectedFlowBetaStep = k;
+        renderApp();
+      }
+      return;
+    }
+
+    const flowBetaTabEl = target.closest && target.closest("[data-flow-beta-tab]");
+    if (flowBetaTabEl) {
+      const k = flowBetaTabEl.getAttribute("data-flow-beta-tab") || "setup";
+      state.flowBetaPanelTab = k === "configure" ? "configure" : k === "test" ? "test" : "setup";
+      renderApp();
       return;
     }
 
@@ -7097,6 +7784,42 @@ function setupNewTop() {
       return;
     }
 
+    const alphaApproveEl = target.closest && target.closest("[data-alpha-approve]");
+    if (alphaApproveEl) {
+      const id = alphaApproveEl.getAttribute("data-alpha-approve") || "";
+      const res = applyApprovalAction(id, "approve");
+      if (!res.ok) window.alert(`(mock) ${res.error}`);
+      renderApp();
+      return;
+    }
+
+    const alphaHoldEl = target.closest && target.closest("[data-alpha-hold]");
+    if (alphaHoldEl) {
+      const id = alphaHoldEl.getAttribute("data-alpha-hold") || "";
+      const res = applyApprovalAction(id, "hold");
+      if (!res.ok) window.alert(`(mock) ${res.error}`);
+      renderApp();
+      return;
+    }
+
+    const alphaEditEl = target.closest && target.closest("[data-alpha-edit]");
+    if (alphaEditEl) {
+      const id = alphaEditEl.getAttribute("data-alpha-edit") || "";
+      const res = applyApprovalAction(id, "edit");
+      if (!res.ok) window.alert(`(mock) ${res.error}`);
+      renderApp();
+      return;
+    }
+
+    const alphaMockSendEl = target.closest && target.closest("[data-alpha-mock-send]");
+    if (alphaMockSendEl) {
+      const id = alphaMockSendEl.getAttribute("data-alpha-mock-send") || "";
+      const res = applyApprovalAction(id, "mock_send");
+      if (!res.ok) window.alert(`(mock) ${res.error}`);
+      renderApp();
+      return;
+    }
+
     const mutationApproveEl = target.closest && target.closest("[data-mutation-approve]");
     if (mutationApproveEl) {
       const id = mutationApproveEl.getAttribute("data-mutation-approve") || "";
@@ -7133,6 +7856,42 @@ function setupNewTop() {
       const res = applyApprovalAction(id, "mock_send");
       if (!res.ok) window.alert(`(mock) ${res.error}`);
       else log(`(mock) mock sent: ${String(res.actionPlanId)} -> ${String(res.next)}`);
+      renderApp();
+      return;
+    }
+
+    const flowBetaApproveEl = target.closest && target.closest("[data-flow-beta-approve]");
+    if (flowBetaApproveEl) {
+      const id = flowBetaApproveEl.getAttribute("data-flow-beta-approve") || "";
+      const res = applyApprovalAction(id, "approve");
+      if (!res.ok) window.alert(`(mock) ${res.error}`);
+      renderApp();
+      return;
+    }
+
+    const flowBetaEditEl = target.closest && target.closest("[data-flow-beta-edit]");
+    if (flowBetaEditEl) {
+      const id = flowBetaEditEl.getAttribute("data-flow-beta-edit") || "";
+      const res = applyApprovalAction(id, "edit");
+      if (!res.ok) window.alert(`(mock) ${res.error}`);
+      renderApp();
+      return;
+    }
+
+    const flowBetaHoldEl = target.closest && target.closest("[data-flow-beta-hold]");
+    if (flowBetaHoldEl) {
+      const id = flowBetaHoldEl.getAttribute("data-flow-beta-hold") || "";
+      const res = applyApprovalAction(id, "hold");
+      if (!res.ok) window.alert(`(mock) ${res.error}`);
+      renderApp();
+      return;
+    }
+
+    const flowBetaMockSendEl = target.closest && target.closest("[data-flow-beta-mock-send]");
+    if (flowBetaMockSendEl) {
+      const id = flowBetaMockSendEl.getAttribute("data-flow-beta-mock-send") || "";
+      const res = applyApprovalAction(id, "mock_send");
+      if (!res.ok) window.alert(`(mock) ${res.error}`);
       renderApp();
       return;
     }
