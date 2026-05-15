@@ -98,7 +98,7 @@ const state = {
   issueSeqByTradeCaseId: {},
   /**
    * New TOP (GitHub-like) active tab
-   * @type {"shelf" | "issues" | "requests" | "activity" | "documents" | "settings"}
+   * @type {"shelf" | "issues" | "requests" | "activity" | "settings"}
    */
   topActiveTab: "shelf",
   /**
@@ -164,6 +164,11 @@ const state = {
    * @type {string}
    */
   evidenceSearchQuery: "",
+  /**
+   * Shelf search query (Shelf page)
+   * @type {string}
+   */
+  shelfSearchQuery: "",
 };
 
 const newTopTabs = [
@@ -171,7 +176,6 @@ const newTopTabs = [
   { key: "issues", label: "承認センター", subLabel: "Approvals" },
   { key: "requests", label: "変更・確認依頼", subLabel: "Requests" },
   { key: "activity", label: "活動ログ", subLabel: "Activity" },
-  { key: "documents", label: "Documents", subLabel: "" },
   { key: "settings", label: "Settings", subLabel: "" },
 ];
 
@@ -1228,7 +1232,6 @@ function renderNewTop() {
     issues: "⚠️",
     requests: "💬",
     activity: "📡",
-    documents: "📚",
     settings: "⚙️",
   };
 
@@ -1443,12 +1446,211 @@ function renderNewTop() {
 
     const descriptionHtml = `<div class="nt-shelf-desc nt-muted">同じオペレーション棚を、出荷指図単位または船積単位で切り替えて確認します。</div>`;
 
+    const query = String(state.shelfSearchQuery || "").trim();
+
+    const normalizeQ = (s) => String(s || "").toLowerCase();
+    const matches = (hay, q) => {
+      const h = normalizeQ(hay);
+      const qq = normalizeQ(q);
+      if (!qq) return false;
+      return h.includes(qq);
+    };
+
+    const buildSearchResults = (q) => {
+      const qq = String(q || "").trim();
+      if (!qq) return [];
+
+      const results = [];
+      const seen = new Set();
+      const add = (r) => {
+        if (!r || !r.key) return;
+        if (seen.has(r.key)) return;
+        seen.add(r.key);
+        results.push(r);
+      };
+
+      const tradeCases = Array.isArray(state.tradeCases) ? state.tradeCases.filter(Boolean) : [];
+      for (const tc of tradeCases) {
+        const title = String(tc?.title || "");
+        const siNos = Array.isArray(tc?.siNumbers) ? tc.siNumbers.filter(Boolean) : [];
+        const invs = Array.isArray(tc?.invoiceNumbers) ? tc.invoiceNumbers.filter(Boolean) : [];
+        const shipmentRefs = Array.isArray(tc?.shipmentRefs) ? tc.shipmentRefs.filter(Boolean) : [];
+        const suppliers = [
+          ...(Array.isArray(tc?.suppliers) ? tc.suppliers.filter(Boolean) : []),
+          ...invs.map((x) => x && x.supplier).filter(Boolean),
+        ].map((x) => String(x));
+
+        if (matches(title, qq)) {
+          add({
+            key: `case:${tc.id}`,
+            type: "Case",
+            label: String(tc.id || ""),
+            description: title,
+            openType: "case",
+            openId: String(tc.id || ""),
+          });
+        }
+
+        for (const si of siNos) {
+          if (matches(si, qq)) {
+            add({
+              key: `si:${si}:${tc.id}`,
+              type: "SI",
+              label: si,
+              description: "出荷指図",
+              openType: "si",
+              openId: String(tc.id || ""),
+            });
+          }
+        }
+
+        for (const inv of invs) {
+          const invNo = inv && inv.invoiceNo ? String(inv.invoiceNo) : "";
+          if (!invNo) continue;
+          if (matches(invNo, qq) || (inv.supplier && matches(inv.supplier, qq))) {
+            add({
+              key: `inv:${invNo}:${tc.id}`,
+              type: "INV",
+              label: invNo,
+              description: inv && inv.type ? String(inv.type) : "Invoice",
+              openType: "shipment",
+              openId: String(tc.id || ""),
+            });
+          }
+        }
+
+        for (const sh of shipmentRefs) {
+          if (matches(sh, qq)) {
+            add({
+              key: `shp:${sh}:${tc.id}`,
+              type: "Shipment",
+              label: sh,
+              description: "Shipment",
+              openType: "shipment",
+              openId: String(tc.id || ""),
+            });
+          }
+        }
+
+        for (const s of suppliers) {
+          if (!s) continue;
+          if (matches(s, qq)) {
+            add({
+              key: `supplier:${s}:${tc.id}`,
+              type: "Supplier",
+              label: s,
+              description: title || "Related case",
+              openType: "case",
+              openId: String(tc.id || ""),
+            });
+          }
+        }
+      }
+
+      const evidence = Array.isArray(getMockEvidenceArchiveItems()) ? getMockEvidenceArchiveItems().filter(Boolean) : [];
+      for (const it of evidence) {
+        const t = String(it?.type || "");
+        const title = String(it?.title || "");
+        const desc = String(it?.description || "");
+        const tags = Array.isArray(it?.tags) ? it.tags.map((x) => String(x)).filter(Boolean) : [];
+        const hay = [title, desc, ...tags].join(" ");
+        if (!matches(hay, qq)) continue;
+
+        if (t === "Document") {
+          const docTypeGuess =
+            /\\bPL\\b/i.test(hay) ? "PL" : /\\bINV\\b/i.test(hay) ? "INV" : /\\bBL\\b/i.test(hay) ? "BL" : "Document";
+          add({
+            key: `doc:${String(it.id)}`,
+            type: docTypeGuess,
+            label: title || String(it.id || "Document"),
+            description: desc || "Related Document",
+            openType: "evidence",
+            openId: String(it.id || ""),
+          });
+        } else if (t === "Issue") {
+          add({
+            key: `issue:${String(it.id)}`,
+            type: "ISS",
+            label: title || "Issue",
+            description: desc,
+            openType: "evidence",
+            openId: String(it.id || ""),
+          });
+        } else if (t === "Email") {
+          add({
+            key: `email:${String(it.id)}`,
+            type: "Email",
+            label: title || "Email",
+            description: desc,
+            openType: "evidence",
+            openId: String(it.id || ""),
+          });
+        } else if (t === "Teams") {
+          add({
+            key: `teams:${String(it.id)}`,
+            type: "Teams",
+            label: title || "Teams",
+            description: desc,
+            openType: "evidence",
+            openId: String(it.id || ""),
+          });
+        }
+      }
+
+      return results.slice(0, 30);
+    };
+
+    const results = buildSearchResults(query);
+
+    const searchHtml = `<div class="evidence-search" aria-label="Shelf search">
+      <input class="evidence-search__input" type="search" value="${escapeHtml(String(state.shelfSearchQuery || ""))}"
+        placeholder="SI / INV / Shipment / Supplier / Document を検索"
+        data-shelf-search="1" />
+    </div>`;
+
+    const resultsHtml = query
+      ? `<section class="shelf-search-results" aria-label="検索結果">
+          <div class="shelf-search-results__head">
+            <div class="shelf-search-results__title">検索結果</div>
+            <div class="shelf-search-results__meta nt-mono">${escapeHtml(String(results.length))}</div>
+          </div>
+          ${
+            results.length
+              ? `<ul class="shelf-search-results__list">${results
+                  .map((r) => {
+                    const typeChip = `<span class="mini-chip">${escapeHtml(String(r.type || ""))}</span>`;
+                    const label = String(r.label || "");
+                    const desc = String(r.description || "");
+                    return `<li class="shelf-search-item">
+                      <div class="shelf-search-item__left">
+                        ${typeChip}
+                        <div class="shelf-search-item__text">
+                          <div class="shelf-search-item__label">${escapeHtml(label)}</div>
+                          ${desc ? `<div class="shelf-search-item__desc muted">${escapeHtml(desc)}</div>` : ""}
+                        </div>
+                      </div>
+                      <div class="shelf-search-item__right">
+                        <button class="btn btn--ghost btn--small" type="button"
+                          data-shelf-search-open="1"
+                          data-shelf-search-open-type="${escapeHtml(String(r.openType || ""))}"
+                          data-shelf-search-open-id="${escapeHtml(String(r.openId || ""))}">Open</button>
+                      </div>
+                    </li>`;
+                  })
+                  .join("")}</ul>`
+              : `<div class="nt-muted">No results.</div>`
+          }
+        </section>`
+      : "";
+
     const boardHtml = mode === "si" ? renderSi() : renderShipments();
     return `<section class="nt-shelf" aria-label="Shelf">
       <div class="nt-shelf-top">
         ${toggleHtml}
+        ${searchHtml}
         ${descriptionHtml}
       </div>
+      ${resultsHtml}
       ${boardHtml}
     </section>`;
   };
@@ -2939,8 +3141,6 @@ function renderNewTop() {
           ? renderRequests()
           : tab === "activity"
             ? renderActivityFeedPage()
-        : tab === "documents"
-          ? renderDocumentsEvidenceArchive()
           : renderPlaceholder("Settings");
 
 	  return `
@@ -6970,6 +7170,72 @@ function setupNewTop() {
       return;
     }
 
+    const shelfSearchOpenEl = target.closest && target.closest("[data-shelf-search-open]");
+    if (shelfSearchOpenEl) {
+      const t = shelfSearchOpenEl.getAttribute("data-shelf-search-open-type") || "";
+      const id = shelfSearchOpenEl.getAttribute("data-shelf-search-open-id") || "";
+      if (t === "shipment") {
+        openShipmentWorkspace(id);
+        return;
+      }
+      if (t === "si") {
+        openSiWorkspace(id);
+        return;
+      }
+      if (t === "case") {
+        const tc = id ? getTradeCaseById(id) : null;
+        if (tc) openTradeCaseDetail(tc);
+        return;
+      }
+      if (t === "evidence") {
+        const item = (getMockEvidenceArchiveItems() || []).find((x) => x && String(x.id) === String(id)) || null;
+        if (item) {
+          // Reuse the same preview behavior as Evidence Archive.
+          const preview = item.preview || null;
+          const title = String(item.title || "Evidence preview");
+          if (String(item.type) === "Issue" && item.tradeCaseId) {
+            state.topActiveTab = "issues";
+            state.activeIssueId = String(item.tradeCaseId);
+            renderApp();
+            return;
+          }
+          if (preview && preview.kind === "document") {
+            const body = String(preview.body || "");
+            openModal({
+              title: title || "Document",
+              bodyHtml: `<div class="evidence-preview-modal">
+                <div class="evidence-preview-modal__kind">Document viewer（mock）</div>
+                <pre class="evidence-preview-modal__pre">${escapeHtml(body)}</pre>
+              </div>`,
+            });
+            return;
+          }
+          if (preview && preview.kind === "message") {
+            const from = String(preview.from || "—");
+            const to = String(preview.to || "");
+            const subject = String(preview.subject || "");
+            const body = String(preview.body || "");
+            openModal({
+              title: title || "Message",
+              bodyHtml: `<div class="evidence-preview-modal">
+                <div class="evidence-preview-modal__kind">Message preview（mock）</div>
+                <div class="evidence-preview-meta">
+                  <div class="evidence-preview-meta__row"><div class="evidence-preview-meta__k">From</div><div class="evidence-preview-meta__v">${escapeHtml(from)}</div></div>
+                  ${to ? `<div class="evidence-preview-meta__row"><div class="evidence-preview-meta__k">To</div><div class="evidence-preview-meta__v">${escapeHtml(to)}</div></div>` : ""}
+                  ${subject ? `<div class="evidence-preview-meta__row"><div class="evidence-preview-meta__k">Subject</div><div class="evidence-preview-meta__v">${escapeHtml(subject)}</div></div>` : ""}
+                </div>
+                <pre class="evidence-preview-modal__pre">${escapeHtml(body)}</pre>
+              </div>`,
+            });
+            return;
+          }
+          openModal({ title, bodyText: "(mock) Preview is not available." });
+        }
+        return;
+      }
+      return;
+    }
+
     const actFilterEl = target.closest && target.closest("[data-activity-filter]");
     if (actFilterEl) {
       const key = actFilterEl.getAttribute("data-activity-filter") || "all";
@@ -7433,6 +7699,11 @@ function setupNewTop() {
     const searchEl = target.closest && target.closest("[data-evidence-search]");
     if (searchEl) {
       state.evidenceSearchQuery = typeof searchEl.value === "string" ? searchEl.value : "";
+      renderApp();
+    }
+    const shelfSearchEl = target.closest && target.closest("[data-shelf-search]");
+    if (shelfSearchEl) {
+      state.shelfSearchQuery = typeof shelfSearchEl.value === "string" ? shelfSearchEl.value : "";
       renderApp();
     }
   });
