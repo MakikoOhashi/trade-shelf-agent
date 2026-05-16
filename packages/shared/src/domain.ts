@@ -645,6 +645,7 @@ export type RawInputStatus =
   | "received"
   | "classified"
   | "linked"
+  | "needs_context"
   | "failed";
 
 export type RawInput = {
@@ -691,6 +692,47 @@ export type EntityType =
   | "Document"
   | "Supplier";
 
+export type ContextResolutionStatus =
+  | "resolved_enough"
+  | "missing_context"
+  | "ambiguous";
+
+export type ContextResolution = {
+  id: string;
+  sourceRawInputId: string;
+
+  status: ContextResolutionStatus;
+
+  reason: string;
+  confidence: number;
+
+  missingFields?: string[];
+
+  clarificationQuestion?: string;
+
+  candidateEntities?: Array<{
+    entityType: EntityType;
+    entityId: string;
+    label: string;
+    confidence: number;
+  }>;
+
+  resolvedEntities?: Array<{
+    entityType: EntityType;
+    entityId: string;
+    confidence: number;
+  }>;
+
+  waitingState?: "awaiting_clarification_reply" | "awaiting_human_selection";
+
+  reminder?: {
+    followUpAt: string;
+    message: string;
+  };
+
+  sourceLabel?: string;
+};
+
 
 export type EntityLink = {
   id: string;
@@ -736,6 +778,10 @@ export type IntakeResolution = {
 
 export type ActivityEventType =
   | "raw_input_received"
+  | "context_resolved"
+  | "clarification_required"
+  | "human_selection_required"
+  | "reminder_planned"
   | "classified"
   | "entity_linked"
   | "intake_resolved"
@@ -852,6 +898,7 @@ export type ApprovalDecision =
 
 export type MockIngestResult = {
   rawInput: RawInput;
+  contextResolution?: ContextResolution;
   threads: OperationalThread[];
   links: EntityLink[];
   intakeResolutions?: IntakeResolution[];

@@ -757,6 +757,14 @@ function activityEventToFeedItem(ev) {
     switch (rawType) {
       case "raw_input_received":
         return "依頼受信";
+      case "context_resolved":
+        return "Context判定";
+      case "clarification_required":
+        return "追加情報が必要";
+      case "human_selection_required":
+        return "候補選択が必要";
+      case "reminder_planned":
+        return "リマインド予定";
       case "classified":
         return "AI分類";
       case "entity_linked":
@@ -3079,6 +3087,7 @@ function renderNewTop() {
     const ingestMutations = Array.isArray(ingestResult?.issueMutations) ? ingestResult.issueMutations.filter(Boolean) : [];
     const ingestActionPlans = Array.isArray(ingestResult?.actionPlans) ? ingestResult.actionPlans.filter(Boolean) : [];
     const ingestDrafts = Array.isArray(ingestResult?.drafts) ? ingestResult.drafts.filter(Boolean) : [];
+    const ctxResolution = ingestResult?.contextResolution || null;
 
     const isLlmResult = state.latestIngestResultMode === "llm";
     const llmThreads = isLlmResult ? ingestThreads : [];
@@ -3148,6 +3157,18 @@ function renderNewTop() {
             <div><span class="k">ActionPlans</span><span class="v nt-mono">${escapeHtml(String(ingestActionPlans.length))}</span></div>
             <div><span class="k">Drafts</span><span class="v nt-mono">${escapeHtml(String(ingestDrafts.length))}</span></div>
           </div>
+          ${
+            ctxResolution && String(ctxResolution.status || "") !== "resolved_enough"
+              ? `<div class="ingest-result__note">
+                  <div class="muted">${escapeHtml(String(ctxResolution.reason || ""))}</div>
+                  ${
+                    ctxResolution.clarificationQuestion
+                      ? `<pre class="pre pre--compact" style="margin-top:8px;">${escapeHtml(String(ctxResolution.clarificationQuestion || ""))}</pre>`
+                      : ""
+                  }
+                </div>`
+              : ""
+          }
           <div class="ingest-result__note muted">詳細は Issues（承認センター）で確認してください。</div>
           <div class="ingest-result__actions">
             <button class="btn btn--primary btn--small" type="button" data-open-approval-center="1">Open Issues（承認センター）</button>
@@ -7476,6 +7497,14 @@ function setupNewTop() {
           state.latestIngestResultMode = state.classifyMode;
           ensureApprovalsInitializedFromIngestResult(result);
           state.ingestNotice = (() => {
+            const ctx = result?.contextResolution || null;
+            if (ctx && String(ctx.status || "") !== "resolved_enough") {
+              const st = String(ctx.status || "");
+              const q = String(ctx.clarificationQuestion || "").trim();
+              const prefix = st === "ambiguous" ? "候補選択が必要です" : "追加情報が必要です";
+              const tail = "承認センターの確認返信候補に追加しました。";
+              return `${prefix}${q ? `: ${q}` : ""} ${tail}`;
+            }
             const muts = Array.isArray(result?.issueMutations) ? result.issueMutations.filter(Boolean) : [];
             const plans = Array.isArray(result?.actionPlans) ? result.actionPlans.filter(Boolean) : [];
             const count = muts.length || plans.length || 0;

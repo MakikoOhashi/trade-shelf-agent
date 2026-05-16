@@ -1175,6 +1175,10 @@ function ingestNowIso() {
 }
 const ACTIVITY_SEQUENCE = {
     raw_input_received: 10,
+    context_resolved: 15,
+    clarification_required: 16,
+    human_selection_required: 16,
+    reminder_planned: 17,
     classified: 20,
     entity_linked: 30,
     intake_resolved: 35,
@@ -1188,6 +1192,111 @@ const ACTIVITY_SEQUENCE = {
     mock_sent: 80,
     failed_processing: 90,
 };
+function addHoursIso(baseIso, hours) {
+    const d = new Date(baseIso);
+    if (Number.isNaN(d.getTime()))
+        return ingestNowIso();
+    d.setHours(d.getHours() + hours);
+    return d.toISOString();
+}
+export function resolveContext(input, options = {}) {
+    const rawText = String(input?.rawText || "").trim();
+    const text = rawText.replace(/\s+/g, " ");
+    const sourceLabel = options.sourceLabel || "AI";
+    const siIds = Array.from(new Set(text.match(/SI-\d{2,}/gi) || [])).map((s) => s.toUpperCase());
+    const shipmentIds = Array.from(new Set(text.match(/SHP-\d{2,}/gi) || [])).map((s) => s.toUpperCase());
+    const invoiceIds = Array.from(new Set(text.match(/INV-\d{2,}/gi) || [])).map((s) => s.toUpperCase());
+    const hasEntityId = Boolean(siIds.length || shipmentIds.length || invoiceIds.length);
+    const hasDocType = /\bPL\b|\bINV\b|\bBL\b|Packing\s*List|Invoice|B\/L/i.test(text) || /PLまだ|PL\s*未着/i.test(text);
+    const hasSupplier = /\bACME\b/i.test(text);
+    const hasPronounOnly = /(これ|あれ|それ|例の件|例の)/.test(text);
+    const id = ingestStableId("CTX", `${input.id}:${rawText}`);
+    const now = ingestNowIso();
+    const base = {
+        id,
+        sourceRawInputId: input.id,
+        reason: "",
+        confidence: 0.6,
+        sourceLabel,
+    };
+    if (hasEntityId) {
+        return {
+            ...base,
+            status: "resolved_enough",
+            resolvedEntities: [
+                ...siIds.map((entityId) => ({ entityType: "SI", entityId, confidence: 0.9 })),
+                ...shipmentIds.map((entityId) => ({ entityType: "Shipment", entityId, confidence: 0.9 })),
+                ...invoiceIds.map((entityId) => ({ entityType: "Document", entityId, confidence: 0.7 })),
+            ],
+            reason: "対象Entityを推定できるため、後続Processorへ進めます。",
+            confidence: 0.9,
+        };
+    }
+    const isTooShort = text.length <= 6;
+    if (hasPronounOnly || (isTooShort && !hasEntityId)) {
+        return {
+            ...base,
+            status: "missing_context",
+            missingFields: ["SI or Shipment"],
+            clarificationQuestion: "対象のSIまたはShipmentを教えてください。",
+            waitingState: "awaiting_clarification_reply",
+            reminder: {
+                followUpAt: addHoursIso(now, 4),
+                message: "対象SIまたはShipmentが未回答です。確認してください。",
+            },
+            reason: "入力が短く、対象が特定できないため",
+            confidence: 0.7,
+        };
+    }
+    if (hasDocType && !hasEntityId && hasSupplier) {
+        return {
+            ...base,
+            status: "ambiguous",
+            candidateEntities: [
+                { entityType: "SI", entityId: "SI-2026-224", label: "SI-2026-224", confidence: 0.55 },
+                { entityType: "SI", entityId: "SI-2026-225", label: "SI-2026-225", confidence: 0.52 },
+            ],
+            clarificationQuestion: "ACMEのPL確認は SI-2026-224 と SI-2026-225 のどちらでしょうか？",
+            waitingState: "awaiting_human_selection",
+            reminder: {
+                followUpAt: addHoursIso(now, 4),
+                message: "ACMEのPL確認対象が未選択です。対象SIを選択してください。",
+            },
+            reason: "候補が複数あり得るため、人間選択が必要",
+            confidence: 0.65,
+        };
+    }
+    if (hasDocType && !hasEntityId) {
+        return {
+            ...base,
+            status: "missing_context",
+            missingFields: ["SI or Shipment"],
+            clarificationQuestion: "どのSIまたはShipmentのPLでしょうか？対象を教えてください。",
+            waitingState: "awaiting_clarification_reply",
+            reminder: {
+                followUpAt: addHoursIso(now, 4),
+                message: "PL確認の対象SIまたはShipmentが未回答です。確認してください。",
+            },
+            reason: "書類名はあるが対象が特定できないため",
+            confidence: 0.75,
+        };
+    }
+    const quantityMismatchLike = /INV.*PO.*違|金額.*違|数量.*違/i.test(text);
+    if (quantityMismatchLike) {
+        return {
+            ...base,
+            status: "resolved_enough",
+            reason: "数量/金額差異の可能性があり、後続Processorで対象推定できるため",
+            confidence: 0.7,
+        };
+    }
+    return {
+        ...base,
+        status: "resolved_enough",
+        reason: "致命的な不足が見当たらないため、後続Processorへ進めます。",
+        confidence: 0.6,
+    };
+}
 function normalizeOperationalThreads(input, threads) {
     const list = Array.isArray(threads) ? threads.filter(Boolean) : [];
     const normalizeThreadId = (threadId, index) => {
@@ -1889,6 +1998,131 @@ export function buildDraftDocuments(input, threads, links, intakeResolutions, is
     return drafts;
 }
 export function runIngestPipeline(input, options = {}) {
+    const contextResolution = resolveContext(input, options);
+    const pipelineOccurredAt = input.receivedAt || ingestNowIso();
+    const actor = options.sourceLabel || "AI";
+    if (contextResolution.status !== "resolved_enough") {
+        const threadId = `${input.id}-ctx-001`;
+        const intakeResolution = {
+            id: intakeResolutionId(threadId),
+            sourceRawInputId: input.id,
+            threadId,
+            status: "needs_clarification",
+            shouldCreateIssue: false,
+            missingFields: contextResolution.missingFields,
+            clarificationQuestion: contextResolution.clarificationQuestion,
+            reason: contextResolution.reason,
+            confidence: contextResolution.confidence,
+            sourceLabel: actor,
+        };
+        const planId = `AP-${ingestHash8(`${input.id}:${threadId}:context`)}`;
+        const title = contextResolution.status === "ambiguous" ? "候補選択が必要です" : "不足情報の確認が必要です";
+        const actionPlan = {
+            id: planId,
+            sourceRawInputId: input.id,
+            threadId,
+            actionTypes: ["teams_reply_required"],
+            title,
+            description: String(contextResolution.clarificationQuestion || "").trim() || input.rawText,
+            confidence: contextResolution.confidence,
+            linkedEntities: [],
+            sourceLabel: actor,
+            status: "pending_approval",
+        };
+        const question = String(contextResolution.clarificationQuestion || "対象を教えてください。").trim();
+        const candidates = Array.isArray(contextResolution.candidateEntities) ? contextResolution.candidateEntities.filter(Boolean) : [];
+        const candidateLines = candidates.length ? `\n- ${candidates.map((c) => String(c.label || c.entityId)).join("\n- ")}` : "";
+        const body = `${question}${candidateLines}`.trim();
+        const draft = {
+            id: `${draftIdFromActionPlan(actionPlan.id)}-TEAMS`,
+            sourceRawInputId: input.id,
+            threadId,
+            actionPlanId: actionPlan.id,
+            channel: "teams",
+            body,
+            status: "pending_approval",
+            generatedBy: actor,
+            generatedAt: ingestNowIso(),
+            confidence: contextResolution.confidence,
+        };
+        const events = [
+            {
+                id: ingestStableId("ACT", `${input.id}:context_resolved`),
+                type: "context_resolved",
+                occurredAt: pipelineOccurredAt,
+                sequence: ACTIVITY_SEQUENCE.context_resolved,
+                title: "Context Resolver",
+                description: contextResolution.reason,
+                sourceRawInputId: input.id,
+                threadId,
+                status: "ok",
+                actor,
+            },
+            {
+                id: ingestStableId("ACT", `${input.id}:${threadId}:${contextResolution.status}`),
+                type: contextResolution.status === "ambiguous" ? "human_selection_required" : "clarification_required",
+                occurredAt: pipelineOccurredAt,
+                sequence: contextResolution.status === "ambiguous"
+                    ? ACTIVITY_SEQUENCE.human_selection_required
+                    : ACTIVITY_SEQUENCE.clarification_required,
+                title: contextResolution.status === "ambiguous" ? "候補選択が必要" : "追加情報が必要です",
+                description: body,
+                sourceRawInputId: input.id,
+                threadId,
+                status: "warning",
+                actor,
+            },
+            ...(contextResolution.reminder
+                ? [
+                    {
+                        id: ingestStableId("ACT", `${input.id}:${threadId}:reminder_planned:${contextResolution.reminder.followUpAt}`),
+                        type: "reminder_planned",
+                        occurredAt: pipelineOccurredAt,
+                        sequence: ACTIVITY_SEQUENCE.reminder_planned,
+                        title: "リマインド予定",
+                        description: contextResolution.reminder.message,
+                        sourceRawInputId: input.id,
+                        threadId,
+                        status: "ok",
+                        actor,
+                    },
+                ]
+                : []),
+            {
+                id: ingestStableId("ACT", `${input.id}:${threadId}:${draft.id}:draft_created`),
+                type: "draft_created",
+                occurredAt: pipelineOccurredAt,
+                sequence: ACTIVITY_SEQUENCE.draft_created,
+                title: "下書きを生成",
+                description: "Teams下書きを生成",
+                sourceRawInputId: input.id,
+                threadId,
+                status: "ok",
+                actor,
+            },
+        ];
+        return {
+            rawInput: { ...input, status: "needs_context" },
+            contextResolution,
+            threads: [
+                {
+                    id: threadId,
+                    rawInputId: input.id,
+                    title,
+                    intent: "unknown",
+                    summary: body,
+                    extractedEntities: {},
+                    confidence: contextResolution.confidence,
+                },
+            ],
+            links: [],
+            intakeResolutions: [intakeResolution],
+            activityEvents: events,
+            issueMutations: [],
+            actionPlans: [actionPlan],
+            drafts: [draft],
+        };
+    }
     const threads = Array.isArray(options.threads) ? options.threads : classifyRawInput(input);
     const normalizedThreads = normalizeOperationalThreads(input, threads);
     const links = dedupeEntityLinks(linkThreadsToEntities(normalizedThreads));
@@ -1904,9 +2138,7 @@ export function runIngestPipeline(input, options = {}) {
         const status = isApprovalRequired(thread) ? "pending_approval" : "planned";
         return { ...ap, status };
     });
-    const pipelineOccurredAt = input.receivedAt || ingestNowIso();
     const activityEventsBase = buildActivityEvents(input, normalizedThreads, links, pipelineOccurredAt, options);
-    const actor = options.sourceLabel || "AI";
     const intakeResolvedEvents = intakeResolutions.map((r) => {
         const threadId = String(r?.threadId || "").trim();
         const st = String(r?.status || "");
@@ -1985,6 +2217,7 @@ export function runIngestPipeline(input, options = {}) {
     })();
     return {
         rawInput: { ...input, status: "linked" },
+        contextResolution,
         threads: normalizedThreads,
         links,
         intakeResolutions,

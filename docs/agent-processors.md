@@ -55,32 +55,38 @@ F --> A
 
 B -->|ambiguous| G[Candidate Suggestions]
 G --> H[Awaiting Human Selection]
-H --> I[Reminder Planner]
+H --> I[Reminder Planner (selection)]
 I --> J[Human Selection]
 J --> A
 
-B -->|resolved_enough| I[Tagger]
+B -->|resolved_enough| K[Tagger]
 
-I --> J[Thread Splitter]
+K --> L[Thread Splitter]
 
-J --> K[Entity Linker]
+L --> M[Entity Linker]
 
-K --> L[Intake Resolver]
+M --> N[Intake Resolver]
 
-L -->|status_query| M[Reply Action]
+N -->|status_query| O[Reply Action]
 
-L -->|informational_only| N[Timeline Event Only]
+N -->|informational_only| P[Timeline Event Only]
 
-L -->|issue_candidate_required| O[Issue Planner]
+N -->|issue_candidate_required| Q[Issue Planner]
 
-O --> P[Action Planner]
+Q --> R[Action Planner]
 
-P --> Q[Draft Writer]
+R --> S[Draft Writer]
 
-Q --> R[Approval Handler]
+S --> T[Approval Handler]
 
-R --> S[Event Logger]
+T --> U[Event Logger]
 ```
+
+Context Resolver について:
+
+- Context Resolver は「Taggerできるだけの文脈があるか」を判定する
+- `missing_context` / `ambiguous` は Issue化しない（pipeline を停止）
+- clarification / selection への返信は conversation context を持った新しい Human Input として再投入される
 
 各 Processor は、処理結果を Orchestrator / Router に返す。
 
@@ -692,4 +698,3 @@ Azure Hackathon - Shelf の「入力→整理→Issue→承認→ログ」を壊
 - Processor は「文章をうまくする」より「構造を揃える」を優先
 - Orchestrator は “勝手に確定” しない（Human approval を通す）
 - 迷ったら Processor を増やすより、入出力スキーマを締める
-

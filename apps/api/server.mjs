@@ -5,7 +5,7 @@ import path from "node:path";
 import url from "node:url";
 
 import OpenAI from "openai";
-import { buildIngestResultFromThreads, runMockIngest } from "../web/vendor/shared/index.js";
+import { buildIngestResultFromThreads, resolveContext, runIngestPipeline, runMockIngest } from "../web/vendor/shared/index.js";
 
 const __dirname = path.dirname(url.fileURLToPath(import.meta.url));
 const webRoot = path.resolve(__dirname, "..", "web");
@@ -152,6 +152,81 @@ function clamp01(n) {
   return n;
 }
 
+function normalizeShipmentId(shipmentId, now = new Date()) {
+  const raw = String(shipmentId || "").trim();
+  if (!raw) return "";
+
+  const normalizedMatch = raw.match(/^SHP-(\d{4})-(\d+)$/i);
+  if (normalizedMatch) {
+    const year = normalizedMatch[1];
+    const num = normalizedMatch[2];
+    return `SHP-${year}-${num.padStart(3, "0")}`;
+  }
+
+  const simpleMatch = raw.match(/^SHP-(\d+)$/i);
+  if (simpleMatch) {
+    const year = String(now.getFullYear());
+    return `SHP-${year}-${String(simpleMatch[1]).padStart(3, "0")}`;
+  }
+
+  return raw;
+}
+
+function uniqueStrings(values) {
+  const arr = Array.isArray(values) ? values : [];
+  const out = [];
+  const seen = new Set();
+  for (const v of arr) {
+    const s = String(v ?? "").trim();
+    if (!s) continue;
+    const key = s.toUpperCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(s);
+  }
+  return out;
+}
+
+function linkEntitiesByRules(rawText, threads) {
+  const text = String(rawText || "");
+  const now = new Date();
+
+  const siIds = Array.from(text.matchAll(/SI[-\s]?(\d{3,})/gi)).map((m) => normalizeSiId(`SI-${m[1]}`, now));
+  const shipmentIds = Array.from(text.matchAll(/SHP[-\s]?(\d{1,6})/gi)).map((m) => normalizeShipmentId(`SHP-${m[1]}`, now));
+  const invoiceIds = Array.from(text.matchAll(/INV[-\s]?(\d{1,8})/gi)).map((m) => `INV-${m[1]}`.toUpperCase());
+
+  const documentTypes = [];
+  if (/\bPL\b/i.test(text) || /PLまだ|PL\s*未着/i.test(text)) documentTypes.push("PL");
+  if (/\bINV\b/i.test(text) || /インボイス|請求/i.test(text)) documentTypes.push("INV");
+  if (/\bPO\b/i.test(text) || /発注|指図/i.test(text)) documentTypes.push("PO");
+
+  const supplierNames = [];
+  if (/\bACME\b/i.test(text)) supplierNames.push("ACME");
+
+  const extracted = {
+    siIds: uniqueStrings(siIds),
+    shipmentIds: uniqueStrings(shipmentIds),
+    invoiceIds: uniqueStrings(invoiceIds),
+    supplierNames: uniqueStrings(supplierNames),
+    documentTypes: uniqueStrings(documentTypes),
+  };
+
+  const list = Array.isArray(threads) ? threads : [];
+  return list.map((t) => {
+    const base = t && t.extractedEntities && typeof t.extractedEntities === "object" ? t.extractedEntities : {};
+    return {
+      ...t,
+      extractedEntities: {
+        siIds: uniqueStrings([...(base.siIds || []), ...extracted.siIds]),
+        shipmentIds: uniqueStrings([...(base.shipmentIds || []), ...extracted.shipmentIds]),
+        invoiceIds: uniqueStrings([...(base.invoiceIds || []), ...extracted.invoiceIds]),
+        supplierNames: uniqueStrings([...(base.supplierNames || []), ...extracted.supplierNames]),
+        documentTypes: uniqueStrings([...(base.documentTypes || []), ...extracted.documentTypes]),
+      },
+    };
+  });
+}
+
 function normalizeThreads(parsed, rawText) {
   const threads = Array.isArray(parsed?.threads) ? parsed.threads : null;
   if (!threads) return null;
@@ -161,6 +236,9 @@ function normalizeThreads(parsed, rawText) {
   const rawHasPL = /\bPL\b/i.test(raw);
   const rawSiIds = Array.from(raw.matchAll(/\bSI-(\d{1,6})\b/gi)).map((m) =>
     normalizeSiId(m[0], now),
+  );
+  const rawShipmentIds = Array.from(raw.matchAll(/\bSHP-(\d{1,6})\b/gi)).map((m) =>
+    normalizeShipmentId(m[0], now),
   );
 
   return threads.map((t, index) => {
@@ -182,13 +260,17 @@ function normalizeThreads(parsed, rawText) {
     const siIds = toStringArray(extracted.siIds).map((v) =>
       normalizeSiId(v, now),
     );
-    const shipmentIds = toStringArray(extracted.shipmentIds);
+    const shipmentIds = toStringArray(extracted.shipmentIds).map((v) =>
+      normalizeShipmentId(v, now),
+    );
     const invoiceIds = toStringArray(extracted.invoiceIds);
     const supplierNames = toStringArray(extracted.supplierNames);
     const documentTypes = toStringArray(extracted.documentTypes);
 
     // Light heuristics to improve reliability for smoke tests.
     if (rawSiIds.length && siIds.length === 0) siIds.push(...rawSiIds);
+    if (rawShipmentIds.length && shipmentIds.length === 0)
+      shipmentIds.push(...rawShipmentIds);
     if (rawHasPL && !documentTypes.includes("PL")) documentTypes.push("PL");
 
     const confidence = clamp01(Number(t?.confidence));
@@ -403,8 +485,42 @@ const server = http.createServer(async (req, res) => {
         status: "received",
       };
 
-      const threads = await classifyThreadsWithLlm(rawText);
-      const operationalThreads = threads.map((t) => ({
+      const contextResolution = resolveContext(rawInput, { sourceLabel: "Kimi AI分類", approvalPolicy: "all" });
+      if (contextResolution.status !== "resolved_enough") {
+        const result = runIngestPipeline(rawInput, { sourceLabel: "Kimi AI分類", approvalPolicy: "all" });
+        sendJson(res, 200, { ok: true, result });
+        return;
+      }
+
+      let threads = null;
+      try {
+        threads = await classifyThreadsWithLlm(rawText);
+      } catch (e) {
+        if (e && (e.code === "LLM_TRUNCATED" || e.code === "LLM_JSON_PARSE_FAILED")) {
+          const result = runIngestPipeline(rawInput, { sourceLabel: "Kimi AI分類", approvalPolicy: "all" });
+          const errMsg = e && e.message ? String(e.message) : "LLM classify failed";
+          if (result && Array.isArray(result.activityEvents)) {
+            result.activityEvents = [
+              ...result.activityEvents,
+              {
+                id: `act-${Date.now()}`,
+                type: "failed_processing",
+                occurredAt: new Date().toISOString(),
+                title: "LLM fallback",
+                description: `LLM classify failed: ${errMsg}`,
+                sourceRawInputId: rawInput.id,
+                status: "warning",
+                actor: "Kimi AI分類",
+              },
+            ];
+          }
+          sendJson(res, 200, { ok: true, result });
+          return;
+        }
+        throw e;
+      }
+
+      const operationalThreads = linkEntitiesByRules(rawText, threads).map((t) => ({
         ...t,
         rawInputId: rawInput.id,
       }));
