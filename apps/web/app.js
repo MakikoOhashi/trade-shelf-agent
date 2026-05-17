@@ -805,32 +805,27 @@ function activityEventToFeedItem(ev) {
     }
   })();
 
-  const summary = (() => {
-    if (rawType === "raw_input_received") return description;
-    if (description) return description;
-    return activityTitleJa;
-  })();
+  const title = description ? `${activityTitleJa}：${description}` : activityTitleJa;
 
   const details = [
-    rawType ? `種別: ${activityTitleJa}${rawType ? ` (${rawType})` : ""}` : "",
+    rawType ? `type: ${activityTitleJa}${rawType ? ` (${rawType})` : ""}` : "",
     status ? `状態: ${statusKeyFromIngestStatus(status)} (${status})` : "",
     typeof sequence === "number" ? `順序: ${String(sequence)}` : "",
     linkedDeduped.length
       ? `紐付け: ${linkedDeduped.map((l) => `${formatEntityType(l.entityType)} ${l.entityId}`).join(", ")}`
       : "",
-    description && rawType !== "raw_input_received" ? `詳細: ${description}` : "",
+    description && rawType !== "raw_input_received" ? `raw detail: ${description}` : "",
   ].filter(Boolean);
 
   return {
     id: String(ev?.id || `act-${shortId()}`),
     type,
     source: "ai",
-    title: activityTitleJa,
+    title,
     actor: String(ev?.actor || "") || "mock ingest",
     at,
     occurredAt,
     sequence,
-    summary,
     details,
     statusKey: statusKeyFromIngestStatus(status),
     linked,
@@ -2911,10 +2906,11 @@ function renderNewTop() {
       const title = String(it?.title || "");
       const actor = String(it?.actor || "");
       const at = String(it?.at || "");
-      const summary = String(it?.summary || "");
       const details = Array.isArray(it?.details) ? it.details.filter(Boolean) : [];
       const id = String(it?.id || "");
       const expanded = !!(state.activityExpandedById && state.activityExpandedById[id]);
+      const toggleIcon = expanded ? "▼" : "▶";
+      const metaInline = [actor, at].filter(Boolean).join(" · ");
       const detailsHtml =
         expanded && details.length
           ? `<div class="activity-detail">
@@ -2928,22 +2924,16 @@ function renderNewTop() {
           <div class="activity-dot ${escapeHtml(statusDotClass(it))}"></div>
         </div>
         <div class="activity-card">
-          <div class="activity-meta">
-            <div class="activity-meta__left">
-              <span class="activity-kind">${escapeHtml(title || "-")}</span>
-            </div>
-            <div class="activity-meta__right">${escapeHtml(at)}</div>
-          </div>
-          ${actor ? `<div class="activity-actorline">${escapeHtml(actor)}</div>` : ""}
-          ${summary ? `<div class="activity-summary">${escapeHtml(summary)}</div>` : ""}
-          ${renderLinked(it)}
-          <div class="activity-actions">
-            <button class="btn btn--ghost btn--small" type="button" data-activity-toggle="${escapeHtml(id)}" aria-expanded="${expanded ? "true" : "false"}">
-              ${expanded ? "詳細を閉じる" : "詳細"}
+          <div class="activity-headline">
+            <button class="activity-toggle" type="button" data-activity-toggle="${escapeHtml(id)}" aria-expanded="${expanded ? "true" : "false"}" aria-label="toggle details">
+              ${escapeHtml(toggleIcon)}
             </button>
+            <div class="activity-title" title="${escapeHtml(title || "-")}">${escapeHtml(title || "-")}</div>
+            <div class="activity-meta-inline">${escapeHtml(metaInline || "")}</div>
           </div>
+          ${expanded ? renderLinked(it) : ""}
           ${detailsHtml}
-          ${renderLinks(it)}
+          ${expanded ? renderLinks(it) : ""}
         </div>
       </article>`;
     };

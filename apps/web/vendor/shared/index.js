@@ -1205,9 +1205,11 @@ function normalizeSiId(siId, now = new Date()) {
     const raw = String(siId || "").trim();
     if (!raw)
         return "";
+    // If already normalized like "SI-2026-001", return as-is (normalized casing).
     const already = raw.match(/^SI-\d{4}-\d+/i);
     if (already)
         return raw.toUpperCase();
+    // "SI-224" / "SI224" / "SI 224" -> "SI-YYYY-224" (pad3)
     const simpleMatch = raw.match(/^SI[-\s]?(\d+)$/i);
     if (simpleMatch) {
         const year = String(now.getFullYear());
@@ -1249,6 +1251,7 @@ function uniqueUpper(values) {
 function extractEntityIdsFromText(text) {
     const t = String(text || "");
     const now = new Date();
+    // Important: avoid partial matches like "SI-2026" from "SI-2026-001".
     const siFull = Array.from(t.matchAll(/\bSI-\d{4}-\d+\b/gi)).map((m) => normalizeSiId(m[0], now));
     const siSimple = Array.from(t.matchAll(/\bSI[-\s]?(\d+)\b(?!-\d)/gi)).map((m) => normalizeSiId(`SI-${m[1]}`, now));
     const siNormalized = uniqueUpper([...siFull, ...siSimple]);

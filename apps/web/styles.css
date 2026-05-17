@@ -5243,13 +5243,13 @@ body {
 
 #app .activity-stream {
   display: grid;
-  gap: 10px;
+  gap: 6px;
 }
 
 #app .activity-item {
   display: grid;
   grid-template-columns: 18px 1fr;
-  gap: 12px;
+  gap: 6px;
   align-items: start;
 }
 
@@ -5277,7 +5277,7 @@ body {
   border-radius: 999px;
   border: 2px solid #ffffff;
   box-shadow: 0 0 0 1px #d0d7de;
-  margin-top: 16px;
+  margin-top: 12px;
   background: #218bff;
   z-index: 1;
 }
@@ -5301,8 +5301,8 @@ body {
 #app .activity-card {
   border: 1px solid #e5e7eb;
   background: #ffffff;
-  border-radius: 10px;
-  padding: 12px 12px;
+  border-radius: 8px;
+  padding: 6px 8px;
   box-shadow: 0 1px 0 rgba(31, 35, 40, 0.03);
 }
 
@@ -5310,85 +5310,81 @@ body {
   background: #f6f8fa;
 }
 
-#app .activity-meta {
-  display: flex;
-  justify-content: space-between;
-  gap: 10px;
-  align-items: baseline;
+#app .activity-headline {
+  display: grid;
+  grid-template-columns: 16px 1fr auto;
+  gap: 4px;
+  align-items: center;
 }
 
-#app .activity-kind {
+#app .activity-toggle {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: #24292f;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  line-height: 16px;
+  font-size: 12px;
   font-weight: 900;
+  cursor: pointer;
 }
 
-#app .activity-actor {
-  margin-left: 8px;
-  color: #57606a;
+#app .activity-title {
+  font-size: 13px;
+  line-height: 1.2;
+  font-weight: 900;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+#app .activity-meta-inline {
+  font-size: 11px;
+  line-height: 1.2;
   font-weight: 800;
-  font-size: 12px;
-}
-
-#app .activity-actorline {
-  margin-top: 4px;
   color: #6e7781;
-  font-weight: 800;
-  font-size: 12px;
-}
-
-#app .activity-meta__right {
-  color: #6e7781;
-  font-weight: 800;
-  font-size: 12px;
   white-space: nowrap;
 }
 
-#app .activity-summary {
-  margin-top: 8px;
-  font-weight: 800;
-}
-
-#app .activity-actions {
-  margin-top: 10px;
-  display: flex;
-  justify-content: flex-end;
-}
-
 #app .activity-detail {
-  margin-top: 8px;
+  margin-top: 6px;
 }
 
 #app .activity-details {
-  margin: 8px 0 0;
-  padding-left: 18px;
+  margin: 0;
+  padding-left: 14px;
   color: #57606a;
-  font-size: 13px;
+  font-size: 11px;
   font-weight: 700;
 }
 
 #app .activity-linked {
-  margin-top: 10px;
+  margin-top: 6px;
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 4px;
 }
 
 #app .activity-chip {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 3px 8px;
+  gap: 4px;
+  padding: 2px 6px;
   border-radius: 999px;
   border: 1px solid #d0d7de;
   background: #f6f8fa;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 900;
 }
 
 #app .activity-links {
-  margin-top: 10px;
+  margin-top: 6px;
   display: flex;
   flex-wrap: wrap;
-  gap: 10px;
+  gap: 8px;
 }
 
 #app .activity-link {
