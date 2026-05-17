@@ -120,22 +120,20 @@ function normalizeSiId(siId, now = new Date()) {
   const raw = String(siId || "").trim();
   if (!raw) return "";
 
-  // Allow already-normalized values like SI-2026-224.
-  const normalizedMatch = raw.match(/^SI-(\d{4})-(\d+)$/i);
-  if (normalizedMatch) {
-    const year = normalizedMatch[1];
-    const num = normalizedMatch[2];
-    return `SI-${year}-${num}`;
-  }
+  // Allow already-normalized values like SI-2026-001.
+  const already = raw.match(/^SI-\d{4}-\d+/i);
+  if (already) return raw.toUpperCase();
 
-  // Normalize SI-224 -> SI-YYYY-224 (current year).
-  const simpleMatch = raw.match(/^SI-(\d+)$/i);
+  // Normalize SI-224 / SI224 / SI 224 -> SI-YYYY-224 (pad3, current year).
+  const simpleMatch = raw.match(/^SI[-\s]?(\d+)$/i);
   if (simpleMatch) {
     const year = String(now.getFullYear());
-    return `SI-${year}-${simpleMatch[1]}`;
+    const num = String(simpleMatch[1] || "").replace(/\D/g, "");
+    if (!num) return raw.toUpperCase();
+    return `SI-${year}-${num.padStart(3, "0")}`.toUpperCase();
   }
 
-  return raw;
+  return raw.toUpperCase();
 }
 
 function toStringArray(value) {
@@ -191,7 +189,10 @@ function linkEntitiesByRules(rawText, threads) {
   const text = String(rawText || "");
   const now = new Date();
 
-  const siIds = Array.from(text.matchAll(/SI[-\s]?(\d{3,})/gi)).map((m) => normalizeSiId(`SI-${m[1]}`, now));
+  // Avoid partial matches like "SI-2026" from "SI-2026-001".
+  const siFull = Array.from(text.matchAll(/\bSI-\d{4}-\d+\b/gi)).map((m) => normalizeSiId(m[0], now));
+  const siSimple = Array.from(text.matchAll(/\bSI[-\s]?(\d+)\b(?!-\d)/gi)).map((m) => normalizeSiId(`SI-${m[1]}`, now));
+  const siIds = [...siFull, ...siSimple];
   const shipmentIds = Array.from(text.matchAll(/SHP[-\s]?(\d{1,6})/gi)).map((m) => normalizeShipmentId(`SHP-${m[1]}`, now));
   const invoiceIds = Array.from(text.matchAll(/INV[-\s]?(\d{1,8})/gi)).map((m) => `INV-${m[1]}`.toUpperCase());
 
@@ -234,9 +235,7 @@ function normalizeThreads(parsed, rawText) {
   const now = new Date();
   const raw = String(rawText || "");
   const rawHasPL = /\bPL\b/i.test(raw);
-  const rawSiIds = Array.from(raw.matchAll(/\bSI-(\d{1,6})\b/gi)).map((m) =>
-    normalizeSiId(m[0], now),
-  );
+  const rawSiIds = Array.from(raw.matchAll(/\bSI-\d{4}-\d+\b|\bSI[-\s]?\d+\b(?!-\d)/gi)).map((m) => normalizeSiId(m[0], now));
   const rawShipmentIds = Array.from(raw.matchAll(/\bSHP-(\d{1,6})\b/gi)).map((m) =>
     normalizeShipmentId(m[0], now),
   );

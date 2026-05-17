@@ -79,11 +79,20 @@ function addHoursIso(baseIso: string, hours: number) {
 function normalizeSiId(siId: string, now = new Date()) {
   const raw = String(siId || "").trim();
   if (!raw) return "";
-  const normalizedMatch = raw.match(/^SI-(\d{4})-(\d+)$/i);
-  if (normalizedMatch) return `SI-${normalizedMatch[1]}-${normalizedMatch[2]}`;
-  const simpleMatch = raw.match(/^SI-(\d+)$/i);
-  if (simpleMatch) return `SI-${String(now.getFullYear())}-${simpleMatch[1]}`;
-  return raw;
+  // If already normalized like "SI-2026-001", return as-is (normalized casing).
+  const already = raw.match(/^SI-\d{4}-\d+/i);
+  if (already) return raw.toUpperCase();
+
+  // "SI-224" / "SI224" / "SI 224" -> "SI-YYYY-224" (pad3)
+  const simpleMatch = raw.match(/^SI[-\s]?(\d+)$/i);
+  if (simpleMatch) {
+    const year = String(now.getFullYear());
+    const num = String(simpleMatch[1] || "").replace(/\D/g, "");
+    if (!num) return raw.toUpperCase();
+    return `SI-${year}-${num.padStart(3, "0")}`.toUpperCase();
+  }
+
+  return raw.toUpperCase();
 }
 
 function normalizeShipmentId(shipmentId: string, now = new Date()) {
@@ -115,8 +124,10 @@ function extractEntityIdsFromText(text: string) {
   const t = String(text || "");
   const now = new Date();
 
-  const siMatches = Array.from(t.matchAll(/SI[-\s]?(\d{3,})/gi)).map((m) => normalizeSiId(`SI-${m[1]}`, now));
-  const siNormalized = uniqueUpper(siMatches);
+  // Important: avoid partial matches like "SI-2026" from "SI-2026-001".
+  const siFull = Array.from(t.matchAll(/\bSI-\d{4}-\d+\b/gi)).map((m) => normalizeSiId(m[0], now));
+  const siSimple = Array.from(t.matchAll(/\bSI[-\s]?(\d+)\b(?!-\d)/gi)).map((m) => normalizeSiId(`SI-${m[1]}`, now));
+  const siNormalized = uniqueUpper([...siFull, ...siSimple]);
 
   const shipmentMatches = Array.from(t.matchAll(/SHP[-\s]?(\d{1,6})/gi)).map((m) => normalizeShipmentId(`SHP-${m[1]}`, now));
   const shipmentNormalized = uniqueUpper(shipmentMatches);
@@ -193,9 +204,10 @@ export function resolveContext(input: RawInput, options: IngestBuildOptions = {}
   const text = rawText.replace(/\s+/g, " ");
   const sourceLabel = options.sourceLabel || "AI";
 
-  const siIds = Array.from(new Set(text.match(/SI-\d{2,}/gi) || [])).map((s) => s.toUpperCase());
-  const shipmentIds = Array.from(new Set(text.match(/SHP-\d{2,}/gi) || [])).map((s) => s.toUpperCase());
-  const invoiceIds = Array.from(new Set(text.match(/INV-\d{2,}/gi) || [])).map((s) => s.toUpperCase());
+  const entities = extractEntityIdsFromText(text);
+  const siIds = Array.from(new Set(entities.siIds || [])).map((s) => String(s).toUpperCase());
+  const shipmentIds = Array.from(new Set(entities.shipmentIds || [])).map((s) => String(s).toUpperCase());
+  const invoiceIds = Array.from(new Set(entities.invoiceIds || [])).map((s) => String(s).toUpperCase());
 
   const hasEntityId = Boolean(siIds.length || shipmentIds.length || invoiceIds.length);
 

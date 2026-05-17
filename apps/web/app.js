@@ -1945,23 +1945,24 @@ function renderNewTop() {
       const resolutions = Array.isArray(state.latestIngestResult?.intakeResolutions) ? state.latestIngestResult.intakeResolutions.filter(Boolean) : [];
       const list = resolutions.filter((r) => r && r.shouldCreateIssue === false && (r.status === "status_query" || r.status === "needs_clarification"));
       const pending = Array.isArray(state.pendingClarifications) ? state.pendingClarifications.filter(Boolean) : [];
-      const pendingAwaiting = pending.filter((p) => String(p?.status || "") === "awaiting_clarification_reply");
-      const pendingMatched = pending.filter((p) => String(p?.status || "") === "matched");
-      if (!list.length && !pendingAwaiting.length && !pendingMatched.length) return "";
+      const pendingAwaiting = pending.filter((p) => {
+        const st = String(p?.status || "");
+        return st === "awaiting_clarification_reply" || st === "awaiting_human_selection";
+      });
+      if (!list.length && !pendingAwaiting.length) return "";
 
       const plans = Array.isArray(state.latestIngestResult?.actionPlans) ? state.latestIngestResult.actionPlans.filter(Boolean) : [];
       const drafts = Array.isArray(state.latestIngestResult?.drafts) ? state.latestIngestResult.drafts.filter(Boolean) : [];
 
       const pendingRows = (() => {
-        const row = (p, tone) => {
+        const row = (p) => {
           const original = String(p?.originalRawText || "").trim();
           const q = String(p?.clarificationQuestion || "").trim();
           const requester = String(p?.requesterName || "").trim();
           const followUpAt = p?.followUpAt ? formatLocalTime(String(p.followUpAt)) : "";
           const missing = Array.isArray(p?.missingFields) ? p.missingFields.map((x) => String(x ?? "").trim()).filter(Boolean) : [];
           const missingText = missing.length ? missing.join(", ") : "-";
-          const pill = tone === "matched" ? `<span class="issue-pill">matched</span>` : `<span class="issue-pill is-approval">不足情報の確認待ち</span>`;
-          const muted = tone === "matched" ? " muted" : "";
+          const pill = `<span class="issue-pill is-approval">不足情報の確認待ち</span>`;
           const sub = [
             requester ? `requester: ${requester}` : "",
             followUpAt ? `followUp: ${followUpAt}` : "",
@@ -1971,7 +1972,7 @@ function renderNewTop() {
             .join(" / ");
           const summary = q || original || "-";
           const summaryText = summary.replace(/\n/g, " ").slice(0, 120);
-          return `<div class="pending-mutations__item${muted}">
+          return `<div class="pending-mutations__item">
             <div class="pending-mutations__top">
               <div class="pending-mutations__title-row">
                 <div class="pending-mutations__title">${escapeHtml("確認返信候補（pending clarification）")}</div>
@@ -1985,9 +1986,7 @@ function renderNewTop() {
           </div>`;
         };
 
-        const rowsAwaiting = pendingAwaiting.map((p) => row(p, "awaiting")).join("");
-        const rowsMatched = pendingMatched.map((p) => row(p, "matched")).join("");
-        return `${rowsAwaiting}${rowsMatched}`;
+        return pendingAwaiting.map((p) => row(p)).join("");
       })();
 
       const rows = list
