@@ -440,6 +440,7 @@ const server = http.createServer(async (req, res) => {
         sendJson(res, 400, { ok: false, error: "rawText is required" });
         return;
       }
+      const pendingClarifications = Array.isArray(body.pendingClarifications) ? body.pendingClarifications : [];
 
       const rawInput = {
         id: `raw-${Date.now()}`,
@@ -454,7 +455,7 @@ const server = http.createServer(async (req, res) => {
         status: "received",
       };
 
-      const result = runMockIngest(rawInput);
+      const result = runMockIngest(rawInput, { pendingClarifications });
       sendJson(res, 200, { ok: true, result });
       return;
     } catch (e) {
@@ -471,6 +472,7 @@ const server = http.createServer(async (req, res) => {
         sendJson(res, 400, { ok: false, error: "rawText is required" });
         return;
       }
+      const pendingClarifications = Array.isArray(body.pendingClarifications) ? body.pendingClarifications : [];
 
       const rawInput = {
         id: `raw-${Date.now()}`,
@@ -485,19 +487,22 @@ const server = http.createServer(async (req, res) => {
         status: "received",
       };
 
-      const contextResolution = resolveContext(rawInput, { sourceLabel: "Kimi AI分類", approvalPolicy: "all" });
+      // Resolve pending clarification first, then run context check on the effective input.
+      const prelim = runIngestPipeline(rawInput, { sourceLabel: "Kimi AI分類", approvalPolicy: "all", pendingClarifications });
+      const contextResolution = prelim?.contextResolution || resolveContext(rawInput, { sourceLabel: "Kimi AI分類", approvalPolicy: "all" });
       if (contextResolution.status !== "resolved_enough") {
-        const result = runIngestPipeline(rawInput, { sourceLabel: "Kimi AI分類", approvalPolicy: "all" });
+        const result = prelim;
         sendJson(res, 200, { ok: true, result });
         return;
       }
 
       let threads = null;
       try {
-        threads = await classifyThreadsWithLlm(rawText);
+        const classifyText = prelim && prelim.rawInput && prelim.rawInput.rawText ? String(prelim.rawInput.rawText) : rawText;
+        threads = await classifyThreadsWithLlm(classifyText);
       } catch (e) {
         if (e && (e.code === "LLM_TRUNCATED" || e.code === "LLM_JSON_PARSE_FAILED")) {
-          const result = runIngestPipeline(rawInput, { sourceLabel: "Kimi AI分類", approvalPolicy: "all" });
+          const result = prelim;
           const errMsg = e && e.message ? String(e.message) : "LLM classify failed";
           if (result && Array.isArray(result.activityEvents)) {
             result.activityEvents = [
@@ -520,7 +525,8 @@ const server = http.createServer(async (req, res) => {
         throw e;
       }
 
-      const operationalThreads = linkEntitiesByRules(rawText, threads).map((t) => ({
+      const classifyText = prelim && prelim.rawInput && prelim.rawInput.rawText ? String(prelim.rawInput.rawText) : rawText;
+      const operationalThreads = linkEntitiesByRules(classifyText, threads).map((t) => ({
         ...t,
         rawInputId: rawInput.id,
       }));
@@ -529,6 +535,7 @@ const server = http.createServer(async (req, res) => {
         sourceLabel: "Kimi AI分類",
         // TODO: Switch to confidence-based approval (low_confidence) after we refine the policy.
         approvalPolicy: "all",
+        pendingClarifications,
       });
 
       sendJson(res, 200, { ok: true, result });

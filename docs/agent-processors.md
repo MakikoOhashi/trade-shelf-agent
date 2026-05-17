@@ -38,6 +38,25 @@ AIの主用途は:
 
 ---
 
+## Pending Clarification Queue（文脈接続）
+
+Teams thread / replyToId があれば使う。ただし実務では営業が別投稿する可能性が高いので、必須にしない。
+
+代わりに「pending clarification queue」を持つ。
+
+例:
+
+1. Human Input: `PLまだ？`
+2. Context Resolver: `missing_context`
+3. Clarification Draft: `どのSIまたはShipmentのPLでしょうか？`
+4. Pending Clarification Queue に追加: `CLR-xxxx`（status: `awaiting_clarification_reply`）
+5. Human Input: `SI-224だよ`
+6. Pending Matcher: requester + channel + 直近 + missingFields を満たす pending をマッチ
+7. Context Resolver: `resolved_enough`
+8. 先ほどの質問への返信として処理: `PLまだ？ 対象: SI-2026-224`
+
+---
+
 # Processor Pipeline
 
 ```mermaid

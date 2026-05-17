@@ -733,6 +733,42 @@ export type ContextResolution = {
   sourceLabel?: string;
 };
 
+export type PendingClarificationStatus =
+  | "awaiting_clarification_reply"
+  | "matched"
+  | "expired"
+  | "cancelled";
+
+export type PendingClarification = {
+  id: string;
+
+  sourceRawInputId: string;
+  originalRawText: string;
+
+  requesterName?: string;
+  sourceChannel?: string;
+
+  missingFields: string[];
+
+  clarificationQuestion: string;
+
+  status: PendingClarificationStatus;
+
+  createdAt: string;
+  followUpAt?: string;
+
+  matchedRawInputId?: string;
+  matchedReplyText?: string;
+
+  resolvedEntities?: Array<{
+    entityType: EntityType;
+    entityId: string;
+    confidence: number;
+  }>;
+
+  confidence?: number;
+};
+
 
 export type EntityLink = {
   id: string;
@@ -779,6 +815,8 @@ export type IntakeResolution = {
 export type ActivityEventType =
   | "raw_input_received"
   | "context_resolved"
+  | "clarification_waiting"
+  | "clarification_matched"
   | "clarification_required"
   | "human_selection_required"
   | "reminder_planned"
@@ -906,4 +944,6 @@ export type MockIngestResult = {
   issueMutations: IssueMutation[];
   actionPlans?: ActionPlan[];
   drafts?: DraftDocument[];
+  pendingClarifications?: PendingClarification[];
+  matchedPendingClarification?: PendingClarification;
 };

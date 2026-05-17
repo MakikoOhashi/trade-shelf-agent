@@ -70,6 +70,11 @@ const state = {
    */
   approvalsByActionPlanId: {},
   /**
+   * Pending clarification queue (mock)
+   * @type {Array<any>}
+   */
+  pendingClarifications: [],
+  /**
    * Active raw request id in Requests page
    * @type {string | null}
    */
@@ -250,6 +255,7 @@ async function submitMockIngest(rawText) {
       senderName: "営業A",
       channel: "Teams",
       rawText,
+      pendingClarifications: Array.isArray(state.pendingClarifications) ? state.pendingClarifications : [],
     }),
   });
 
@@ -272,6 +278,7 @@ async function submitLlmIngest(rawText) {
       senderName: "営業A",
       channel: "Teams",
       rawText,
+      pendingClarifications: Array.isArray(state.pendingClarifications) ? state.pendingClarifications : [],
     }),
   });
 
@@ -759,6 +766,10 @@ function activityEventToFeedItem(ev) {
         return "依頼受信";
       case "context_resolved":
         return "Context判定";
+      case "clarification_waiting":
+        return "不足情報の確認待ち";
+      case "clarification_matched":
+        return "確認返信を紐付け";
       case "clarification_required":
         return "追加情報が必要";
       case "human_selection_required":
@@ -825,6 +836,26 @@ function activityEventToFeedItem(ev) {
     linked,
     links: [],
   };
+}
+
+function mergePendingClarificationsFromIngestResult(result) {
+  const incoming = Array.isArray(result?.pendingClarifications) ? result.pendingClarifications.filter(Boolean) : [];
+  const matched = result?.matchedPendingClarification || null;
+  if (!incoming.length && !(matched && matched.id)) return;
+
+  if (!Array.isArray(state.pendingClarifications)) state.pendingClarifications = [];
+  const byId = new Map(state.pendingClarifications.filter(Boolean).map((p) => [String(p.id || ""), p]));
+
+  for (const p of incoming) {
+    const id = String(p?.id || "").trim();
+    if (!id) continue;
+    byId.set(id, p);
+  }
+  if (matched && matched.id) {
+    byId.set(String(matched.id), matched);
+  }
+
+  state.pendingClarifications = Array.from(byId.values()).filter(Boolean);
 }
 
 function getMockEvidenceArchiveItems() {
@@ -1913,10 +1944,51 @@ function renderNewTop() {
     const renderReplyCandidates = () => {
       const resolutions = Array.isArray(state.latestIngestResult?.intakeResolutions) ? state.latestIngestResult.intakeResolutions.filter(Boolean) : [];
       const list = resolutions.filter((r) => r && r.shouldCreateIssue === false && (r.status === "status_query" || r.status === "needs_clarification"));
-      if (!list.length) return "";
+      const pending = Array.isArray(state.pendingClarifications) ? state.pendingClarifications.filter(Boolean) : [];
+      const pendingAwaiting = pending.filter((p) => String(p?.status || "") === "awaiting_clarification_reply");
+      const pendingMatched = pending.filter((p) => String(p?.status || "") === "matched");
+      if (!list.length && !pendingAwaiting.length && !pendingMatched.length) return "";
 
       const plans = Array.isArray(state.latestIngestResult?.actionPlans) ? state.latestIngestResult.actionPlans.filter(Boolean) : [];
       const drafts = Array.isArray(state.latestIngestResult?.drafts) ? state.latestIngestResult.drafts.filter(Boolean) : [];
+
+      const pendingRows = (() => {
+        const row = (p, tone) => {
+          const original = String(p?.originalRawText || "").trim();
+          const q = String(p?.clarificationQuestion || "").trim();
+          const requester = String(p?.requesterName || "").trim();
+          const followUpAt = p?.followUpAt ? formatLocalTime(String(p.followUpAt)) : "";
+          const missing = Array.isArray(p?.missingFields) ? p.missingFields.map((x) => String(x ?? "").trim()).filter(Boolean) : [];
+          const missingText = missing.length ? missing.join(", ") : "-";
+          const pill = tone === "matched" ? `<span class="issue-pill">matched</span>` : `<span class="issue-pill is-approval">不足情報の確認待ち</span>`;
+          const muted = tone === "matched" ? " muted" : "";
+          const sub = [
+            requester ? `requester: ${requester}` : "",
+            followUpAt ? `followUp: ${followUpAt}` : "",
+            missingText ? `missing: ${missingText}` : "",
+          ]
+            .filter(Boolean)
+            .join(" / ");
+          const summary = q || original || "-";
+          const summaryText = summary.replace(/\n/g, " ").slice(0, 120);
+          return `<div class="pending-mutations__item${muted}">
+            <div class="pending-mutations__top">
+              <div class="pending-mutations__title-row">
+                <div class="pending-mutations__title">${escapeHtml("確認返信候補（pending clarification）")}</div>
+                ${pill}
+              </div>
+              <div class="pending-mutations__sub">
+                ${sub ? `<span class="issue-pill">${escapeHtml(sub)}</span>` : ""}
+                ${summaryText ? `<span class="issue-pill is-message">${escapeHtml(summaryText)}</span>` : ""}
+              </div>
+            </div>
+          </div>`;
+        };
+
+        const rowsAwaiting = pendingAwaiting.map((p) => row(p, "awaiting")).join("");
+        const rowsMatched = pendingMatched.map((p) => row(p, "matched")).join("");
+        return `${rowsAwaiting}${rowsMatched}`;
+      })();
 
       const rows = list
         .map((r) => {
@@ -1949,6 +2021,7 @@ function renderNewTop() {
 
       return `<section class="pending-mutations" aria-label="Reply candidates">
         <div class="pending-mutations__h">確認返信候補</div>
+        ${pendingRows}
         ${rows}
       </section>`;
     };
@@ -7496,6 +7569,7 @@ function setupNewTop() {
           state.latestIngestResult = result || null;
           state.latestIngestResultMode = state.classifyMode;
           ensureApprovalsInitializedFromIngestResult(result);
+          mergePendingClarificationsFromIngestResult(result);
           state.ingestNotice = (() => {
             const ctx = result?.contextResolution || null;
             if (ctx && String(ctx.status || "") !== "resolved_enough") {

@@ -5,6 +5,7 @@ import type {
   ContextResolution,
   DraftDocument,
   EntityLink,
+  PendingClarification,
   IntakeResolution,
   IssueMutation,
   MockIngestResult,
@@ -39,6 +40,8 @@ function ingestNowIso() {
 const ACTIVITY_SEQUENCE: Record<ActivityEventType, number> = {
   raw_input_received: 10,
   context_resolved: 15,
+  clarification_waiting: 16,
+  clarification_matched: 18,
   clarification_required: 16,
   human_selection_required: 16,
   reminder_planned: 17,
@@ -63,6 +66,7 @@ export type IngestBuildOptions = {
 
 export type IngestPipelineOptions = IngestBuildOptions & {
   threads?: OperationalThread[];
+  pendingClarifications?: PendingClarification[];
 };
 
 function addHoursIso(baseIso: string, hours: number) {
@@ -70,6 +74,118 @@ function addHoursIso(baseIso: string, hours: number) {
   if (Number.isNaN(d.getTime())) return ingestNowIso();
   d.setHours(d.getHours() + hours);
   return d.toISOString();
+}
+
+function normalizeSiId(siId: string, now = new Date()) {
+  const raw = String(siId || "").trim();
+  if (!raw) return "";
+  const normalizedMatch = raw.match(/^SI-(\d{4})-(\d+)$/i);
+  if (normalizedMatch) return `SI-${normalizedMatch[1]}-${normalizedMatch[2]}`;
+  const simpleMatch = raw.match(/^SI-(\d+)$/i);
+  if (simpleMatch) return `SI-${String(now.getFullYear())}-${simpleMatch[1]}`;
+  return raw;
+}
+
+function normalizeShipmentId(shipmentId: string, now = new Date()) {
+  const raw = String(shipmentId || "").trim();
+  if (!raw) return "";
+  const normalizedMatch = raw.match(/^SHP-(\d{4})-(\d+)$/i);
+  if (normalizedMatch) return `SHP-${normalizedMatch[1]}-${String(normalizedMatch[2]).padStart(3, "0")}`;
+  const simpleMatch = raw.match(/^SHP-(\d+)$/i);
+  if (simpleMatch) return `SHP-${String(now.getFullYear())}-${String(simpleMatch[1]).padStart(3, "0")}`;
+  return raw;
+}
+
+function uniqueUpper(values: string[]) {
+  const arr = Array.isArray(values) ? values : [];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const v of arr) {
+    const s = String(v || "").trim();
+    if (!s) continue;
+    const k = s.toUpperCase();
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(k);
+  }
+  return out;
+}
+
+function extractEntityIdsFromText(text: string) {
+  const t = String(text || "");
+  const now = new Date();
+
+  const siMatches = Array.from(t.matchAll(/SI[-\s]?(\d{3,})/gi)).map((m) => normalizeSiId(`SI-${m[1]}`, now));
+  const siNormalized = uniqueUpper(siMatches);
+
+  const shipmentMatches = Array.from(t.matchAll(/SHP[-\s]?(\d{1,6})/gi)).map((m) => normalizeShipmentId(`SHP-${m[1]}`, now));
+  const shipmentNormalized = uniqueUpper(shipmentMatches);
+
+  const invMatches = Array.from(t.matchAll(/INV[-\s]?(\d{1,8})/gi)).map((m) => `INV-${m[1]}`.toUpperCase());
+  const invNormalized = uniqueUpper(invMatches);
+
+  return { siIds: siNormalized, shipmentIds: shipmentNormalized, invoiceIds: invNormalized };
+}
+
+function pendingClarificationId(seed: string) {
+  return `CLR-${ingestHash8(String(seed || ""))}`.toUpperCase();
+}
+
+export function matchPendingClarification(
+  input: RawInput,
+  pendingClarifications: PendingClarification[] = [],
+): PendingClarification | undefined {
+  const pending = Array.isArray(pendingClarifications) ? pendingClarifications.filter(Boolean) : [];
+  if (!pending.length) return undefined;
+
+  const requesterName = String(input?.senderName || "").trim();
+  const sourceChannel = String(input?.channel || "").trim();
+  const entities = extractEntityIdsFromText(String(input?.rawText || ""));
+
+  const satisfiesMissing = (missingFields: string[]) => {
+    const fields = Array.isArray(missingFields) ? missingFields.map((x) => String(x || "").trim()).filter(Boolean) : [];
+    if (!fields.length) return false;
+    const lower = fields.join(" ").toLowerCase();
+    const needsSi = lower.includes("si");
+    const needsShipment = lower.includes("shipment") || lower.includes("shp");
+    const needsInv = lower.includes("inv") || lower.includes("invoice");
+    const hasSi = entities.siIds.length > 0;
+    const hasShipment = entities.shipmentIds.length > 0;
+    const hasInv = entities.invoiceIds.length > 0;
+
+    const isOr = lower.includes(" or ");
+    if (isOr && needsSi && needsShipment) return hasSi || hasShipment;
+    if (needsSi && !hasSi) return false;
+    if (needsShipment && !hasShipment) return false;
+    if (needsInv && !hasInv) return false;
+    return hasSi || hasShipment || hasInv;
+  };
+
+  const candidates = pending
+    .filter((p) => String(p?.status || "") === "awaiting_clarification_reply")
+    .filter((p) => {
+      const pn = String(p?.requesterName || "").trim();
+      if (pn && requesterName && pn !== requesterName) return false;
+      return true;
+    })
+    .filter((p) => {
+      const pc = String(p?.sourceChannel || "").trim();
+      if (pc && sourceChannel && pc !== sourceChannel) return false;
+      return true;
+    })
+    .filter((p) => satisfiesMissing(p.missingFields));
+
+  if (!candidates.length) return undefined;
+
+  const now = Date.now();
+  const byRecency = (p: PendingClarification) => {
+    const t = Date.parse(String(p?.createdAt || ""));
+    const ts = Number.isFinite(t) ? t : now;
+    return Math.abs(now - ts);
+  };
+
+  candidates.sort((a, b) => byRecency(a) - byRecency(b) || String(a.id || "").localeCompare(String(b.id || "")));
+  return candidates[0];
 }
 
 export function resolveContext(input: RawInput, options: IngestBuildOptions = {}): ContextResolution {
@@ -969,12 +1085,70 @@ export function buildDraftDocuments(
 }
 
 export function runIngestPipeline(input: RawInput, options: IngestPipelineOptions = {}): MockIngestResult {
-  const contextResolution = resolveContext(input, options);
+  const pendingBase = Array.isArray(options.pendingClarifications) ? options.pendingClarifications.filter(Boolean) : [];
+  const matched = matchPendingClarification(input, pendingBase);
+
+  const matchedEntities = matched ? extractEntityIdsFromText(String(input?.rawText || "")) : null;
+  const resolvedEntities = matched
+    ? [
+        ...(matchedEntities?.siIds || []).map((id) => ({ entityType: "SI" as const, entityId: id, confidence: 0.8 })),
+        ...(matchedEntities?.shipmentIds || []).map((id) => ({ entityType: "Shipment" as const, entityId: id, confidence: 0.8 })),
+        ...(matchedEntities?.invoiceIds || []).map((id) => ({ entityType: "Document" as const, entityId: id, confidence: 0.6 })),
+      ]
+    : [];
+
+  const resolvedLabel = resolvedEntities.length ? resolvedEntities.map((e) => `${e.entityType}:${e.entityId}`).join(", ") : "";
+
+  const effectiveInput: RawInput =
+    matched && resolvedLabel
+      ? {
+          ...input,
+          rawText: `${String(matched.originalRawText || "").trim()} 対象: ${resolvedLabel}`.trim(),
+        }
+      : input;
+
+  const contextResolution = resolveContext(effectiveInput, options);
   const pipelineOccurredAt = input.receivedAt || ingestNowIso();
   const actor = options.sourceLabel || "AI";
 
+  const pendingClarifications: PendingClarification[] = pendingBase.slice();
+  const matchedPendingClarification: PendingClarification | undefined = (() => {
+    if (!matched) return undefined;
+    const updated: PendingClarification = {
+      ...matched,
+      status: "matched",
+      matchedRawInputId: input.id,
+      matchedReplyText: input.rawText,
+      resolvedEntities,
+      confidence: typeof matched.confidence === "number" ? matched.confidence : 0.75,
+    };
+    for (let i = 0; i < pendingClarifications.length; i++) {
+      if (String(pendingClarifications[i]?.id || "") === String(updated.id || "")) {
+        pendingClarifications[i] = updated;
+        break;
+      }
+    }
+    return updated;
+  })();
+
   if (contextResolution.status !== "resolved_enough") {
     const threadId = `${input.id}-ctx-001`;
+
+    const clarification: PendingClarification = {
+      id: pendingClarificationId(`${input.id}:${String(input.rawText || "")}`),
+      sourceRawInputId: input.id,
+      originalRawText: String(input.rawText || ""),
+      requesterName: input.senderName,
+      sourceChannel: input.channel,
+      missingFields: Array.isArray(contextResolution.missingFields) ? contextResolution.missingFields : ["SI or Shipment"],
+      clarificationQuestion: String(contextResolution.clarificationQuestion || "どのSIまたはShipmentでしょうか？").trim(),
+      status: "awaiting_clarification_reply",
+      createdAt: pipelineOccurredAt,
+      followUpAt: contextResolution.reminder?.followUpAt,
+      confidence: contextResolution.confidence,
+    };
+
+    pendingClarifications.push(clarification);
 
     const intakeResolution: IntakeResolution = {
       id: intakeResolutionId(threadId),
@@ -1033,6 +1207,18 @@ export function runIngestPipeline(input: RawInput, options: IngestPipelineOption
         sourceRawInputId: input.id,
         threadId,
         status: "ok",
+        actor,
+      },
+      {
+        id: ingestStableId("ACT", `${input.id}:${clarification.id}:clarification_waiting`),
+        type: "clarification_waiting",
+        occurredAt: pipelineOccurredAt,
+        sequence: ACTIVITY_SEQUENCE.clarification_waiting,
+        title: "不足情報の確認待ち",
+        description: clarification.clarificationQuestion,
+        sourceRawInputId: input.id,
+        threadId,
+        status: "warning",
         actor,
       },
       {
@@ -1100,15 +1286,35 @@ export function runIngestPipeline(input: RawInput, options: IngestPipelineOption
       issueMutations: [],
       actionPlans: [actionPlan],
       drafts: [draft],
+      pendingClarifications,
     };
   }
 
-  const threads = Array.isArray(options.threads) ? options.threads : classifyRawInput(input);
+  const threads = Array.isArray(options.threads) ? options.threads : classifyRawInput(effectiveInput);
   const normalizedThreads = normalizeOperationalThreads(input, threads);
-  const links = dedupeEntityLinks(linkThreadsToEntities(normalizedThreads));
-  const intakeResolutions = resolveIntake(input, normalizedThreads, links, options);
-  const issueMutations = buildIssueMutations(input, normalizedThreads, links, intakeResolutions, options);
-  const actionPlansBase = planNextActions(input, normalizedThreads, links, intakeResolutions, issueMutations, options);
+
+  const baseLinks = linkThreadsToEntities(normalizedThreads);
+  const injectedLinks: EntityLink[] = (() => {
+    if (!matchedPendingClarification || !Array.isArray(matchedPendingClarification.resolvedEntities)) return [];
+    const entities = matchedPendingClarification.resolvedEntities.filter(Boolean);
+    if (!entities.length) return [];
+    const targetThread = normalizedThreads.find((t) => String(t?.intent || "") === "missing_document_check") || normalizedThreads[0] || null;
+    const threadId = targetThread ? String(targetThread.id || "") : "";
+    if (!threadId) return [];
+    return entities.map((e) => ({
+      id: ingestStableId("LNK", `${threadId}:${e.entityType}:${e.entityId}:pending_clarification`),
+      threadId,
+      entityType: e.entityType,
+      entityId: e.entityId,
+      confidence: typeof e.confidence === "number" ? e.confidence : 0.75,
+      reason: "resolved entity from pending clarification reply",
+    }));
+  })();
+
+  const links = dedupeEntityLinks([...baseLinks, ...injectedLinks]);
+  const intakeResolutions = resolveIntake(effectiveInput, normalizedThreads, links, options);
+  const issueMutations = buildIssueMutations(effectiveInput, normalizedThreads, links, intakeResolutions, options);
+  const actionPlansBase = planNextActions(effectiveInput, normalizedThreads, links, intakeResolutions, issueMutations, options);
 
   const approvalPolicy = options.approvalPolicy ?? "low_confidence";
   const isApprovalRequired = (thread: OperationalThread) =>
@@ -1121,7 +1327,7 @@ export function runIngestPipeline(input: RawInput, options: IngestPipelineOption
     return { ...ap, status };
   });
 
-  const activityEventsBase = buildActivityEvents(input, normalizedThreads, links, pipelineOccurredAt, options);
+  const activityEventsBase = buildActivityEvents(effectiveInput, normalizedThreads, links, pipelineOccurredAt, options);
 
   const intakeResolvedEvents: ActivityEvent[] = intakeResolutions.map((r) => {
     const threadId = String(r?.threadId || "").trim();
@@ -1151,7 +1357,24 @@ export function runIngestPipeline(input: RawInput, options: IngestPipelineOption
     } satisfies ActivityEvent;
   });
 
-  const drafts = buildDraftDocuments(input, normalizedThreads, links, intakeResolutions, issueMutations, actionPlans, options);
+  const drafts = buildDraftDocuments(effectiveInput, normalizedThreads, links, intakeResolutions, issueMutations, actionPlans, options);
+
+  const clarificationMatchedEvent: ActivityEvent[] =
+    matchedPendingClarification && resolvedLabel
+      ? [
+          {
+            id: ingestStableId("ACT", `${input.id}:${matchedPendingClarification.id}:clarification_matched`),
+            type: "clarification_matched",
+            occurredAt: pipelineOccurredAt,
+            sequence: ACTIVITY_SEQUENCE.clarification_matched,
+            title: "確認返信を紐付け",
+            description: "未解決の確認依頼への返信として対象を特定しました。",
+            sourceRawInputId: input.id,
+            status: "ok",
+            actor,
+          },
+        ]
+      : [];
 
   const draftCreatedEvents: ActivityEvent[] = drafts.map((d) => ({
     id: ingestStableId("ACT", `${input.id}:${d.threadId}:${d.id}:draft_created`),
@@ -1206,28 +1429,38 @@ export function runIngestPipeline(input: RawInput, options: IngestPipelineOption
   })();
 
   return {
-    rawInput: { ...input, status: "linked" },
+    rawInput: { ...effectiveInput, status: "linked" },
     contextResolution,
     threads: normalizedThreads,
     links,
     intakeResolutions,
-    activityEvents: [...activityEventsBase, ...intakeResolvedEvents, ...draftCreatedEvents, ...actionPlannedEvents, ...issueUpdatedEvents],
+    activityEvents: [
+      ...clarificationMatchedEvent,
+      ...activityEventsBase,
+      ...intakeResolvedEvents,
+      ...draftCreatedEvents,
+      ...actionPlannedEvents,
+      ...issueUpdatedEvents,
+    ],
     issueMutations,
     actionPlans,
     drafts,
+    pendingClarifications,
+    matchedPendingClarification,
   };
 }
 
 export function buildIngestResultFromThreads(
   input: RawInput,
   threads: OperationalThread[],
-  options: IngestBuildOptions = {},
+  options: IngestPipelineOptions = {},
 ): MockIngestResult {
   return runIngestPipeline(input, { ...options, threads });
 }
 
-export function runMockIngest(input: RawInput): MockIngestResult {
+export function runMockIngest(input: RawInput, options: IngestPipelineOptions = {}): MockIngestResult {
   return runIngestPipeline(input, {
+    ...options,
     sourceLabel: "mock ingest",
     approvalPolicy: "low_confidence",
   });
