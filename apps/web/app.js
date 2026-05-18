@@ -561,6 +561,87 @@ function findSourceConversationThread(candidate, conversationThreads) {
   return null;
 }
 
+function normalizePreviewText(value) {
+  return String(value || "")
+    .trim()
+    .replace(/\s+/g, " ")
+    .toLowerCase();
+}
+
+function scorePreIssueItem(item) {
+  if (!item) return 0;
+  const followUp = Boolean(String(item.followUpAt || "").trim());
+  const missingCount = Array.isArray(item.missingFields) ? item.missingFields.filter(Boolean).length : 0;
+  const messageCount = typeof item.messageCount === "number" ? item.messageCount : 0;
+  const hasLastMessage = Boolean(String(item.lastMessageText || item.lastMessage || "").trim());
+  const hasSourceThreadId = Boolean(
+    String(item.sourceThreadId || item.conversationThreadId || item.relatedConversationId || item.threadId || "").trim(),
+  );
+
+  return (followUp ? 40 : 0) + Math.min(missingCount, 5) * 6 + Math.min(messageCount, 99) + (hasLastMessage ? 10 : 0) + (hasSourceThreadId ? 8 : 0);
+}
+
+function getPreIssueItemKey(item) {
+  if (!item) return "";
+
+  const threadId = String(
+    item.sourceThreadId ||
+      item.conversationThreadId ||
+      item.relatedConversationId ||
+      item.threadId ||
+      item.representativeThreadId ||
+      "",
+  ).trim();
+  if (threadId) return `thread:${threadId}`;
+
+  const canonicalConversationId = String(item.canonicalConversationId || item.canonicalId || "").trim();
+  if (canonicalConversationId) return `conv:${canonicalConversationId}`;
+
+  const requestId = String(item.requestId || item.rawRequestId || "").trim();
+  if (requestId) return `req:${requestId}`;
+
+  const channel = String(item.channel || item.sourceChannel || "").trim();
+  const requester = String(item.requester || item.requesterName || item.sender || "").trim();
+  const text = normalizePreviewText(
+    item.lastMessageText ||
+      item.lastMessage ||
+      item.message ||
+      item.body ||
+      item.draftBody ||
+      item.bodyText ||
+      item.text ||
+      "",
+  );
+  const fallback = [channel, requester, text].filter(Boolean).join("|");
+  return fallback ? `fallback:${fallback}` : "";
+}
+
+function dedupePreIssueItems(items) {
+  const list = Array.isArray(items) ? items.filter(Boolean) : [];
+  const byKey = new Map();
+  const order = [];
+
+  for (const item of list) {
+    const key = getPreIssueItemKey(item);
+    if (!key) continue;
+
+    const existing = byKey.get(key) || null;
+    if (!existing) {
+      byKey.set(key, item);
+      order.push(key);
+      continue;
+    }
+
+    if (scorePreIssueItem(item) > scorePreIssueItem(existing)) {
+      byKey.set(key, item);
+    }
+  }
+
+  return order.map((k) => byKey.get(k)).filter(Boolean);
+}
+
+const DEBUG_PRE_ISSUE = false;
+
 function transitionApprovalState(currentState, action) {
   const s = String(currentState || "planned");
   const a = String(action || "");
@@ -2373,10 +2454,42 @@ function renderNewTop() {
         for (const p of pendingAwaiting) {
           const id = String(p?.id || "").trim();
           const key = `pc:${id || shortId()}`;
+          const threadId = (() => {
+            const explicit = String(p?.threadId || "").trim();
+            if (explicit) return explicit;
+
+            const sourceRawInputId = String(p?.sourceRawInputId || "").trim();
+            if (!sourceRawInputId) return "";
+
+            const plans = Array.isArray(approvalSide.actionPlans) ? approvalSide.actionPlans.filter(Boolean) : [];
+            const fromPlan =
+              plans.find((ap) => {
+                if (!ap) return false;
+                if (String(ap.sourceRawInputId || "") !== sourceRawInputId) return false;
+                const types = Array.isArray(ap.actionTypes) ? ap.actionTypes.map(String) : [];
+                return types.includes("teams_reply_required") || types.includes("email_required");
+              }) || null;
+            if (fromPlan && fromPlan.threadId) return String(fromPlan.threadId);
+
+            const resolutions = Array.isArray(state.latestIngestResult?.intakeResolutions)
+              ? state.latestIngestResult.intakeResolutions.filter(Boolean)
+              : [];
+            const fromResolution =
+              resolutions.find((r) => {
+                if (!r) return false;
+                if (String(r.sourceRawInputId || "") !== sourceRawInputId) return false;
+                return r.shouldCreateIssue === false;
+              }) || null;
+            if (fromResolution && fromResolution.threadId) return String(fromResolution.threadId);
+
+            return "";
+          })();
           byId.set(key, {
             id: key,
             kind: "clarification_reply_candidate",
-            threadId: String(p?.threadId || "").trim(),
+            threadId,
+            sourceThreadId: threadId,
+            conversationThreadId: threadId,
             requesterName: String(p?.requesterName || "").trim() || "—",
             sourceChannel: String(p?.sourceChannel || "").trim(),
             followUpAt: p?.followUpAt ? String(p.followUpAt) : "",
@@ -2397,6 +2510,8 @@ function renderNewTop() {
             id: key,
             kind: "clarification_reply_candidate",
             threadId,
+            sourceThreadId: threadId,
+            conversationThreadId: threadId,
             requesterName: String(thr?.requesterName || "").trim() || "—",
             sourceChannel: String(thr?.sourceChannel || "").trim(),
             followUpAt: "",
@@ -2409,7 +2524,72 @@ function renderNewTop() {
 
         return Array.from(byId.values()).filter(Boolean);
       })();
-      const activeConversationThreadId = state.activeConversationThreadId || (intakeCandidates[0] && intakeCandidates[0].id) || null;
+
+      const rawPreIssueItems = [
+        ...replyCandidates.map((item) => ({ ...item, __source: "replyCandidates" })),
+        ...intakeCandidates.map((item) => ({ ...item, __source: "intakeCandidates" })),
+      ];
+
+      if (DEBUG_PRE_ISSUE) {
+        console.table(
+          rawPreIssueItems.map((item) => ({
+            rawKey: getPreIssueItemKey(item),
+            source: item.__source,
+            id: item.id,
+            kind: item.kind,
+            status: item.status || item.resolutionStatus,
+            sourceThreadId: item.sourceThreadId,
+            conversationThreadId: item.conversationThreadId,
+            relatedConversationId: item.relatedConversationId,
+            threadId: item.threadId,
+            requester: item.requester || item.requesterName || item.sender,
+            channel: item.channel || item.sourceChannel,
+            message:
+              item.lastMessageText ||
+              item.lastMessage ||
+              item.message ||
+              item.body ||
+              item.draftBody ||
+              item.bodyText ||
+              item.text ||
+              item.bodyText,
+            followUp: item.followUp || item.followUpAt,
+            missing: item.missing || item.missingContext || (Array.isArray(item.missingFields) ? item.missingFields.join(",") : ""),
+          })),
+        );
+      }
+
+      const preIssueItems = dedupePreIssueItems([...replyCandidates, ...intakeCandidates]);
+      const activeConversationThreadId =
+        state.activeConversationThreadId || (preIssueItems.find((x) => x && x.kind !== "clarification_reply_candidate")?.id ?? null);
+
+      if (DEBUG_PRE_ISSUE) {
+        console.table(
+          preIssueItems.map((item) => ({
+            key: getPreIssueItemKey(item),
+            id: item.id,
+            kind: item.kind,
+            status: item.status || item.resolutionStatus,
+            sourceThreadId: item.sourceThreadId,
+            conversationThreadId: item.conversationThreadId,
+            relatedConversationId: item.relatedConversationId,
+            threadId: item.threadId,
+            requester: item.requester || item.requesterName || item.sender,
+            channel: item.channel || item.sourceChannel,
+            message:
+              item.lastMessageText ||
+              item.lastMessage ||
+              item.message ||
+              item.body ||
+              item.draftBody ||
+              item.bodyText ||
+              item.text ||
+              item.bodyText,
+            followUp: item.followUp || item.followUpAt,
+            missing: item.missing || item.missingContext || (Array.isArray(item.missingFields) ? item.missingFields.join(",") : ""),
+          })),
+        );
+      }
 
       const sourceLabel = (s) => {
         const v = String(s || "").toLowerCase();
@@ -2427,8 +2607,7 @@ function renderNewTop() {
         return `<span class="request-inbox-badge ${cls}">${escapeHtml(label)}</span>`;
       };
 
-      const threadCardsHtml = intakeCandidates
-        .map((t) => {
+      const renderThreadCard = (t) => {
           const isActive = Boolean(activeConversationThreadId && String(t.id) === String(activeConversationThreadId));
           const src = sourceLabel(t.sourceChannel);
           const updated = String(t.updatedAt || "");
@@ -2461,11 +2640,9 @@ function renderNewTop() {
               </span>
             </div>
           </div>`;
-        })
-        .join("");
+      };
 
-      const replyCardsHtml = replyCandidates
-        .map((c) => {
+      const renderReplyCard = (c) => {
           const requester = String(c.requesterName || "—");
           const src = sourceLabel(c.sourceChannel);
           const followUpText = c.followUpAt ? formatLocalTime(String(c.followUpAt)) : "";
@@ -2505,11 +2682,17 @@ function renderNewTop() {
               </span>
             </div>
           </div>`;
-        })
-        .join("");
+      };
 
-      const cardsHtml = [replyCardsHtml, threadCardsHtml].filter(Boolean).join("");
-      const totalCount = intakeCandidates.length + replyCandidates.length;
+      const cardsHtml = preIssueItems
+        .map((item) => {
+          if (!item) return "";
+          if (item.kind === "clarification_reply_candidate") return renderReplyCard(item);
+          return renderThreadCard(item);
+        })
+        .filter(Boolean)
+        .join("");
+      const totalCount = preIssueItems.length;
 
       return `<section class="request-inbox-panel request-inbox-panel--preissue" aria-label="Pre-issue requests">
         <div class="request-inbox-panel__head">
