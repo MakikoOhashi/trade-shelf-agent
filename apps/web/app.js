@@ -1,4 +1,11 @@
-import { analyzeImpact, detectIncidents, mockTradeCases, proposeActions } from "@trade-shelf/shared";
+import {
+  analyzeImpact,
+  detectIncidents,
+  mockTradeCases,
+  proposeActions,
+  resolveCanonicalConversation,
+  resolveCanonicalIssueLink,
+} from "@trade-shelf/shared";
 
 const API_BASE_URL = window.TRADE_SHELF_API_BASE_URL || "http://127.0.0.1:3000";
 
@@ -874,33 +881,27 @@ function normalizeConversationStatusKey(status) {
 
 function computeConversationThreadsFromRawRequests(rawRequests) {
   const list = Array.isArray(rawRequests) ? rawRequests.filter(Boolean) : [];
-  const parseTime = (t) => {
-    const s = String(t || "").trim();
-    if (!s) return null;
-    const d = new Date(s);
-    return Number.isFinite(d.getTime()) ? d : null;
+  const rawInputFromRequest = (r) => {
+    const source = String(r?.source || "teams").trim();
+    const normalizedSource = source === "email" ? "email" : "teams";
+    const id = String(r?.originalRawInputId || r?.sourceRawInputId || r?.id || "").trim() || `raw-${shortId()}`;
+    return {
+      id,
+      source: normalizedSource,
+      receivedAt: String(r?.receivedAt || ""),
+      senderName: String(r?.from || ""),
+      channel: String(source || ""),
+      rawText: String(r?.text || ""),
+      status: "received",
+    };
   };
 
-  const pickGroupKey = (r) => {
-    const pcId = String(r?.pendingClarification?.id || r?.pendingClarificationId || "").trim();
-    const matchedId = String(r?.matchedPendingClarification?.id || r?.matchedPendingClarificationId || "").trim();
-    if (pcId) return `clr:${pcId}`;
-    if (matchedId) return `clr:${matchedId}`;
-    const orig = String(r?.originalRawInputId || r?.sourceRawInputId || "").trim();
-    if (orig) return `raw:${orig}`;
-    const from = String(r?.from || "").trim() || "—";
-    const src = String(r?.source || "").trim() || "—";
-    const t = parseTime(r?.receivedAt);
-    if (t) {
-      const bucket = Math.floor(t.getTime() / (15 * 60 * 1000));
-      return `near:${from}:${src}:${String(bucket)}`;
-    }
-    return `single:${String(r?.id || shortId())}`;
-  };
+  const pendingClarifications = Array.isArray(state.pendingClarifications) ? state.pendingClarifications.filter(Boolean) : [];
 
   const groups = new Map();
   for (const r of list) {
-    const key = pickGroupKey(r);
+    const canonical = resolveCanonicalConversation(rawInputFromRequest(r), { pendingClarifications, bucketMinutes: 15 });
+    const key = String(canonical?.conversationThreadId || "").trim() || `CONV:${shortId()}`;
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(r);
   }
@@ -942,13 +943,19 @@ function computeConversationThreadsFromRawRequests(rawRequests) {
       sorted.flatMap((x) => (Array.isArray(x?.aiThreads) ? x.aiThreads : []).map((t) => (t && t.linkedIssueId ? String(t.linkedIssueId) : ""))),
     );
 
-    const matchedId =
-      sorted.map((x) => String(x?.matchedPendingClarification?.id || x?.matchedPendingClarificationId || "").trim()).find(Boolean) || "";
     const pendingId =
       sorted.map((x) => String(x?.pendingClarification?.id || x?.pendingClarificationId || "").trim()).find(Boolean) || "";
+    const matchedId =
+      sorted.map((x) => String(x?.matchedPendingClarification?.id || x?.matchedPendingClarificationId || "").trim()).find(Boolean) || "";
 
     const status = normalizeConversationStatusKey(
-      pendingId ? "awaiting_clarification" : matchedId ? "matched" : sorted.some((x) => x && x.reflectedToApprovals) ? "reflected_to_approvals" : "reflected_to_approvals",
+      pendingId
+        ? "awaiting_clarification"
+        : matchedId
+          ? "matched"
+          : sorted.some((x) => x && x.reflectedToApprovals)
+            ? "reflected_to_approvals"
+            : "reflected_to_approvals",
     );
 
     const threadTitles = uniq(
@@ -3616,10 +3623,23 @@ function handleRequestsAction({ action, threadId }) {
     if (tcId) {
       state.topActiveTab = "issues";
       state.activeIssueId = tcId;
+      state.activeMutationId = null;
       state.isOperationalThreadModalOpen = false;
       renderApp();
     } else {
-      window.alert("No related Issue found in mock data.");
+      const issueId = thr && thr.linkedIssueId ? String(thr.linkedIssueId).trim() : "";
+      const mutation = issueId
+        ? (Array.isArray(state.issueMutationItems) ? state.issueMutationItems : []).find((m) => m && String(m.issueId || "") === issueId) || null
+        : null;
+      if (mutation && mutation.id) {
+        state.topActiveTab = "issues";
+        state.activeIssueId = null;
+        state.activeMutationId = String(mutation.id);
+        state.isOperationalThreadModalOpen = false;
+        renderApp();
+      } else {
+        window.alert("No related Issue found in mock data.");
+      }
     }
     return;
   }
@@ -7704,9 +7724,12 @@ function setupNewTop() {
           {
             const at = formatLocalTime(nowIso());
             const threadsRaw = Array.isArray(result?.threads) ? result.threads.filter(Boolean) : [];
+            const ingestLinks = Array.isArray(result?.links) ? result.links.filter(Boolean) : [];
             const threadsFromResult = threadsRaw.map((t) => {
               const extracted = t?.extractedEntities && typeof t.extractedEntities === "object" ? t.extractedEntities : {};
               const first = (arr) => (Array.isArray(arr) && arr.length ? String(arr[0] ?? "").trim() : "");
+              const threadLinks = ingestLinks.filter((l) => l && String(l.threadId || "") === String(t?.id || ""));
+              const issueLink = resolveCanonicalIssueLink(t, threadLinks, "existing_or_candidate");
               return {
                 id: String(t?.id || `thr-${shortId()}`),
                 title: String(t?.title || "Thread"),
@@ -7714,6 +7737,7 @@ function setupNewTop() {
                 action: "Create new Issue",
                 linkedShipmentId: first(extracted.shipmentIds),
                 linkedSiNo: first(extracted.siIds),
+                linkedIssueId: issueLink && issueLink.issueId ? String(issueLink.issueId) : "",
                 linkedCustomer: first(extracted.customerNames),
               };
             });

@@ -13,6 +13,7 @@ import type {
   RawInput,
 } from "./domain";
 import type { ActivityEventType } from "./domain";
+import { matchPendingClarification, resolveCanonicalIssueLink } from "./canonical";
 
 function ingestStableId(prefix: string, seed: string) {
   let h = 2166136261;
@@ -140,63 +141,6 @@ function extractEntityIdsFromText(text: string) {
 
 function pendingClarificationId(seed: string) {
   return `CLR-${ingestHash8(String(seed || ""))}`.toUpperCase();
-}
-
-export function matchPendingClarification(
-  input: RawInput,
-  pendingClarifications: PendingClarification[] = [],
-): PendingClarification | undefined {
-  const pending = Array.isArray(pendingClarifications) ? pendingClarifications.filter(Boolean) : [];
-  if (!pending.length) return undefined;
-
-  const requesterName = String(input?.senderName || "").trim();
-  const sourceChannel = String(input?.channel || "").trim();
-  const entities = extractEntityIdsFromText(String(input?.rawText || ""));
-
-  const satisfiesMissing = (missingFields: string[]) => {
-    const fields = Array.isArray(missingFields) ? missingFields.map((x) => String(x || "").trim()).filter(Boolean) : [];
-    if (!fields.length) return false;
-    const lower = fields.join(" ").toLowerCase();
-    const needsSi = lower.includes("si");
-    const needsShipment = lower.includes("shipment") || lower.includes("shp");
-    const needsInv = lower.includes("inv") || lower.includes("invoice");
-    const hasSi = entities.siIds.length > 0;
-    const hasShipment = entities.shipmentIds.length > 0;
-    const hasInv = entities.invoiceIds.length > 0;
-
-    const isOr = lower.includes(" or ");
-    if (isOr && needsSi && needsShipment) return hasSi || hasShipment;
-    if (needsSi && !hasSi) return false;
-    if (needsShipment && !hasShipment) return false;
-    if (needsInv && !hasInv) return false;
-    return hasSi || hasShipment || hasInv;
-  };
-
-  const candidates = pending
-    .filter((p) => String(p?.status || "") === "awaiting_clarification_reply")
-    .filter((p) => {
-      const pn = String(p?.requesterName || "").trim();
-      if (pn && requesterName && pn !== requesterName) return false;
-      return true;
-    })
-    .filter((p) => {
-      const pc = String(p?.sourceChannel || "").trim();
-      if (pc && sourceChannel && pc !== sourceChannel) return false;
-      return true;
-    })
-    .filter((p) => satisfiesMissing(p.missingFields));
-
-  if (!candidates.length) return undefined;
-
-  const now = Date.now();
-  const byRecency = (p: PendingClarification) => {
-    const t = Date.parse(String(p?.createdAt || ""));
-    const ts = Number.isFinite(t) ? t : now;
-    return Math.abs(now - ts);
-  };
-
-  candidates.sort((a, b) => byRecency(a) - byRecency(b) || String(a.id || "").localeCompare(String(b.id || "")));
-  return candidates[0];
 }
 
 export function resolveContext(input: RawInput, options: IngestBuildOptions = {}): ContextResolution {
@@ -331,11 +275,6 @@ function normalizeOperationalThreads(input: RawInput, threads: OperationalThread
   });
 }
 
-function issueCandidateIdFromThread(threadId: string) {
-  const h = ingestStableId("THR", threadId).slice(-8).toUpperCase();
-  return `ISS-CAND-${h}`;
-}
-
 function uniqueEntityCount(links: EntityLink[]) {
   const list = Array.isArray(links) ? links.filter(Boolean) : [];
   const seen = new Set<string>();
@@ -373,12 +312,6 @@ function chooseThreadTitle(thread: OperationalThread, threadLinks: EntityLink[])
   const preferredEntity = (threadLinks || []).find((l) => l?.entityType && l?.entityId);
   if (preferredEntity) return `${preferredEntity.entityType}:${preferredEntity.entityId}`;
   return "Untitled";
-}
-
-function issueIdForThread(thread: OperationalThread, threadLinks: EntityLink[], mode: "candidate" | "existing_or_candidate") {
-  if (mode === "candidate") return issueCandidateIdFromThread(thread.id);
-  const existingIssue = (threadLinks || []).find((l) => l?.entityType === "Issue" && String(l?.entityId || "").trim());
-  return existingIssue ? String(existingIssue.entityId).trim() : issueCandidateIdFromThread(thread.id);
 }
 
 export function planNextActions(
@@ -859,7 +792,7 @@ export function buildIssueMutations(
     } satisfies Partial<IssueMutation>;
 
     if (thread.title.includes("PL未着")) {
-      const issueId = issueIdForThread(thread, threadLinks, "candidate");
+      const issueId = resolveCanonicalIssueLink(thread, threadLinks, "candidate").issueId;
       const title = threadTitle;
       const bodyLines = [
         `依頼: ${input.senderName ?? "unknown"} (${input.source})`,
@@ -901,7 +834,7 @@ export function buildIssueMutations(
 
     if (thread.title.includes("SI-224") || (thread.extractedEntities.siIds ?? []).some((s) => s.includes("224"))) {
       const siId = (thread.extractedEntities.siIds ?? [])[0] ?? "SI-UNKNOWN";
-      const candidateId = issueIdForThread(thread, threadLinks, "candidate");
+      const candidateId = resolveCanonicalIssueLink(thread, threadLinks, "candidate").issueId;
       const title = threadTitle;
       const bodyLines = [
         `依頼: ${input.senderName ?? "unknown"} (${input.source})`,
@@ -944,7 +877,7 @@ export function buildIssueMutations(
     }
 
     // Default: create a candidate issue for anything else.
-    const candidateId = issueIdForThread(thread, threadLinks, "candidate");
+    const candidateId = resolveCanonicalIssueLink(thread, threadLinks, "candidate").issueId;
     mutations.push({
       issueId: candidateId,
       action: "create_issue_candidate",
