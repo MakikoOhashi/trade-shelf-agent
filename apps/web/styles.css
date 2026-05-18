@@ -4448,6 +4448,12 @@ body {
   color: #57606a;
 }
 
+#app .request-inbox-panel__sub {
+  margin: -2px 0 8px;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
 #app .request-inbox-list {
   display: grid;
   gap: 8px;
@@ -4457,6 +4463,25 @@ body {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 14px;
+}
+
+#app .requests-empty {
+  border: 1px dashed #d0d7de;
+  border-radius: 12px;
+  background: #ffffff;
+  padding: 14px 12px;
+  color: #57606a;
+}
+
+#app .requests-empty__title {
+  font-weight: 900;
+  color: #24292f;
+  margin-bottom: 4px;
+}
+
+#app .requests-empty__sub {
+  font-size: 12px;
+  line-height: 1.35;
 }
 
 @media (max-width: 760px) {
@@ -4540,6 +4565,13 @@ body {
   flex-wrap: wrap;
   color: #57606a;
   font-size: 12px;
+}
+
+#app .conversation-thread-card__foot-right {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 #app .conversation-thread-card__chips {

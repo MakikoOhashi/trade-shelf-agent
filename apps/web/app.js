@@ -876,8 +876,28 @@ function normalizeConversationStatusKey(status) {
   if (s === "awaiting_clarification") return "awaiting_clarification";
   if (s === "matched") return "matched";
   if (s === "reflected_to_approvals") return "reflected_to_approvals";
+  if (s === "issue_linked") return "issue_linked";
+  if (s === "resolved") return "resolved";
   if (s === "closed") return "closed";
   return "reflected_to_approvals";
+}
+
+function displayConversationStatusLabel(status) {
+  switch (normalizeConversationStatusKey(status)) {
+    case "awaiting_clarification":
+      return "確認中";
+    case "matched":
+      return "Issue候補整理済";
+    case "reflected_to_approvals":
+      return "承認待ちへ反映済";
+    case "issue_linked":
+      return "既存Issueへ関連付け済";
+    case "resolved":
+    case "closed":
+      return "完了";
+    default:
+      return "—";
+  }
 }
 
 function computeConversationThreadsFromRawRequests(rawRequests) {
@@ -998,6 +1018,9 @@ function computeConversationThreadsFromRawRequests(rawRequests) {
 
     return {
       id: String(first?.conversationThreadId || key),
+      representativeThreadId,
+      canonicalIssueLink: canonicalIssue,
+      reflectedToApprovals,
       requesterName,
       sourceChannel,
       title,
@@ -1012,6 +1035,46 @@ function computeConversationThreadsFromRawRequests(rawRequests) {
   });
 
   return threads.sort((a, b) => String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")) || String(b.id || "").localeCompare(String(a.id || "")));
+}
+
+function isPreIssueConversationThread(thread) {
+  if (!thread) return false;
+
+  const status = normalizeConversationStatusKey(thread.status || thread.resolutionStatus);
+  if (status === "reflected_to_approvals") return false;
+  if (status === "issue_linked") return false;
+  if (status === "resolved") return false;
+  if (status === "closed") return false;
+
+  if (status === "awaiting_clarification") return true;
+
+  // `matched` can still be "pre-issue", but only if it hasn't moved into the approval pipeline yet.
+  if (Boolean(thread.reflectedToApprovals)) return false;
+  if (thread?.canonicalIssueLink?.issueId) return false;
+
+  return true;
+}
+
+function hasApprovalCandidateForThread(thread, { actionPlans, issueMutations } = {}) {
+  if (!thread) return false;
+
+  const plans = Array.isArray(actionPlans) ? actionPlans.filter(Boolean) : [];
+  const muts = Array.isArray(issueMutations) ? issueMutations.filter(Boolean) : [];
+
+  const representativeThreadId = String(thread.representativeThreadId || "").trim();
+  const relatedIssueIds = Array.isArray(thread.relatedIssueIds) ? thread.relatedIssueIds.filter(Boolean).map(String) : [];
+
+  const hasPlan =
+    (representativeThreadId && plans.some((ap) => String(ap?.threadId || "") === representativeThreadId)) ||
+    (relatedIssueIds.length && plans.some((ap) => relatedIssueIds.includes(String(ap?.issueId || ""))));
+
+  if (hasPlan) return true;
+
+  const hasMutation =
+    (representativeThreadId && muts.some((m) => String(m?.threadId || "") === representativeThreadId)) ||
+    (relatedIssueIds.length && muts.some((m) => relatedIssueIds.includes(String(m?.issueId || ""))));
+
+  return hasMutation;
 }
 
 function formatRequestSourceLabel(source) {
@@ -1041,7 +1104,7 @@ function openConversationThreadModalById(threadId) {
   const metaChips = [
     `<span class="mini-chip">${escapeHtml(who)}</span>`,
     `<span class="mini-chip">${escapeHtml(src)}</span>`,
-    `<span class="mini-chip">status: ${escapeHtml(statusKey)}</span>`,
+    `<span class="mini-chip">状態: ${escapeHtml(displayConversationStatusLabel(statusKey))}</span>`,
     updated ? `<span class="mini-chip nt-mono">${escapeHtml(updated)}</span>` : "",
     ...siIds.map((x) => `<span class="mini-chip">${escapeHtml(x)}</span>`),
     ...issueIds.map((x) => `<span class="mini-chip">${escapeHtml(x)}</span>`),
@@ -3251,7 +3314,17 @@ function renderNewTop() {
   const renderRequests = ({ embedded } = {}) => {
     const list = Array.isArray(state.rawRequests) ? state.rawRequests.filter(Boolean) : [];
     const conversationThreads = computeConversationThreadsFromRawRequests(list);
-    const activeConversationThreadId = state.activeConversationThreadId || (conversationThreads[0] && conversationThreads[0].id) || null;
+    const approvalSide = {
+      actionPlans: Array.isArray(state.latestIngestResult?.actionPlans) ? state.latestIngestResult.actionPlans : [],
+      issueMutations: Array.isArray(state.issueMutationItems) ? state.issueMutationItems : [],
+    };
+
+    const preIssueThreads = conversationThreads.filter((t) => {
+      return isPreIssueConversationThread(t) && !hasApprovalCandidateForThread(t, approvalSide);
+    });
+    const intakeCandidates = preIssueThreads;
+    const activeConversationThreadId =
+      state.activeConversationThreadId || (intakeCandidates[0] && intakeCandidates[0].id) || null;
 
     const sourceLabel = (s) => {
       const v = String(s || "").toLowerCase();
@@ -3264,19 +3337,12 @@ function renderNewTop() {
 
     const statusBadgeHtml = (status) => {
       const s = normalizeConversationStatusKey(status);
-      const label =
-        s === "awaiting_clarification"
-          ? "awaiting_clarification"
-          : s === "matched"
-            ? "matched"
-            : s === "closed"
-              ? "closed"
-              : "reflected_to_approvals";
+      const label = displayConversationStatusLabel(s);
       const cls = s === "awaiting_clarification" ? "is-pending" : s === "matched" ? "is-matched" : "";
       return `<span class="request-inbox-badge ${cls}">${escapeHtml(label)}</span>`;
     };
 
-    const cardsHtml = conversationThreads
+    const cardsHtml = intakeCandidates
       .map((t) => {
         const isActive = Boolean(activeConversationThreadId && String(t.id) === String(activeConversationThreadId));
         const src = sourceLabel(t.sourceChannel);
@@ -3287,7 +3353,7 @@ function renderNewTop() {
         const si = Array.isArray(t.relatedSiIds) ? t.relatedSiIds.filter(Boolean) : [];
         const siChips = si.length ? si.map((x) => `<span class="mini-chip">${escapeHtml(x)}</span>`).join("") : "";
 
-        return `<button class="conversation-thread-card ${isActive ? "selected" : ""}" type="button" data-conversation-thread-open="${escapeHtml(
+        return `<div class="conversation-thread-card ${isActive ? "selected" : ""}" role="button" tabindex="0" data-conversation-thread-open="${escapeHtml(
           String(t.id || ""),
         )}">
           <div class="conversation-thread-meta">
@@ -3302,9 +3368,14 @@ function renderNewTop() {
           <div class="conversation-thread-card__preview">${escapeHtml(`最終メッセージ: ${last}`)}</div>
           <div class="conversation-thread-card__foot">
             <span class="nt-mono">${escapeHtml(String(count))} messages</span>
-            ${siChips ? `<span class="conversation-thread-card__chips">${siChips}</span>` : ""}
+            <span class="conversation-thread-card__foot-right">
+              ${siChips ? `<span class="conversation-thread-card__chips">${siChips}</span>` : ""}
+              <button class="btn btn--ghost btn--small" type="button" data-conversation-thread-open="${escapeHtml(
+                String(t.id || ""),
+              )}">会話を見る</button>
+            </span>
           </div>
-        </button>`;
+        </div>`;
       })
       .join("");
 
@@ -3464,7 +3535,7 @@ function renderNewTop() {
           ? ""
           : `<div class="req-title">
               <div class="req-title__h">変更・確認依頼</div>
-              <div class="req-title__sub">Teams/Email由来の依頼を受信し、会話単位で処理します（mock）。</div>
+              <div class="req-title__sub">Teams/Email由来の依頼をAIが整理し、Issue化前の確認・補完を行います（mock）。</div>
             </div>`
       }
 
@@ -3514,16 +3585,23 @@ function renderNewTop() {
       </div>
 
       <div class="requests-inbox-layout" aria-label="Inbox / Conversation hub">
-        <div class="request-inbox-panel" aria-label="Conversation thread list">
+        <div class="request-inbox-panel" aria-label="Issue intake candidates">
           <div class="request-inbox-panel__head">
-            <div class="request-inbox-panel__title">会話スレッド</div>
-            <div class="request-inbox-panel__count nt-mono">${escapeHtml(String(conversationThreads.length))}</div>
+            <div class="request-inbox-panel__title">Issue作成前案件</div>
+            <div class="request-inbox-panel__count nt-mono">${escapeHtml(String(intakeCandidates.length))}</div>
           </div>
+          <div class="request-inbox-panel__sub muted">Teams/Email由来の依頼をAIが整理し、Issue化前の確認・補完を行います。</div>
           <div class="requests-manual-add" aria-label="Manual add">
             <textarea class="requests-manual-add__input" rows="1" placeholder="＋ 手入力で追加（例: PLまだ？）" data-requests-input="1"></textarea>
             <button class="btn btn--ghost btn--small" type="button" data-requests-add="1">追加</button>
           </div>
-          <div class="conversation-thread-list">${cardsHtml || `<div class="nt-muted">No threads</div>`}</div>
+          <div class="conversation-thread-list">${
+            cardsHtml ||
+            `<div class="requests-empty">
+              <div class="requests-empty__title">Issue化前の確認案件はありません。</div>
+              <div class="requests-empty__sub">新しい依頼を取り込むと、確認が必要なものだけここに表示されます。</div>
+            </div>`
+          }</div>
         </div>
       </div>
     </section>`;
