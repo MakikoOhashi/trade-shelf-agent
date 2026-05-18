@@ -2290,7 +2290,87 @@ function renderNewTop() {
         .join("");
       return `<section class="pending-mutations" aria-label="Pending AI mutations">
         <div class="pending-mutations__h">AIからの確認・対応候補</div>
+        <div class="pending-mutations__subline muted">AIが整理済みの対応案です。承認・編集・保留できます。</div>
         ${rows}
+      </section>`;
+    };
+
+    const renderPreIssueThreads = () => {
+      const list = Array.isArray(state.rawRequests) ? state.rawRequests.filter(Boolean) : [];
+      const conversationThreads = computeConversationThreadsFromRawRequests(list);
+      const approvalSide = {
+        actionPlans: Array.isArray(state.latestIngestResult?.actionPlans) ? state.latestIngestResult.actionPlans : [],
+        issueMutations: Array.isArray(state.issueMutationItems) ? state.issueMutationItems : [],
+      };
+      const intakeCandidates = conversationThreads.filter((t) => isPreIssueConversationThread(t) && !hasApprovalCandidateForThread(t, approvalSide));
+      const activeConversationThreadId = state.activeConversationThreadId || (intakeCandidates[0] && intakeCandidates[0].id) || null;
+
+      const sourceLabel = (s) => {
+        const v = String(s || "").toLowerCase();
+        if (v === "teams") return "Teams";
+        if (v === "web") return "Web";
+        if (v === "email") return "Email";
+        if (v === "manualmemo") return "Manual memo";
+        return v || "-";
+      };
+
+      const statusBadgeHtml = (status) => {
+        const s = normalizeConversationStatusKey(status);
+        const label = displayConversationStatusLabel(s);
+        const cls = s === "awaiting_clarification" ? "is-pending" : s === "matched" ? "is-matched" : "";
+        return `<span class="request-inbox-badge ${cls}">${escapeHtml(label)}</span>`;
+      };
+
+      const cardsHtml = intakeCandidates
+        .map((t) => {
+          const isActive = Boolean(activeConversationThreadId && String(t.id) === String(activeConversationThreadId));
+          const src = sourceLabel(t.sourceChannel);
+          const updated = String(t.updatedAt || "");
+          const title = String(t.title || "会話");
+          const last = String(t.lastMessageText || "");
+          const count = typeof t.messageCount === "number" ? t.messageCount : 0;
+          const si = Array.isArray(t.relatedSiIds) ? t.relatedSiIds.filter(Boolean) : [];
+          const siChips = si.length ? si.map((x) => `<span class="mini-chip">${escapeHtml(x)}</span>`).join("") : "";
+
+          return `<div class="conversation-thread-card conversation-thread-card--preissue ${isActive ? "selected" : ""}" role="button" tabindex="0" data-conversation-thread-open="${escapeHtml(
+            String(t.id || ""),
+          )}">
+            <div class="conversation-thread-meta">
+              <div class="conversation-thread-meta__left">
+                <div class="conversation-thread-card__sender">${escapeHtml(String(t.requesterName || "—"))}</div>
+                <span class="request-channel-badge">${escapeHtml(src)}</span>
+                <span class="conversation-thread-card__time nt-mono">${escapeHtml(updated)}</span>
+              </div>
+              <div class="conversation-thread-meta__right">${statusBadgeHtml(t.status)}</div>
+            </div>
+            <div class="conversation-thread-card__title">${escapeHtml(title)}</div>
+            <div class="conversation-thread-card__preview">${escapeHtml(`最終メッセージ: ${last}`)}</div>
+            <div class="conversation-thread-card__foot">
+              <span class="nt-mono">${escapeHtml(String(count))} messages</span>
+              <span class="conversation-thread-card__foot-right">
+                ${siChips ? `<span class="conversation-thread-card__chips">${siChips}</span>` : ""}
+                <button class="btn btn--ghost btn--small" type="button" data-conversation-thread-open="${escapeHtml(
+                  String(t.id || ""),
+                )}">会話を見る</button>
+              </span>
+            </div>
+          </div>`;
+        })
+        .join("");
+
+      return `<section class="request-inbox-panel request-inbox-panel--preissue" aria-label="Pre-issue requests">
+        <div class="request-inbox-panel__head">
+          <div class="request-inbox-panel__title">Issue作成前案件</div>
+          <div class="request-inbox-panel__count nt-mono">${escapeHtml(String(intakeCandidates.length))}</div>
+        </div>
+        <div class="request-inbox-panel__sub muted">確認が必要な依頼をここで補完し、Issue候補へ進めます。</div>
+        <div class="conversation-thread-list">${
+          cardsHtml ||
+          `<div class="requests-empty">
+            <div class="requests-empty__title">Issue化前の確認案件はありません。</div>
+            <div class="requests-empty__sub">新しい依頼を取り込むと、確認が必要なものだけここに表示されます。</div>
+          </div>`
+        }</div>
       </section>`;
     };
 
@@ -2449,12 +2529,16 @@ function renderNewTop() {
           return String(a?.issueNo || "").localeCompare(String(b?.issueNo || ""));
         });
       const body = sorted.length ? sorted.map(issueRow).join("") : `<div class="nt-muted">No items</div>`;
-      return `<section class="issue-list" aria-label="Issues list">
+      return `<div class="operations-main-column" aria-label="Operations main column">
+        ${renderPreIssueThreads()}
         ${renderReplyCandidates()}
         ${renderPendingMutations()}
-        <div class="issue-list__section-title">既存Issue</div>
-        ${body}
-      </section>`;
+        <section class="issue-list" aria-label="Issues list">
+          <div class="issue-list__section-title">既存Issue</div>
+          <div class="issue-list__section-sub muted">すでにIssue化された案件です。</div>
+          ${body}
+        </section>
+      </div>`;
     };
 
     const renderTimelineItem = (item) => {
@@ -3656,7 +3740,10 @@ function renderNewTop() {
         </div>
       </div>
 
-      <div class="requests-inbox-layout" aria-label="Inbox / Conversation hub">
+      ${
+        embedded
+          ? ""
+          : `<div class="requests-inbox-layout" aria-label="Inbox / Conversation hub">
         <div class="request-inbox-panel" aria-label="Issue intake candidates">
           <div class="request-inbox-panel__head">
             <div class="request-inbox-panel__title">Issue作成前案件</div>
@@ -3675,7 +3762,8 @@ function renderNewTop() {
             </div>`
           }</div>
         </div>
-      </div>
+      </div>`
+      }
     </section>`;
   };
 

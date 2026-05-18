@@ -225,6 +225,21 @@ body {
   }
 }
 
+#app .operations-left,
+#app .operations-right {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
+#app .operations-main-column {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
 #app .nt-shelf-top {
   display: grid;
   gap: 8px;
@@ -572,15 +587,20 @@ body {
 }
 
 #app .pending-mutations {
-  padding: 14px;
-  border-bottom: 2px solid #d0d7de;
+  border: 1px solid #d0d7de;
+  border-radius: 12px;
   background: #fbfcff;
+  padding: 14px;
 }
 
 #app .pending-mutations__h {
   font-size: 12px;
   font-weight: 800;
   color: #57606a;
+  margin-bottom: 6px;
+}
+
+#app .pending-mutations__subline {
   margin-bottom: 10px;
 }
 
@@ -777,6 +797,13 @@ body {
   color: #57606a;
   border-top: 1px solid #d0d7de;
   background: #ffffff;
+}
+
+#app .issue-list__section-sub {
+  padding: 0 12px 10px;
+  font-size: 12px;
+  line-height: 1.35;
+  border-bottom: 1px solid #d0d7de;
 }
 
 #app .issue-detail {
@@ -4471,6 +4498,10 @@ body {
   line-height: 1.35;
 }
 
+#app .request-inbox-panel--preissue {
+  background: #ffffff;
+}
+
 #app .request-inbox-list {
   display: grid;
   gap: 8px;
@@ -4517,6 +4548,11 @@ body {
   padding: 9px 10px;
   cursor: pointer;
   font-size: 13px;
+}
+
+#app .conversation-thread-card--preissue {
+  background: #ffffff;
+  border-style: dashed;
 }
 
 #app .conversation-thread-card:hover {
