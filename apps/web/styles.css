@@ -2123,6 +2123,66 @@ body {
   gap: 8px;
 }
 
+/* Conversation Thread modal (Requests page) */
+.modal--conversation-thread {
+  z-index: 1200;
+}
+
+.modal--conversation-thread.is-open {
+  display: flex;
+}
+
+.modal--conversation-thread .modal__backdrop {
+  background: rgba(15, 23, 42, 0.48);
+}
+
+.modal--conversation-thread .modal__dialog {
+  width: min(880px, calc(100vw - 48px));
+  max-height: calc(100vh - 72px);
+  background: #ffffff;
+  border-color: #d0d7de;
+  border-radius: 18px;
+  box-shadow: 0 24px 80px rgba(15, 23, 42, 0.28);
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+}
+
+.modal--conversation-thread .modal__top {
+  background: #ffffff;
+  border-bottom: 1px solid #d0d7de;
+  padding: 12px 14px;
+}
+
+.modal--conversation-thread .modal__title {
+  color: #24292f;
+}
+
+.modal--conversation-thread .modal__body {
+  margin-top: 0;
+  border: 0;
+  border-radius: 0;
+  background: #ffffff;
+  color: #24292f;
+  max-height: none;
+  overflow: auto;
+  padding: 14px;
+}
+
+@media (max-width: 760px) {
+  .modal--conversation-thread {
+    padding: 12px;
+    align-items: flex-start;
+  }
+
+  .modal--conversation-thread .modal__dialog {
+    width: 100%;
+    max-height: calc(100vh - 24px);
+    border-radius: 14px;
+  }
+}
+
 /* Fullscreen trade case detail */
 .modal--tradecase {
   position: fixed;
@@ -4378,7 +4438,15 @@ body {
 
 #app .conversation-thread-list {
   display: grid;
-  gap: 8px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+@media (max-width: 760px) {
+  #app .conversation-thread-list {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
 }
 
 #app .conversation-thread-card {
@@ -4618,6 +4686,14 @@ body {
 #app .conversation-message__body {
   color: #24292f;
   white-space: pre-wrap;
+}
+
+#modal .conversation-thread-modal__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  color: #57606a;
 }
 
 #modal .conversation-thread-modal__log {
@@ -5155,7 +5231,8 @@ body {
 }
 
 #app .mini-chip,
-.modal--op-thread .mini-chip {
+.modal--op-thread .mini-chip,
+.modal--conversation-thread .mini-chip {
   display: inline-flex;
   align-items: center;
   padding: 2px 8px;

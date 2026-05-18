@@ -897,6 +897,9 @@ function computeConversationThreadsFromRawRequests(rawRequests) {
   };
 
   const pendingClarifications = Array.isArray(state.pendingClarifications) ? state.pendingClarifications.filter(Boolean) : [];
+  const ingestLinks = Array.isArray(state.latestIngestResult?.links) ? state.latestIngestResult.links.filter(Boolean) : [];
+  const ingestActionPlans = Array.isArray(state.latestIngestResult?.actionPlans) ? state.latestIngestResult.actionPlans.filter(Boolean) : [];
+  const ingestIssueMutations = Array.isArray(state.latestIngestResult?.issueMutations) ? state.latestIngestResult.issueMutations.filter(Boolean) : [];
 
   const groups = new Map();
   for (const r of list) {
@@ -948,14 +951,40 @@ function computeConversationThreadsFromRawRequests(rawRequests) {
     const matchedId =
       sorted.map((x) => String(x?.matchedPendingClarification?.id || x?.matchedPendingClarificationId || "").trim()).find(Boolean) || "";
 
+    const representativeThreadId = (() => {
+      for (const x of sorted) {
+        const threads = Array.isArray(x?.aiThreads) ? x.aiThreads.filter(Boolean) : [];
+        for (const t of threads) {
+          const id = String(t?.id || "").trim();
+          if (id) return id;
+        }
+      }
+      return "";
+    })();
+
+    const canonicalIssue = representativeThreadId
+      ? resolveCanonicalIssueLink({ id: representativeThreadId }, ingestLinks.filter((l) => String(l?.threadId || "") === representativeThreadId))
+      : null;
+
+    const hasResolvedIssueLink = Boolean(canonicalIssue && canonicalIssue.reason === "linked_issue" && canonicalIssue.issueId);
+    const hasResolvedSi =
+      relatedSiIds.length > 0 ||
+      (representativeThreadId &&
+        ingestLinks.some((l) => String(l?.threadId || "") === representativeThreadId && String(l?.entityType || "") === "SI" && l?.entityId));
+
+    const reflectedToApprovals = Boolean(
+      sorted.some((x) => x && x.reflectedToApprovals) ||
+        (representativeThreadId && ingestActionPlans.some((ap) => String(ap?.threadId || "") === representativeThreadId)) ||
+        (canonicalIssue &&
+          canonicalIssue.issueId &&
+          (ingestActionPlans.some((ap) => String(ap?.issueId || "") === canonicalIssue.issueId) ||
+            ingestIssueMutations.some((m) => String(m?.issueId || "") === canonicalIssue.issueId))),
+    );
+
+    const shouldClearAwaitingClarification = Boolean(pendingId && hasResolvedSi && hasResolvedIssueLink && reflectedToApprovals);
+
     const status = normalizeConversationStatusKey(
-      pendingId
-        ? "awaiting_clarification"
-        : matchedId
-          ? "matched"
-          : sorted.some((x) => x && x.reflectedToApprovals)
-            ? "reflected_to_approvals"
-            : "reflected_to_approvals",
+      matchedId ? "matched" : pendingId && !shouldClearAwaitingClarification ? "awaiting_clarification" : "reflected_to_approvals",
     );
 
     const threadTitles = uniq(
@@ -1005,6 +1034,19 @@ function openConversationThreadModalById(threadId) {
   const who = String(thr.requesterName || "—");
   const src = formatRequestSourceLabel(thr.sourceChannel);
   const updated = String(thr.updatedAt || "");
+  const statusKey = normalizeConversationStatusKey(thr.status);
+  const siIds = Array.isArray(thr.relatedSiIds) ? thr.relatedSiIds.filter(Boolean) : [];
+  const issueIds = Array.isArray(thr.relatedIssueIds) ? thr.relatedIssueIds.filter(Boolean) : [];
+  const metaChips = [
+    `<span class="mini-chip">${escapeHtml(who)}</span>`,
+    `<span class="mini-chip">${escapeHtml(src)}</span>`,
+    `<span class="mini-chip">status: ${escapeHtml(statusKey)}</span>`,
+    updated ? `<span class="mini-chip nt-mono">${escapeHtml(updated)}</span>` : "",
+    ...siIds.map((x) => `<span class="mini-chip">${escapeHtml(x)}</span>`),
+    ...issueIds.map((x) => `<span class="mini-chip">${escapeHtml(x)}</span>`),
+  ]
+    .filter(Boolean)
+    .join("");
 
   const logHtml = (Array.isArray(thr.messages) ? thr.messages.filter(Boolean) : [])
     .map((m) => {
@@ -1021,8 +1063,9 @@ function openConversationThreadModalById(threadId) {
 
   openModal({
     title,
+    variant: "conversation_thread",
     bodyHtml: `<div class="conversation-thread-modal">
-      <div class="conversation-thread-modal__meta muted">${escapeHtml(who)} / ${escapeHtml(src)}${updated ? ` ・ updated: ${escapeHtml(updated)}` : ""}</div>
+      <div class="conversation-thread-modal__meta">${metaChips}</div>
       <div class="conversation-thread-modal__log">${logHtml || `<div class="nt-muted">No messages</div>`}</div>
       <div class="conversation-thread-modal__actions">
         <button class="btn btn--primary" type="button" data-open-approval-center="1">Open Issues（承認センター）</button>
@@ -4406,8 +4449,20 @@ function addItem(payload) {
   log(`投入: 「${title}」→ Inbox に格納`);
 }
 
-function openModal({ title, bodyText, bodyHtml }) {
+function openModal({ title, bodyText, bodyHtml, variant }) {
   const modal = document.getElementById("modal");
+  const v = String(variant || "").trim();
+  modal.classList.remove("modal--conversation-thread");
+  if (v === "conversation_thread") {
+    modal.classList.add("modal--conversation-thread");
+    modal.classList.remove("modal--tradecase");
+  } else {
+    modal.classList.add("modal--tradecase");
+  }
+
+  const backBtn = document.getElementById("btn-back");
+  if (backBtn) backBtn.style.display = v === "conversation_thread" ? "none" : "";
+
   const modalTitle = modal.querySelector(".modal__title");
   const modalBody = document.getElementById("modal-body");
   if (modalTitle) modalTitle.textContent = title || "案件詳細";
@@ -4424,6 +4479,10 @@ function closeModal() {
   const modal = document.getElementById("modal");
   modal.classList.remove("is-open");
   modal.setAttribute("aria-hidden", "true");
+  modal.classList.remove("modal--conversation-thread");
+  modal.classList.add("modal--tradecase");
+  const backBtn = document.getElementById("btn-back");
+  if (backBtn) backBtn.style.display = "";
   state.modalTradeCaseId = null;
   state.activeContextDrawer = null;
 }
