@@ -130,7 +130,7 @@ const state = {
   issueSeqByTradeCaseId: {},
   /**
    * New TOP (GitHub-like) active tab
-   * @type {"shelf" | "issues" | "requests" | "activity" | "settings"}
+   * @type {"shelf" | "issues" | "activity" | "settings"}
    */
   topActiveTab: "shelf",
   /**
@@ -206,8 +206,6 @@ const state = {
 const newTopTabs = [
   { key: "shelf", label: "棚", subLabel: "Shelf" },
   { key: "issues", label: "承認センター", subLabel: "Approvals" },
-  // Requests is still routable, but hidden from the primary nav (Todo.md).
-  { key: "requests", label: "変更・確認依頼", subLabel: "Requests", hiddenInNav: true },
   { key: "activity", label: "活動ログ", subLabel: "Activity" },
   { key: "settings", label: "Settings", subLabel: "" },
 ];
@@ -512,53 +510,65 @@ function groupIssueMutationsForApproval(mutations) {
 function findSourceConversationThread(candidate, conversationThreads) {
   if (!candidate || !Array.isArray(conversationThreads)) return null;
 
+  const findByThreadId = (threadIdLike) => {
+    const threadId = String(threadIdLike || "").trim();
+    if (!threadId) return null;
+    const byRep = conversationThreads.find((t) => t && String(t.representativeThreadId || "") === threadId) || null;
+    if (byRep) return byRep;
+    const byId = conversationThreads.find((t) => t && String(t.id || "") === threadId) || null;
+    if (byId) return byId;
+    return null;
+  };
+
   const explicitThreadId = String(
     candidate.sourceThreadId ||
       candidate.conversationThreadId ||
-      candidate.relatedConversationId ||
       candidate.threadId ||
       "",
   ).trim();
 
-  if (explicitThreadId) {
-    const byRep = conversationThreads.find((t) => t && String(t.representativeThreadId || "") === explicitThreadId) || null;
-    if (byRep) return byRep;
-    const byId = conversationThreads.find((t) => t && String(t.id || "") === explicitThreadId) || null;
-    if (byId) return byId;
-  }
+  const byExplicit = findByThreadId(explicitThreadId);
+  if (byExplicit) return byExplicit;
 
+  // Fallback: infer threadId from ingest artifacts (ActionPlans / IntakeResolutions).
   const issueId = String(candidate.issueId || "").trim();
-  if (issueId) {
-    const byIssue =
-      conversationThreads.find((t) => {
-        if (!t) return false;
-        if (String(t?.canonicalIssueLink?.issueId || "") === issueId) return true;
-        const related = Array.isArray(t.relatedIssueIds) ? t.relatedIssueIds.map(String) : [];
-        return related.includes(issueId);
-      }) || null;
-    if (byIssue) return byIssue;
-  }
+  const sourceRawInputId = String(candidate.sourceRawInputId || "").trim();
+  const actionPlanId = String(candidate.actionPlanId || candidate.relatedActionPlanId || "").trim();
 
-  const candidateSiId = String(
-    candidate.relatedSiId ||
-      candidate.siId ||
-      candidate.entityLinks?.siId ||
-      candidate.relatedEntities?.siId ||
-      candidate.entities?.siId ||
-      "",
-  ).trim();
+  const ingestActionPlans = Array.isArray(state.latestIngestResult?.actionPlans) ? state.latestIngestResult.actionPlans.filter(Boolean) : [];
+  const ingestIntakeResolutions = Array.isArray(state.latestIngestResult?.intakeResolutions)
+    ? state.latestIngestResult.intakeResolutions.filter(Boolean)
+    : [];
 
-  if (candidateSiId) {
-    return (
-      conversationThreads.find((t) => {
-        if (!t) return false;
-        const si = Array.isArray(t.relatedSiIds) ? t.relatedSiIds.map(String) : [];
-        return si.includes(candidateSiId);
-      }) || null
-    );
-  }
+  const inferredThreadId = (() => {
+    const plan =
+      ingestActionPlans.find((ap) => ap && actionPlanId && String(ap.id || "") === actionPlanId) ||
+      ingestActionPlans.find((ap) => ap && issueId && String(ap.issueId || "") === issueId) ||
+      ingestActionPlans.find((ap) => ap && sourceRawInputId && String(ap.sourceRawInputId || "") === sourceRawInputId) ||
+      null;
+    if (plan) return String(plan.sourceThreadId || plan.conversationThreadId || plan.threadId || "");
+
+    const res =
+      ingestIntakeResolutions.find((r) => r && issueId && String(r.issueId || "") === issueId) ||
+      ingestIntakeResolutions.find((r) => r && sourceRawInputId && String(r.sourceRawInputId || "") === sourceRawInputId) ||
+      null;
+    if (res) return String(res.sourceThreadId || res.conversationThreadId || res.threadId || "");
+
+    return "";
+  })();
+
+  const byInferred = findByThreadId(inferredThreadId);
+  if (byInferred) return byInferred;
 
   return null;
+}
+
+function resolveThreadForPreIssueItem(item, conversationThreads) {
+  return findSourceConversationThread(item, conversationThreads);
+}
+
+function resolveThreadForApprovalCandidate(candidate, conversationThreads) {
+  return findSourceConversationThread(candidate, conversationThreads);
 }
 
 function normalizePreviewText(value) {
@@ -1744,12 +1754,11 @@ function agentRunEdit(tradeCaseId) {
 
 function renderNewTop() {
   const rawTab = state.topActiveTab || "shelf";
-  const tab = newTopTabs.some((t) => t && String(t.key) === String(rawTab)) ? rawTab : "shelf";
+  const tab = newTopTabs.some((t) => t && String(t.key) === String(rawTab)) ? rawTab : "issues";
 
   const navIconByKey = {
     shelf: "🗂️",
     issues: "⚠️",
-    requests: "💬",
     activity: "📡",
     settings: "⚙️",
   };
@@ -2387,7 +2396,7 @@ function renderNewTop() {
           const approvalBody = String(approvalMutation?.body || "").trim();
           const approvalMsg = approvalBody ? approvalBody.split("\n")[0].trim() : repAction === "mark_approval_required" ? "承認待ちの対応候補です。" : "";
 
-          const sourceThread = findSourceConversationThread({ ...rep, issueId: g.issueId, threadId: g.threadId }, conversationThreads);
+          const sourceThread = resolveThreadForApprovalCandidate({ ...rep, issueId: g.issueId, threadId: g.threadId }, conversationThreads);
           const evidenceSummary = (() => {
             if (!sourceThread) return "";
             const src = formatRequestSourceLabel(sourceThread.sourceChannel);
@@ -2616,10 +2625,13 @@ function renderNewTop() {
           const count = typeof t.messageCount === "number" ? t.messageCount : 0;
           const si = Array.isArray(t.relatedSiIds) ? t.relatedSiIds.filter(Boolean) : [];
           const siChips = si.length ? si.map((x) => `<span class="mini-chip">${escapeHtml(x)}</span>`).join("") : "";
+          const sourceThread = resolveThreadForPreIssueItem(t, conversationThreads);
+          const openThreadId = sourceThread ? String(sourceThread.id || "") : "";
+          const canOpenThread = Boolean(openThreadId.trim());
 
-          return `<div class="conversation-thread-card conversation-thread-card--preissue ${isActive ? "selected" : ""}" role="button" tabindex="0" data-conversation-thread-open="${escapeHtml(
-            String(t.id || ""),
-          )}">
+          return `<div class="conversation-thread-card conversation-thread-card--preissue ${isActive ? "selected" : ""}" role="button" tabindex="0" ${
+            canOpenThread ? `data-conversation-thread-open="${escapeHtml(openThreadId)}"` : ""
+          }>
             <div class="conversation-thread-meta">
               <div class="conversation-thread-meta__left">
                 <div class="conversation-thread-card__sender">${escapeHtml(String(t.requesterName || "—"))}</div>
@@ -2634,9 +2646,9 @@ function renderNewTop() {
               <span class="nt-mono">${escapeHtml(String(count))} messages</span>
               <span class="conversation-thread-card__foot-right">
                 ${siChips ? `<span class="conversation-thread-card__chips">${siChips}</span>` : ""}
-                <button class="btn btn--ghost btn--small" type="button" data-conversation-thread-open="${escapeHtml(
-                  String(t.id || ""),
-                )}">会話を見る</button>
+                <button class="btn btn--ghost btn--small" type="button" ${canOpenThread ? `data-conversation-thread-open="${escapeHtml(openThreadId)}"` : ""} ${
+                  canOpenThread ? "" : "disabled"
+                }>会話を見る</button>
               </span>
             </div>
           </div>`;
@@ -2648,7 +2660,9 @@ function renderNewTop() {
           const followUpText = c.followUpAt ? formatLocalTime(String(c.followUpAt)) : "";
           const missing = Array.isArray(c.missingFields) ? c.missingFields.filter(Boolean) : [];
           const missingText = missing.length ? missing.join(", ") : "SI or Shipment";
-          const canOpenThread = Boolean(String(c.threadId || "").trim());
+          const sourceThread = resolveThreadForPreIssueItem(c, conversationThreads);
+          const openThreadId = sourceThread ? String(sourceThread.id || "") : "";
+          const canOpenThread = Boolean(openThreadId.trim());
           const preview = String(c.bodyText || "対象のSIまたはShipmentを教えてください。").trim();
 
           const metaChips = [
@@ -2674,7 +2688,7 @@ function renderNewTop() {
             <div class="conversation-thread-card__foot">
               <span class="conversation-thread-card__chips">${metaChips}</span>
               <span class="conversation-thread-card__foot-right">
-                <button class="btn btn--ghost btn--small" type="button" data-conversation-thread-open="${escapeHtml(String(c.threadId || ""))}" ${
+                <button class="btn btn--ghost btn--small" type="button" ${canOpenThread ? `data-conversation-thread-open="${escapeHtml(openThreadId)}"` : ""} ${
                   canOpenThread ? "" : "disabled"
                 }>会話を見る</button>
                 <button class="btn btn--primary btn--small" type="button" data-clarification-mock-send="${escapeHtml(String(c.id || ""))}">確認返信を送る</button>
@@ -2935,6 +2949,24 @@ function renderNewTop() {
       const statusText = issueLike.statusText || "requires approval";
       const cs = issueLike.currentStatus || {};
 
+      const conversationThreads = computeConversationThreadsFromRawRequests(state.rawRequests);
+      const sourceThread = resolveThreadForApprovalCandidate(normalizedMut, conversationThreads);
+      if (
+        !sourceThread &&
+        (String(normalizedMut?.sourceThreadId || "") ||
+          String(normalizedMut?.conversationThreadId || "") ||
+          String(normalizedMut?.threadId || "") ||
+          String(normalizedMut?.issueId || ""))
+      ) {
+        console.warn("Missing sourceThread for issue candidate detail", {
+          candidateId: normalizedMut?.id,
+          sourceThreadId: normalizedMut?.sourceThreadId,
+          conversationThreadId: normalizedMut?.conversationThreadId,
+          threadId: normalizedMut?.threadId,
+          issueId: normalizedMut?.issueId,
+        });
+      }
+
       const nextActionFromPlans = (() => {
         const plans = Array.isArray(state.latestIngestResult?.actionPlans) ? state.latestIngestResult.actionPlans.filter(Boolean) : [];
         const threadId = mut?.threadId ? String(mut.threadId) : "";
@@ -3167,6 +3199,20 @@ function renderNewTop() {
 
       const historyHtml = renderIssueHistoryTimeline(historyItems);
 
+      const evidenceHtml = (() => {
+        if (!sourceThread) return "";
+        const src = formatRequestSourceLabel(sourceThread.sourceChannel);
+        const who = String(sourceThread.requesterName || "—");
+        const count = typeof sourceThread.messageCount === "number" ? sourceThread.messageCount : 0;
+        const summary = `根拠: ${src} · ${who} · ${count} messages`;
+        return `<div class="candidate-card-actions" aria-label="Evidence thread">
+          <button class="btn btn--ghost btn--small evidence-thread-button" type="button" data-conversation-thread-open="${escapeHtml(
+            String(sourceThread.id || ""),
+          )}">根拠会話を見る</button>
+          <div class="evidence-summary">${escapeHtml(summary)}</div>
+        </div>`;
+      })();
+
       return `<section class="issue-history-page" aria-label="LLM mutation detail">
         <div class="issue-history-header">
           <button class="btn btn--small btn--ghost" type="button" data-mutation-back="1">← Back</button>
@@ -3180,7 +3226,10 @@ function renderNewTop() {
             </div>
           </div>
         </div>
-        <div class="issue-history-body">${historyHtml}</div>
+        <div class="issue-history-body">
+          ${evidenceHtml}
+          ${historyHtml}
+        </div>
       </section>`;
     };
 
@@ -4111,11 +4160,9 @@ function renderNewTop() {
               <div class="operations-right" aria-label="Requests">${renderRequests({ embedded: true })}</div>
             </div>
           </section>`
-        : tab === "requests"
-          ? renderRequests()
-          : tab === "activity"
-            ? renderActivityFeedPage()
-          : renderPlaceholder("Settings");
+        : tab === "activity"
+          ? renderActivityFeedPage()
+        : renderPlaceholder("Settings");
 
 	  return `
 	    <div class="new-top">
@@ -8167,7 +8214,7 @@ function setupNewTop() {
           state.activeIssueId = null;
           state.activeMutationId = null;
         }
-        if (key !== "requests") state.isOperationalThreadModalOpen = false;
+        if (key !== "issues") state.isOperationalThreadModalOpen = false;
         renderApp();
       }
       return;
@@ -8419,18 +8466,69 @@ function setupNewTop() {
           state.activityFeedItems = prependUniqueById(state.activityFeedItems, feedItems);
 
           const mutationsRaw = Array.isArray(result?.issueMutations) ? result.issueMutations.filter(Boolean) : [];
-          const mutations = mutationsRaw.map((m) => ({
-            id: `mut:${String(m?.sourceRawInputId || "raw")}:${String(m?.threadId || "thread")}:${String(m?.issueId || "")}:${String(m?.action || "")}`,
-            issueId: m?.issueId,
-            action: m?.action,
-            title: m?.title,
-            body: m?.body,
-            linkedEntities: Array.isArray(m?.linkedEntities) ? m.linkedEntities : undefined,
-            confidence: typeof m?.confidence === "number" ? m.confidence : undefined,
-            sourceRawInputId: m?.sourceRawInputId,
-            threadId: m?.threadId,
-            source: m?.sourceLabel,
-          }));
+          const actionPlans = Array.isArray(result?.actionPlans) ? result.actionPlans.filter(Boolean) : [];
+          const intakeResolutions = Array.isArray(result?.intakeResolutions) ? result.intakeResolutions.filter(Boolean) : [];
+          const matchedThreads = Array.isArray(result?.threads) ? result.threads.filter(Boolean) : [];
+
+          const resolveSourceThreadIdForCandidate = ({ actionPlanId, issueId, sourceRawInputId, threadId } = {}) => {
+            const plan =
+              (actionPlanId && actionPlans.find((ap) => ap && String(ap.id || "") === String(actionPlanId))) ||
+              (issueId && actionPlans.find((ap) => ap && String(ap.issueId || "") === String(issueId))) ||
+              (sourceRawInputId && actionPlans.find((ap) => ap && String(ap.sourceRawInputId || "") === String(sourceRawInputId))) ||
+              null;
+
+            const res =
+              (issueId && intakeResolutions.find((r) => r && String(r.issueId || "") === String(issueId))) ||
+              (sourceRawInputId && intakeResolutions.find((r) => r && String(r.sourceRawInputId || "") === String(sourceRawInputId))) ||
+              null;
+
+            const matchedThread =
+              (threadId && matchedThreads.find((t) => t && String(t.id || "") === String(threadId))) ||
+              (plan?.threadId && matchedThreads.find((t) => t && String(t.id || "") === String(plan.threadId))) ||
+              (res?.threadId && matchedThreads.find((t) => t && String(t.id || "") === String(res.threadId))) ||
+              null;
+
+            const sourceThreadId =
+              plan?.sourceThreadId ||
+              plan?.conversationThreadId ||
+              plan?.threadId ||
+              res?.sourceThreadId ||
+              res?.conversationThreadId ||
+              res?.threadId ||
+              (matchedThread ? matchedThread.id : "") ||
+              "";
+
+            return String(sourceThreadId || "").trim();
+          };
+
+          const mutations = mutationsRaw.map((m) => {
+            const issueId = String(m?.issueId || "").trim();
+            const sourceRawInputId = String(m?.sourceRawInputId || "").trim();
+            const explicitThreadId = String(m?.sourceThreadId || m?.conversationThreadId || m?.threadId || "").trim();
+            const sourceThreadId =
+              explicitThreadId ||
+              resolveSourceThreadIdForCandidate({
+                actionPlanId: m?.actionPlanId || m?.relatedActionPlanId,
+                issueId,
+                sourceRawInputId,
+                threadId: m?.threadId,
+              });
+
+            return {
+              id: `mut:${String(sourceRawInputId || "raw")}:${String(sourceThreadId || "thread")}:${String(issueId || "")}:${String(m?.action || "")}`,
+              issueId: m?.issueId,
+              action: m?.action,
+              title: m?.title,
+              body: m?.body,
+              linkedEntities: Array.isArray(m?.linkedEntities) ? m.linkedEntities : undefined,
+              confidence: typeof m?.confidence === "number" ? m.confidence : undefined,
+              sourceRawInputId: m?.sourceRawInputId,
+              threadId: sourceThreadId || m?.threadId,
+              sourceThreadId: sourceThreadId || undefined,
+              conversationThreadId: sourceThreadId || undefined,
+              source: m?.sourceLabel,
+            };
+          });
           state.issueMutationItems = prependUniqueById(state.issueMutationItems, mutations);
         } catch (e) {
           state.ingestError = e && e.message ? String(e.message) : state.classifyMode === "llm" ? "LLM classify failed" : "Mock ingest failed";
