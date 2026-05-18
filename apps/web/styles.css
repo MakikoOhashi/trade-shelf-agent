@@ -638,6 +638,23 @@ body {
   flex-wrap: wrap;
 }
 
+#app .candidate-card-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-top: 10px;
+}
+
+#app .evidence-thread-button {
+  font-size: 12px;
+}
+
+#app .evidence-summary {
+  color: var(--muted-text, #64748b);
+  font-size: 12px;
+}
+
 #app .pending-mutations__body {
   margin: 8px 0 0;
   padding: 10px;

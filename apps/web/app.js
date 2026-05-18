@@ -509,6 +509,58 @@ function groupIssueMutationsForApproval(mutations) {
     .filter(Boolean);
 }
 
+function findSourceConversationThread(candidate, conversationThreads) {
+  if (!candidate || !Array.isArray(conversationThreads)) return null;
+
+  const explicitThreadId = String(
+    candidate.sourceThreadId ||
+      candidate.conversationThreadId ||
+      candidate.relatedConversationId ||
+      candidate.threadId ||
+      "",
+  ).trim();
+
+  if (explicitThreadId) {
+    const byRep = conversationThreads.find((t) => t && String(t.representativeThreadId || "") === explicitThreadId) || null;
+    if (byRep) return byRep;
+    const byId = conversationThreads.find((t) => t && String(t.id || "") === explicitThreadId) || null;
+    if (byId) return byId;
+  }
+
+  const issueId = String(candidate.issueId || "").trim();
+  if (issueId) {
+    const byIssue =
+      conversationThreads.find((t) => {
+        if (!t) return false;
+        if (String(t?.canonicalIssueLink?.issueId || "") === issueId) return true;
+        const related = Array.isArray(t.relatedIssueIds) ? t.relatedIssueIds.map(String) : [];
+        return related.includes(issueId);
+      }) || null;
+    if (byIssue) return byIssue;
+  }
+
+  const candidateSiId = String(
+    candidate.relatedSiId ||
+      candidate.siId ||
+      candidate.entityLinks?.siId ||
+      candidate.relatedEntities?.siId ||
+      candidate.entities?.siId ||
+      "",
+  ).trim();
+
+  if (candidateSiId) {
+    return (
+      conversationThreads.find((t) => {
+        if (!t) return false;
+        const si = Array.isArray(t.relatedSiIds) ? t.relatedSiIds.map(String) : [];
+        return si.includes(candidateSiId);
+      }) || null
+    );
+  }
+
+  return null;
+}
+
 function transitionApprovalState(currentState, action) {
   const s = String(currentState || "planned");
   const a = String(action || "");
@@ -2160,6 +2212,7 @@ function renderNewTop() {
     const renderPendingMutations = () => {
       if (!pendingMutations.length) return "";
       const groups = groupIssueMutationsForApproval(pendingMutations);
+      const conversationThreads = computeConversationThreadsFromRawRequests(state.rawRequests);
       const rows = groups
         .map((g) => {
           const rep = g.representative;
@@ -2198,6 +2251,15 @@ function renderNewTop() {
           const approvalBody = String(approvalMutation?.body || "").trim();
           const approvalMsg = approvalBody ? approvalBody.split("\n")[0].trim() : repAction === "mark_approval_required" ? "承認待ちの対応候補です。" : "";
 
+          const sourceThread = findSourceConversationThread({ ...rep, issueId: g.issueId, threadId: g.threadId }, conversationThreads);
+          const evidenceSummary = (() => {
+            if (!sourceThread) return "";
+            const src = formatRequestSourceLabel(sourceThread.sourceChannel);
+            const who = String(sourceThread.requesterName || "—");
+            const count = typeof sourceThread.messageCount === "number" ? sourceThread.messageCount : 0;
+            return `根拠: ${src} · ${who} · ${count} messages`;
+          })();
+
           return `<div class="pending-mutations__item" role="button" tabindex="0" data-mutation-open="${escapeHtml(String(rep?.id || ""))}">
             <div class="pending-mutations__top">
               <div class="pending-mutations__title-row">
@@ -2213,6 +2275,16 @@ function renderNewTop() {
             <div class="pending-mutations__meta">
               ${pills.join("")}
             </div>
+            ${
+              sourceThread
+                ? `<div class="candidate-card-actions">
+                  <button class="btn btn--ghost btn--small evidence-thread-button" type="button" data-conversation-thread-open="${escapeHtml(
+                    String(sourceThread.id || ""),
+                  )}">根拠会話を見る</button>
+                  ${evidenceSummary ? `<div class="evidence-summary">${escapeHtml(evidenceSummary)}</div>` : ""}
+                </div>`
+                : ""
+            }
           </div>`;
         })
         .join("");
