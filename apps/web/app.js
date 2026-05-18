@@ -80,6 +80,16 @@ const state = {
    */
   activeRawRequestId: null,
   /**
+   * Selected conversation id in Requests page (Inbox / Conversation Hub)
+   * @type {string | null}
+   */
+  selectedConversationId: null,
+  /**
+   * Active conversation thread id in Requests page
+   * @type {string | null}
+   */
+  activeConversationThreadId: null,
+  /**
    * Active operational thread id in Requests page
    * @type {string | null}
    */
@@ -851,6 +861,167 @@ function mergePendingClarificationsFromIngestResult(result) {
   }
 
   state.pendingClarifications = Array.from(byId.values()).filter(Boolean);
+}
+
+function normalizeConversationStatusKey(status) {
+  const s = String(status || "").toLowerCase();
+  if (s === "awaiting_clarification") return "awaiting_clarification";
+  if (s === "matched") return "matched";
+  if (s === "reflected_to_approvals") return "reflected_to_approvals";
+  if (s === "closed") return "closed";
+  return "reflected_to_approvals";
+}
+
+function computeConversationThreadsFromRawRequests(rawRequests) {
+  const list = Array.isArray(rawRequests) ? rawRequests.filter(Boolean) : [];
+  const parseTime = (t) => {
+    const s = String(t || "").trim();
+    if (!s) return null;
+    const d = new Date(s);
+    return Number.isFinite(d.getTime()) ? d : null;
+  };
+
+  const pickGroupKey = (r) => {
+    const pcId = String(r?.pendingClarification?.id || r?.pendingClarificationId || "").trim();
+    const matchedId = String(r?.matchedPendingClarification?.id || r?.matchedPendingClarificationId || "").trim();
+    if (pcId) return `clr:${pcId}`;
+    if (matchedId) return `clr:${matchedId}`;
+    const orig = String(r?.originalRawInputId || r?.sourceRawInputId || "").trim();
+    if (orig) return `raw:${orig}`;
+    const from = String(r?.from || "").trim() || "—";
+    const src = String(r?.source || "").trim() || "—";
+    const t = parseTime(r?.receivedAt);
+    if (t) {
+      const bucket = Math.floor(t.getTime() / (15 * 60 * 1000));
+      return `near:${from}:${src}:${String(bucket)}`;
+    }
+    return `single:${String(r?.id || shortId())}`;
+  };
+
+  const groups = new Map();
+  for (const r of list) {
+    const key = pickGroupKey(r);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(r);
+  }
+
+  const uniq = (arr) => Array.from(new Set((Array.isArray(arr) ? arr : []).map((x) => String(x || "").trim()).filter(Boolean)));
+
+  const threads = Array.from(groups.entries()).map(([key, items]) => {
+    const sorted = items
+      .slice()
+      .sort((a, b) => String(a?.receivedAt || "").localeCompare(String(b?.receivedAt || "")) || String(a?.id || "").localeCompare(String(b?.id || "")));
+
+    const last = sorted[sorted.length - 1] || null;
+    const first = sorted[0] || null;
+    const requesterName = String(last?.from || first?.from || "—");
+    const sourceChannel = String(last?.source || first?.source || "");
+    const updatedAt = String(last?.receivedAt || first?.receivedAt || "");
+    const lastMessageText = String(last?.text || "");
+
+    const messages = [];
+    for (const it of sorted) {
+      const itMsgs = Array.isArray(it?.messages) ? it.messages.filter(Boolean) : [];
+      if (itMsgs.length) {
+        for (const m of itMsgs) {
+          messages.push({
+            role: String(m?.role || "human") === "ai" ? "ai" : "human",
+            text: String(m?.text || ""),
+            createdAt: String(m?.createdAt || it?.receivedAt || ""),
+          });
+        }
+        continue;
+      }
+      messages.push({ role: "human", text: String(it?.text || ""), createdAt: String(it?.receivedAt || "") });
+    }
+
+    const relatedSiIds = uniq(
+      sorted.flatMap((x) => (Array.isArray(x?.aiThreads) ? x.aiThreads : []).map((t) => (t && t.linkedSiNo ? String(t.linkedSiNo) : ""))),
+    );
+    const relatedIssueIds = uniq(
+      sorted.flatMap((x) => (Array.isArray(x?.aiThreads) ? x.aiThreads : []).map((t) => (t && t.linkedIssueId ? String(t.linkedIssueId) : ""))),
+    );
+
+    const matchedId =
+      sorted.map((x) => String(x?.matchedPendingClarification?.id || x?.matchedPendingClarificationId || "").trim()).find(Boolean) || "";
+    const pendingId =
+      sorted.map((x) => String(x?.pendingClarification?.id || x?.pendingClarificationId || "").trim()).find(Boolean) || "";
+
+    const status = normalizeConversationStatusKey(
+      pendingId ? "awaiting_clarification" : matchedId ? "matched" : sorted.some((x) => x && x.reflectedToApprovals) ? "reflected_to_approvals" : "reflected_to_approvals",
+    );
+
+    const threadTitles = uniq(
+      sorted.flatMap((x) => (Array.isArray(x?.aiThreads) ? x.aiThreads : []).map((t) => (t && t.title ? String(t.title) : ""))),
+    );
+    const titleParts = [];
+    if (threadTitles.length) titleParts.push(threadTitles[0]);
+    if (relatedSiIds.length) titleParts.push(relatedSiIds[0]);
+    const title = titleParts.length ? titleParts.join(" / ") : "会話";
+
+    return {
+      id: String(first?.conversationThreadId || key),
+      requesterName,
+      sourceChannel,
+      title,
+      status,
+      updatedAt,
+      messageCount: messages.length,
+      lastMessageText,
+      relatedSiIds,
+      relatedIssueIds,
+      messages,
+    };
+  });
+
+  return threads.sort((a, b) => String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")) || String(b.id || "").localeCompare(String(a.id || "")));
+}
+
+function formatRequestSourceLabel(source) {
+  const v = String(source || "").toLowerCase();
+  if (v === "teams") return "Teams";
+  if (v === "web") return "Web";
+  if (v === "email") return "Email";
+  if (v === "manualmemo") return "Manual memo";
+  return v || "-";
+}
+
+function openConversationThreadModalById(threadId) {
+  const threads = computeConversationThreadsFromRawRequests(state.rawRequests);
+  const thr = threads.find((t) => t && String(t.id) === String(threadId)) || null;
+  if (!thr) {
+    window.alert("Conversation thread not found.");
+    return;
+  }
+
+  const title = String(thr.title || "会話");
+  const who = String(thr.requesterName || "—");
+  const src = formatRequestSourceLabel(thr.sourceChannel);
+  const updated = String(thr.updatedAt || "");
+
+  const logHtml = (Array.isArray(thr.messages) ? thr.messages.filter(Boolean) : [])
+    .map((m) => {
+      const role = String(m?.role || "") === "ai" ? "ai" : "human";
+      const sender = role === "ai" ? "AI" : who;
+      const at = String(m?.createdAt || "");
+      const text = String(m?.text || "");
+      return `<div class="conversation-message ${role}">
+        <div class="conversation-message__sender">${escapeHtml(sender)}${at ? ` <span class="muted nt-mono">${escapeHtml(at)}</span>` : ""}</div>
+        <div class="conversation-message__body">${escapeHtml(text)}</div>
+      </div>`;
+    })
+    .join("");
+
+  openModal({
+    title,
+    bodyHtml: `<div class="conversation-thread-modal">
+      <div class="conversation-thread-modal__meta muted">${escapeHtml(who)} / ${escapeHtml(src)}${updated ? ` ・ updated: ${escapeHtml(updated)}` : ""}</div>
+      <div class="conversation-thread-modal__log">${logHtml || `<div class="nt-muted">No messages</div>`}</div>
+      <div class="conversation-thread-modal__actions">
+        <button class="btn btn--primary" type="button" data-open-approval-center="1">Open Issues（承認センター）</button>
+      </div>
+    </div>`,
+  });
 }
 
 function getMockEvidenceArchiveItems() {
@@ -3027,11 +3198,8 @@ function renderNewTop() {
 
   const renderRequests = () => {
     const list = Array.isArray(state.rawRequests) ? state.rawRequests.filter(Boolean) : [];
-    const activeRawId = state.activeRawRequestId || (list[0] && list[0].id) || null;
-    const activeRaw = list.find((r) => r && r.id === activeRawId) || null;
-    const threads = Array.isArray(activeRaw?.aiThreads) ? activeRaw.aiThreads.filter(Boolean) : [];
-    const activeThreadId = state.activeOperationalThreadId || (threads[0] && threads[0].id) || null;
-    const activeThread = threads.find((t) => t && t.id === activeThreadId) || null;
+    const conversationThreads = computeConversationThreadsFromRawRequests(list);
+    const activeConversationThreadId = state.activeConversationThreadId || (conversationThreads[0] && conversationThreads[0].id) || null;
 
     const sourceLabel = (s) => {
       const v = String(s || "").toLowerCase();
@@ -3042,104 +3210,51 @@ function renderNewTop() {
       return v || "-";
     };
 
-    const resolveTradeCaseIdForThread = (t) => {
-      if (!t) return null;
-      if (t.tradeCaseId) return String(t.tradeCaseId);
-      const shipmentId = String(t.linkedShipmentId || "");
-      const siNo = String(t.linkedSiNo || "");
-      if (shipmentId) {
-        const tc = state.tradeCases.find((c) => c && c.shipmentEntity && String(c.shipmentEntity.id) === shipmentId) || null;
-        if (tc && tc.id) return tc.id;
-      }
-      if (siNo) {
-        const tc = state.tradeCases.find((c) => c && c.siEntity && String(c.siEntity.siNo) === siNo) || null;
-        if (tc && tc.id) return tc.id;
-      }
-      return null;
+    const statusBadgeHtml = (status) => {
+      const s = normalizeConversationStatusKey(status);
+      const label =
+        s === "awaiting_clarification"
+          ? "awaiting_clarification"
+          : s === "matched"
+            ? "matched"
+            : s === "closed"
+              ? "closed"
+              : "reflected_to_approvals";
+      const cls = s === "awaiting_clarification" ? "is-pending" : s === "matched" ? "is-matched" : "";
+      return `<span class="request-inbox-badge ${cls}">${escapeHtml(label)}</span>`;
     };
 
-    const rawCardsHtml = list
-      .map((r) => {
-        const isActive = r && r.id === activeRawId;
-        const from = String(r.from || "-");
-        const text = String(r.text || "");
-        const at = String(r.receivedAt || "");
-        const src = sourceLabel(r.source);
-        return `<button class="req-card ${isActive ? "is-active" : ""}" type="button" data-raw-request-open="${escapeHtml(r.id)}">
-          <div class="req-card__meta">
-            <div class="req-card__from">${escapeHtml(from)}</div>
-            <div class="req-card__right">
-              <span class="req-pill">${escapeHtml(src)}</span>
-              <span class="req-card__at">${escapeHtml(at)}</span>
-            </div>
-          </div>
-          <div class="req-card__text">${escapeHtml(text)}</div>
-        </button>`;
-      })
-      .join("");
-
-    const threadCardsHtml = threads
+    const cardsHtml = conversationThreads
       .map((t) => {
-        const isActive = t && t.id === activeThreadId;
-        const title = String(t.title || "Thread");
-        const status = String(t.status || "");
-        const linked = [
-          t.linkedShipmentId ? `Shipment: ${t.linkedShipmentId}` : "",
-          t.linkedSiNo ? `SI: ${t.linkedSiNo}` : "",
-          t.linkedIssueId ? `Issue: ${t.linkedIssueId}` : "",
-          t.linkedCustomer ? `Customer: ${t.linkedCustomer}` : "",
-        ].filter(Boolean);
-        const action = String(t.action || "");
-        return `<button class="op-thread ${isActive ? "is-active" : ""}" type="button" data-operational-thread-open="${escapeHtml(
-          t.id,
+        const isActive = Boolean(activeConversationThreadId && String(t.id) === String(activeConversationThreadId));
+        const src = sourceLabel(t.sourceChannel);
+        const updated = String(t.updatedAt || "");
+        const title = String(t.title || "会話");
+        const last = String(t.lastMessageText || "");
+        const count = typeof t.messageCount === "number" ? t.messageCount : 0;
+        const si = Array.isArray(t.relatedSiIds) ? t.relatedSiIds.filter(Boolean) : [];
+        const siChips = si.length ? si.map((x) => `<span class="mini-chip">${escapeHtml(x)}</span>`).join("") : "";
+
+        return `<button class="conversation-thread-card ${isActive ? "selected" : ""}" type="button" data-conversation-thread-open="${escapeHtml(
+          String(t.id || ""),
         )}">
-          <div class="op-thread__h">${escapeHtml(title)}</div>
-          ${linked.length ? `<div class="op-thread__links">${linked.map((x) => `<span class="mini-chip">${escapeHtml(x)}</span>`).join("")}</div>` : ""}
-          <div class="op-thread__foot">
-            <div class="op-thread__status">${escapeHtml(status || "—")}</div>
-            <div class="op-thread__action">${escapeHtml(action)}</div>
+          <div class="conversation-thread-meta">
+            <div class="conversation-thread-meta__left">
+              <div class="conversation-thread-card__sender">${escapeHtml(String(t.requesterName || "—"))}</div>
+              <span class="request-channel-badge">${escapeHtml(src)}</span>
+              <span class="conversation-thread-card__time nt-mono">${escapeHtml(updated)}</span>
+            </div>
+            <div class="conversation-thread-meta__right">${statusBadgeHtml(t.status)}</div>
+          </div>
+          <div class="conversation-thread-card__title">${escapeHtml(title)}</div>
+          <div class="conversation-thread-card__preview">${escapeHtml(`最終メッセージ: ${last}`)}</div>
+          <div class="conversation-thread-card__foot">
+            <span class="nt-mono">${escapeHtml(String(count))} messages</span>
+            ${siChips ? `<span class="conversation-thread-card__chips">${siChips}</span>` : ""}
           </div>
         </button>`;
       })
       .join("");
-
-    const tcId = resolveTradeCaseIdForThread(activeThread);
-    const canOpenIssue = Boolean(tcId);
-    const canOpenShipment = Boolean(activeThread && activeThread.linkedShipmentId);
-    const canOpenSi = Boolean(activeThread && activeThread.linkedSiNo);
-
-    const actionHtml = activeThread
-      ? `<div class="req-actions">
-          <div class="req-actions__head">
-            <div class="req-actions__title">Actions</div>
-            <div class="req-actions__sub muted">${escapeHtml(String(activeThread.title || ""))}</div>
-          </div>
-          <div class="req-actions__body">
-            <button class="btn btn--ghost btn--small ${canOpenIssue ? "" : "is-disabled"}" type="button" data-req-action="openIssue" data-req-thread="${escapeHtml(
-              activeThread.id,
-            )}" ${canOpenIssue ? "" : "aria-disabled=\"true\""}>Open related Issue</button>
-            <button class="btn btn--ghost btn--small ${canOpenSi ? "" : "is-disabled"}" type="button" data-req-action="openSi" data-req-thread="${escapeHtml(
-              activeThread.id,
-            )}" ${canOpenSi ? "" : "aria-disabled=\"true\""}>Open SI Workspace</button>
-            <button class="btn btn--ghost btn--small ${canOpenShipment ? "" : "is-disabled"}" type="button" data-req-action="openShipment" data-req-thread="${escapeHtml(
-              activeThread.id,
-            )}" ${canOpenShipment ? "" : "aria-disabled=\"true\""}>Open Shipment Workspace</button>
-            <div class="req-actions__divider"></div>
-            <button class="btn btn--primary btn--small" type="button" data-req-action="createIssue" data-req-thread="${escapeHtml(
-              activeThread.id,
-            )}">Create Issue</button>
-            <button class="btn btn--primary btn--small" type="button" data-req-action="addComment" data-req-thread="${escapeHtml(
-              activeThread.id,
-            )}">Add comment to existing Issue</button>
-            <button class="btn btn--primary btn--small" type="button" data-req-action="draftTeams" data-req-thread="${escapeHtml(
-              activeThread.id,
-            )}">Draft Teams reply</button>
-            <button class="btn btn--primary btn--small" type="button" data-req-action="draftEmail" data-req-thread="${escapeHtml(
-              activeThread.id,
-            )}">Draft supplier push email</button>
-          </div>
-        </div>`
-      : `<div class="req-actions"><div class="nt-muted">Select a thread</div></div>`;
 
     const ingestResult = state.latestIngestResult;
     const ingestThreads = Array.isArray(ingestResult?.threads) ? ingestResult.threads.filter(Boolean) : [];
@@ -3291,68 +3406,68 @@ function renderNewTop() {
         </div>`
       : "";
 
-    return `<section class="req-page" aria-label="Change & Check Requests">
+    return `<section class="req-page requests-hub" aria-label="Change & Check Requests">
       <div class="req-title">
         <div class="req-title__h">変更・確認依頼</div>
-        <div class="req-title__sub">TeamsやWebからの雑な依頼を、AIが業務単位へ整理します。</div>
+        <div class="req-title__sub">Teams/Email由来の依頼を受信し、会話単位で処理します（mock）。</div>
       </div>
 
-        <div class="ingest-form" aria-label="Mock ingest form">
-          <div class="ingest-form__head">
-            <div class="ingest-form__title">変更・確認依頼を取り込む</div>
-            <div class="ingest-form__sub muted">Teamsやメールで来る雑な依頼を、AIが業務単位に分解してIssueとActivityへ反映します。</div>
+      <div class="requests-intake" aria-label="Intake">
+        <div class="requests-intake__head">
+          <div>
+            <div class="requests-intake__title">変更・確認依頼を取り込む</div>
+            <div class="requests-intake__sub muted">貼り付けた依頼をAIが整理し、受信ボックスへ反映します。</div>
           </div>
-        <div class="classification-mode-switch" aria-label="Classification Mode">
-          <div class="classification-mode-switch__label">分類モード</div>
-          <div class="classification-mode-switch__controls" role="tablist" aria-label="Classification Mode">
-            <button class="mode-chip ${state.classifyMode === "mock" ? "is-active" : ""}" type="button" data-classify-mode="mock" ${
-              state.ingestLoading ? "disabled" : ""
-            }>モック</button>
-            <button class="mode-chip ${state.classifyMode === "llm" ? "is-active" : ""}" type="button" data-classify-mode="llm" ${
-              state.ingestLoading ? "disabled" : ""
-            }>LLM（Kimi）</button>
+          <div class="classification-mode-switch" aria-label="Classification Mode">
+            <div class="classification-mode-switch__label">分類モード</div>
+            <div class="classification-mode-switch__controls" role="tablist" aria-label="Classification Mode">
+              <button class="mode-chip ${state.classifyMode === "mock" ? "is-active" : ""}" type="button" data-classify-mode="mock" ${
+                state.ingestLoading ? "disabled" : ""
+              }>モック</button>
+              <button class="mode-chip ${state.classifyMode === "llm" ? "is-active" : ""}" type="button" data-classify-mode="llm" ${
+                state.ingestLoading ? "disabled" : ""
+              }>LLM（Kimi）</button>
+            </div>
           </div>
         </div>
-        <textarea class="ingest-textarea" rows="3" placeholder="PLまだ？あとSI-224も確認して" data-ingest-input="1">${escapeHtml(
-          String(state.ingestInputText || ""),
-        )}</textarea>
-        <div class="ingest-form__actions">
-          <button class="btn btn--primary" type="button" data-ingest-submit="1" ${
-            state.ingestLoading ? "disabled" : ""
-          }>${state.classifyMode === "mock" ? "モックを実行" : "AI分類を実行"}</button>
-          <button class="btn btn--ghost" type="button" data-ingest-sample="1" ${state.ingestLoading ? "disabled" : ""}>サンプルを入れる</button>
-          ${
-            state.ingestLoading
-              ? state.classifyMode === "llm"
-                ? `<span class="ingest-loading nt-muted"><span class="spinner" aria-hidden="true"></span>Kimiが業務スレッドを分類中...</span>`
-                : `<span class="ingest-loading nt-muted">loading...</span>`
-              : ""
-          }
+
+        <div class="requests-intake__form" aria-label="Mock ingest form">
+          <textarea class="ingest-textarea requests-intake__textarea" rows="2" placeholder="例: PLまだ？あとSI-224も確認して" data-ingest-input="1">${escapeHtml(
+            String(state.ingestInputText || ""),
+          )}</textarea>
+          <div class="requests-intake__actions">
+            <button class="btn btn--primary btn--small" type="button" data-ingest-submit="1" ${
+              state.ingestLoading ? "disabled" : ""
+            }>${state.classifyMode === "mock" ? "モックを実行" : "AI分類を実行"}</button>
+            <button class="btn btn--ghost btn--small" type="button" data-ingest-sample="1" ${state.ingestLoading ? "disabled" : ""}>サンプル</button>
+            ${
+              state.ingestLoading
+                ? state.classifyMode === "llm"
+                  ? `<span class="ingest-loading nt-muted"><span class="spinner" aria-hidden="true"></span>Kimiが分類中...</span>`
+                  : `<span class="ingest-loading nt-muted">loading...</span>`
+                : ""
+            }
+          </div>
+          ${state.ingestNotice ? `<div class="ingest-notice">${escapeHtml(String(state.ingestNotice))}</div>` : ""}
+          ${state.ingestError ? `<div class="ingest-error">${escapeHtml(String(state.ingestError))}</div>` : ""}
+          <details class="debug-collapsible" aria-label="Debug details">
+            <summary>詳細（debug）</summary>
+            ${ingestSummaryHtml || `<div class="nt-muted">No ingest result</div>`}
+          </details>
         </div>
-        ${state.ingestNotice ? `<div class="ingest-notice">${escapeHtml(String(state.ingestNotice))}</div>` : ""}
-        ${state.ingestError ? `<div class="ingest-error">${escapeHtml(String(state.ingestError))}</div>` : ""}
-        ${ingestSummaryHtml}
       </div>
 
-      <div class="req-compose" aria-label="Request input">
-        <textarea class="req-compose__box" rows="2" placeholder="例: PLまだ？ SI-224も確認して。営業Aへ返事しておいて" data-requests-input="1"></textarea>
-        <div class="req-compose__actions">
-          <button class="btn btn--primary" type="button" data-requests-add="1">AIに整理させる</button>
-        </div>
-      </div>
-
-      <div class="req-grid" aria-label="Requests layout">
-        <div class="req-col req-col--left" aria-label="Raw requests">
-          <div class="req-col__head">受信ボックス</div>
-          <div class="req-list">${rawCardsHtml || `<div class="nt-muted">No requests</div>`}</div>
-        </div>
-        <div class="req-col req-col--center" aria-label="Operational threads">
-          <div class="req-col__head">AIが分解した業務スレッド</div>
-          <div class="op-list">${threadCardsHtml || `<div class="nt-muted">Select a request</div>`}</div>
-        </div>
-        <div class="req-col req-col--right" aria-label="Linked entities / actions">
-          <div class="req-col__head">紐付け先 / アクション</div>
-          ${actionHtml}
+      <div class="requests-inbox-layout" aria-label="Inbox / Conversation hub">
+        <div class="request-inbox-panel" aria-label="Conversation thread list">
+          <div class="request-inbox-panel__head">
+            <div class="request-inbox-panel__title">会話スレッド</div>
+            <div class="request-inbox-panel__count nt-mono">${escapeHtml(String(conversationThreads.length))}</div>
+          </div>
+          <div class="requests-manual-add" aria-label="Manual add">
+            <textarea class="requests-manual-add__input" rows="1" placeholder="＋ 手入力で追加（例: PLまだ？）" data-requests-input="1"></textarea>
+            <button class="btn btn--ghost btn--small" type="button" data-requests-add="1">追加</button>
+          </div>
+          <div class="conversation-thread-list">${cardsHtml || `<div class="nt-muted">No threads</div>`}</div>
         </div>
       </div>
     </section>`;
@@ -7487,12 +7602,22 @@ function setupNewTop() {
       return;
     }
 
-    const rawOpenEl = target.closest && target.closest("[data-raw-request-open]");
-    if (rawOpenEl) {
-      const id = rawOpenEl.getAttribute("data-raw-request-open") || "";
+    const convOpenEl = target.closest && target.closest("[data-conversation-thread-open]");
+    if (convOpenEl) {
+      const id = convOpenEl.getAttribute("data-conversation-thread-open") || "";
       if (id) {
-        state.activeRawRequestId = id;
-        state.activeOperationalThreadId = null;
+        state.activeConversationThreadId = id;
+        renderApp();
+        openConversationThreadModalById(id);
+      }
+      return;
+    }
+
+    const focusThreadEl = target.closest && target.closest("[data-focus-thread]");
+    if (focusThreadEl) {
+      const id = focusThreadEl.getAttribute("data-focus-thread") || "";
+      if (id) {
+        state.activeOperationalThreadId = id;
         state.isOperationalThreadModalOpen = false;
         renderApp();
       }
@@ -7575,6 +7700,54 @@ function setupNewTop() {
             return `(${label}) 承認センターに反映しました${count ? `（${count}件）` : ""}。`;
           })();
 
+          // Reflect ingest into the Requests inbox (mock Conversation Hub)
+          {
+            const at = formatLocalTime(nowIso());
+            const threadsRaw = Array.isArray(result?.threads) ? result.threads.filter(Boolean) : [];
+            const threadsFromResult = threadsRaw.map((t) => {
+              const extracted = t?.extractedEntities && typeof t.extractedEntities === "object" ? t.extractedEntities : {};
+              const first = (arr) => (Array.isArray(arr) && arr.length ? String(arr[0] ?? "").trim() : "");
+              return {
+                id: String(t?.id || `thr-${shortId()}`),
+                title: String(t?.title || "Thread"),
+                status: state.classifyMode === "llm" ? "ai classified" : "mock classified",
+                action: "Create new Issue",
+                linkedShipmentId: first(extracted.shipmentIds),
+                linkedSiNo: first(extracted.siIds),
+                linkedCustomer: first(extracted.customerNames),
+              };
+            });
+
+            const item = {
+              id: `raw-${shortId()}`,
+              source: "teams",
+              from: "営業A",
+              text: rawText,
+              receivedAt: at,
+              aiThreads: threadsFromResult.length ? threadsFromResult : decomposeRawRequestMock(rawText),
+              originalRawInputId: String(result?.rawInput?.id || ""),
+              pendingClarificationId: (() => {
+                const pcs = Array.isArray(result?.pendingClarifications) ? result.pendingClarifications.filter(Boolean) : [];
+                return pcs[0] && pcs[0].id ? String(pcs[0].id) : "";
+              })(),
+              matchedPendingClarificationId: result?.matchedPendingClarification?.id ? String(result.matchedPendingClarification.id) : "",
+              reflectedToApprovals: true,
+              messages: (() => {
+                const msgs = [{ role: "human", text: rawText, createdAt: at }];
+                const ctx = result?.contextResolution || null;
+                const q = ctx && ctx.clarificationQuestion ? String(ctx.clarificationQuestion).trim() : "";
+                if (ctx && String(ctx.status || "") !== "resolved_enough" && q) {
+                  msgs.push({ role: "ai", text: q, createdAt: at });
+                } else {
+                  msgs.push({ role: "ai", text: "承認センターに反映しました。", createdAt: at });
+                }
+                return msgs;
+              })(),
+            };
+            state.rawRequests = [item, ...(Array.isArray(state.rawRequests) ? state.rawRequests : [])];
+            state.activeConversationThreadId = computeConversationThreadsFromRawRequests(state.rawRequests)[0]?.id || null;
+          }
+
           const events = Array.isArray(result?.activityEvents) ? result.activityEvents.filter(Boolean) : [];
           const feedItems = events.map(activityEventToFeedItem);
           state.activityFeedItems = prependUniqueById(state.activityFeedItems, feedItems);
@@ -7620,10 +7793,15 @@ function setupNewTop() {
           text,
           receivedAt: at,
           aiThreads: decomposeRawRequestMock(text),
+          originalRawInputId: id,
+          reflectedToApprovals: true,
+          messages: [
+            { role: "human", text, createdAt: at },
+            { role: "ai", text: "（mock）承認センターに反映しました。", createdAt: at },
+          ],
         };
         state.rawRequests = [item, ...(Array.isArray(state.rawRequests) ? state.rawRequests : [])];
-        state.activeRawRequestId = id;
-        state.activeOperationalThreadId = (item.aiThreads[0] && item.aiThreads[0].id) || null;
+        state.activeConversationThreadId = computeConversationThreadsFromRawRequests(state.rawRequests)[0]?.id || null;
         renderApp();
       }
       return;
