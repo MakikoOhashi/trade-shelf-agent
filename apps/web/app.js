@@ -206,7 +206,8 @@ const state = {
 const newTopTabs = [
   { key: "shelf", label: "棚", subLabel: "Shelf" },
   { key: "issues", label: "承認センター", subLabel: "Approvals" },
-  { key: "requests", label: "変更・確認依頼", subLabel: "Requests" },
+  // Requests is still routable, but hidden from the primary nav (Todo.md).
+  { key: "requests", label: "変更・確認依頼", subLabel: "Requests", hiddenInNav: true },
   { key: "activity", label: "活動ログ", subLabel: "Activity" },
   { key: "settings", label: "Settings", subLabel: "" },
 ];
@@ -1504,6 +1505,7 @@ function renderNewTop() {
 
   const navHtml = `<nav class="top-nav" aria-label="Primary">
     ${newTopTabs
+      .filter((t) => !(t && t.hiddenInNav))
       .map((t) => {
         const active = t.key === tab;
         const icon = navIconByKey[t.key] || "•";
@@ -3246,7 +3248,7 @@ function renderNewTop() {
     </section>`;
   };
 
-  const renderRequests = () => {
+  const renderRequests = ({ embedded } = {}) => {
     const list = Array.isArray(state.rawRequests) ? state.rawRequests.filter(Boolean) : [];
     const conversationThreads = computeConversationThreadsFromRawRequests(list);
     const activeConversationThreadId = state.activeConversationThreadId || (conversationThreads[0] && conversationThreads[0].id) || null;
@@ -3456,11 +3458,15 @@ function renderNewTop() {
         </div>`
       : "";
 
-    return `<section class="req-page requests-hub" aria-label="Change & Check Requests">
-      <div class="req-title">
-        <div class="req-title__h">変更・確認依頼</div>
-        <div class="req-title__sub">Teams/Email由来の依頼を受信し、会話単位で処理します（mock）。</div>
-      </div>
+    return `<section class="req-page requests-hub ${embedded ? "req-page--embedded" : ""}" aria-label="Change & Check Requests">
+      ${
+        embedded
+          ? ""
+          : `<div class="req-title">
+              <div class="req-title__h">変更・確認依頼</div>
+              <div class="req-title__sub">Teams/Email由来の依頼を受信し、会話単位で処理します（mock）。</div>
+            </div>`
+      }
 
       <div class="requests-intake" aria-label="Intake">
         <div class="requests-intake__head">
@@ -3527,7 +3533,12 @@ function renderNewTop() {
     tab === "shelf"
       ? renderShelf()
       : tab === "issues"
-        ? renderIssues()
+        ? `<section class="operations-page" aria-label="Operations">
+            <div class="operations-layout" aria-label="Approvals + Requests layout">
+              <div class="operations-left" aria-label="Approvals">${renderIssues()}</div>
+              <div class="operations-right" aria-label="Requests">${renderRequests({ embedded: true })}</div>
+            </div>
+          </section>`
         : tab === "requests"
           ? renderRequests()
           : tab === "activity"
