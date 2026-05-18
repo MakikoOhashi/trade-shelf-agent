@@ -4555,6 +4555,10 @@ body {
   border-style: dashed;
 }
 
+#app .reply-candidate-card {
+  cursor: default;
+}
+
 #app .conversation-thread-card:hover {
   border-color: #0969da;
 }

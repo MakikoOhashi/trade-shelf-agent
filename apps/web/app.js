@@ -926,6 +926,10 @@ function mergePendingClarificationsFromIngestResult(result) {
 function normalizeConversationStatusKey(status) {
   const s = String(status || "").toLowerCase();
   if (s === "awaiting_clarification") return "awaiting_clarification";
+  if (s === "missing_context") return "awaiting_clarification";
+  if (s === "pending_clarification") return "awaiting_clarification";
+  if (s === "clarification_draft") return "awaiting_clarification";
+  if (s === "context_resolving") return "awaiting_clarification";
   if (s === "matched") return "matched";
   if (s === "reflected_to_approvals") return "reflected_to_approvals";
   if (s === "issue_linked") return "issue_linked";
@@ -1105,6 +1109,57 @@ function isPreIssueConversationThread(thread) {
   if (thread?.canonicalIssueLink?.issueId) return false;
 
   return true;
+}
+
+function isPreIssueItem(item) {
+  const status = String(item?.status || item?.resolutionStatus || item?.kind || "").trim();
+
+  if (
+    status === "awaiting_clarification" ||
+    status === "missing_context" ||
+    status === "pending_clarification" ||
+    status === "clarification_draft" ||
+    status === "context_resolving" ||
+    status === "awaiting_clarification_reply" ||
+    status === "awaiting_human_selection" ||
+    status === "needs_clarification" ||
+    status === "status_query"
+  ) {
+    return true;
+  }
+
+  if (item?.issueCandidateId) return false;
+  if (item?.approvalCandidateId) return false;
+  if (item?.linkedApprovalId) return false;
+  if (status === "reflected_to_approvals") return false;
+
+  return false;
+}
+
+function isApprovalCandidateItem(item) {
+  const status = String(item?.status || item?.resolutionStatus || item?.kind || "").trim();
+
+  if (
+    status === "awaiting_clarification" ||
+    status === "missing_context" ||
+    status === "pending_clarification" ||
+    status === "clarification_draft" ||
+    status === "context_resolving" ||
+    status === "awaiting_clarification_reply" ||
+    status === "awaiting_human_selection" ||
+    status === "needs_clarification" ||
+    status === "status_query"
+  ) {
+    return false;
+  }
+
+  return Boolean(
+    item?.issueCandidateId ||
+      item?.approvalCandidateId ||
+      item?.linkedApprovalId ||
+      status === "reflected_to_approvals" ||
+      status === "pending_approval",
+  );
 }
 
 function hasApprovalCandidateForThread(thread, { actionPlans, issueMutations } = {}) {
@@ -2303,6 +2358,57 @@ function renderNewTop() {
         issueMutations: Array.isArray(state.issueMutationItems) ? state.issueMutationItems : [],
       };
       const intakeCandidates = conversationThreads.filter((t) => isPreIssueConversationThread(t) && !hasApprovalCandidateForThread(t, approvalSide));
+      const replyCandidates = (() => {
+        const resolutions = Array.isArray(state.latestIngestResult?.intakeResolutions) ? state.latestIngestResult.intakeResolutions.filter(Boolean) : [];
+        const resolutionItems = resolutions.filter((r) => r && r.shouldCreateIssue === false && isPreIssueItem({ kind: "pending_clarification", status: r.status }));
+
+        const pending = Array.isArray(state.pendingClarifications) ? state.pendingClarifications.filter(Boolean) : [];
+        const pendingAwaiting = pending.filter((p) => {
+          const st = String(p?.status || "");
+          return st === "awaiting_clarification_reply" || st === "awaiting_human_selection";
+        });
+
+        const byId = new Map();
+
+        for (const p of pendingAwaiting) {
+          const id = String(p?.id || "").trim();
+          const key = `pc:${id || shortId()}`;
+          byId.set(key, {
+            id: key,
+            kind: "clarification_reply_candidate",
+            threadId: String(p?.threadId || "").trim(),
+            requesterName: String(p?.requesterName || "").trim() || "—",
+            sourceChannel: String(p?.sourceChannel || "").trim(),
+            followUpAt: p?.followUpAt ? String(p.followUpAt) : "",
+            missingFields: Array.isArray(p?.missingFields) ? p.missingFields.map((x) => String(x ?? "").trim()).filter(Boolean) : [],
+            bodyText: String(p?.clarificationQuestion || "").trim() || "対象のSIまたはShipmentを教えてください。",
+          });
+        }
+
+        for (const r of resolutionItems) {
+          const threadId = String(r?.threadId || "").trim();
+          if (!threadId) continue;
+          const key = `ir:${threadId}`;
+          const thr =
+            conversationThreads.find((t) => t && String(t.representativeThreadId || "") === threadId) ||
+            conversationThreads.find((t) => t && String(t.id || "") === threadId) ||
+            null;
+          byId.set(key, {
+            id: key,
+            kind: "clarification_reply_candidate",
+            threadId,
+            requesterName: String(thr?.requesterName || "").trim() || "—",
+            sourceChannel: String(thr?.sourceChannel || "").trim(),
+            followUpAt: "",
+            missingFields: Array.isArray(r?.missingFields) ? r.missingFields.map((x) => String(x ?? "").trim()).filter(Boolean) : [],
+            bodyText:
+              String((r?.status === "status_query" ? r?.statusAnswer : r?.clarificationQuestion) || "").trim() ||
+              "対象のSIまたはShipmentを教えてください。",
+          });
+        }
+
+        return Array.from(byId.values()).filter(Boolean);
+      })();
       const activeConversationThreadId = state.activeConversationThreadId || (intakeCandidates[0] && intakeCandidates[0].id) || null;
 
       const sourceLabel = (s) => {
@@ -2321,7 +2427,7 @@ function renderNewTop() {
         return `<span class="request-inbox-badge ${cls}">${escapeHtml(label)}</span>`;
       };
 
-      const cardsHtml = intakeCandidates
+      const threadCardsHtml = intakeCandidates
         .map((t) => {
           const isActive = Boolean(activeConversationThreadId && String(t.id) === String(activeConversationThreadId));
           const src = sourceLabel(t.sourceChannel);
@@ -2358,10 +2464,57 @@ function renderNewTop() {
         })
         .join("");
 
+      const replyCardsHtml = replyCandidates
+        .map((c) => {
+          const requester = String(c.requesterName || "—");
+          const src = sourceLabel(c.sourceChannel);
+          const followUpText = c.followUpAt ? formatLocalTime(String(c.followUpAt)) : "";
+          const missing = Array.isArray(c.missingFields) ? c.missingFields.filter(Boolean) : [];
+          const missingText = missing.length ? missing.join(", ") : "SI or Shipment";
+          const canOpenThread = Boolean(String(c.threadId || "").trim());
+          const preview = String(c.bodyText || "対象のSIまたはShipmentを教えてください。").trim();
+
+          const metaChips = [
+            `<span class="mini-chip">requester: ${escapeHtml(requester)}</span>`,
+            `<span class="mini-chip">missing: ${escapeHtml(missingText)}</span>`,
+            followUpText ? `<span class="mini-chip">followUp: <span class="nt-mono">${escapeHtml(followUpText)}</span></span>` : "",
+          ]
+            .filter(Boolean)
+            .join("");
+
+          return `<div class="conversation-thread-card conversation-thread-card--preissue reply-candidate-card" aria-label="Clarification reply candidate">
+            <div class="conversation-thread-meta">
+              <div class="conversation-thread-meta__left">
+                <div class="conversation-thread-card__sender">${escapeHtml(requester)}</div>
+                ${src ? `<span class="request-channel-badge">${escapeHtml(src)}</span>` : ""}
+              </div>
+              <div class="conversation-thread-meta__right">
+                <span class="request-inbox-badge is-pending">不足情報の確認待ち</span>
+              </div>
+            </div>
+            <div class="conversation-thread-card__title">${escapeHtml("確認返信候補")}</div>
+            <div class="conversation-thread-card__preview">${escapeHtml(preview)}</div>
+            <div class="conversation-thread-card__foot">
+              <span class="conversation-thread-card__chips">${metaChips}</span>
+              <span class="conversation-thread-card__foot-right">
+                <button class="btn btn--ghost btn--small" type="button" data-conversation-thread-open="${escapeHtml(String(c.threadId || ""))}" ${
+                  canOpenThread ? "" : "disabled"
+                }>会話を見る</button>
+                <button class="btn btn--primary btn--small" type="button" data-clarification-mock-send="${escapeHtml(String(c.id || ""))}">確認返信を送る</button>
+                <button class="btn btn--small" type="button" data-clarification-hold="${escapeHtml(String(c.id || ""))}">保留</button>
+              </span>
+            </div>
+          </div>`;
+        })
+        .join("");
+
+      const cardsHtml = [replyCardsHtml, threadCardsHtml].filter(Boolean).join("");
+      const totalCount = intakeCandidates.length + replyCandidates.length;
+
       return `<section class="request-inbox-panel request-inbox-panel--preissue" aria-label="Pre-issue requests">
         <div class="request-inbox-panel__head">
           <div class="request-inbox-panel__title">Issue作成前案件</div>
-          <div class="request-inbox-panel__count nt-mono">${escapeHtml(String(intakeCandidates.length))}</div>
+          <div class="request-inbox-panel__count nt-mono">${escapeHtml(String(totalCount))}</div>
         </div>
         <div class="request-inbox-panel__sub muted">確認が必要な依頼をここで補完し、Issue候補へ進めます。</div>
         <div class="conversation-thread-list">${
@@ -2531,7 +2684,6 @@ function renderNewTop() {
       const body = sorted.length ? sorted.map(issueRow).join("") : `<div class="nt-muted">No items</div>`;
       return `<div class="operations-main-column" aria-label="Operations main column">
         ${renderPreIssueThreads()}
-        ${renderReplyCandidates()}
         ${renderPendingMutations()}
         <section class="issue-list" aria-label="Issues list">
           <div class="issue-list__section-title">既存Issue</div>
@@ -3125,7 +3277,6 @@ function renderNewTop() {
     };
 
     if (state.activeIssueId) return renderIssueDetail(state.activeIssueId);
-    if (state.activeReplyCandidateId) return renderReplyCandidateDetail(state.activeReplyCandidateId);
     if (state.activeMutationId) return renderMutationDetail(state.activeMutationId);
     return renderIssueList();
   };
@@ -8209,56 +8360,47 @@ function setupNewTop() {
       return;
     }
 
-    const replyCandidateOpenEl = target.closest && target.closest("[data-reply-candidate-open]");
-    if (replyCandidateOpenEl) {
-      const id = replyCandidateOpenEl.getAttribute("data-reply-candidate-open") || "";
-      state.activeReplyCandidateId = id || null;
-      state.activeIssueId = null;
-      state.activeMutationId = null;
-      renderApp();
+    const clarificationSendEl = target.closest && target.closest("[data-clarification-mock-send]");
+    if (clarificationSendEl) {
+      const id = String(clarificationSendEl.getAttribute("data-clarification-mock-send") || "").trim();
+      if (!id) return;
+
+      const lookup = (() => {
+        if (id.startsWith("pc:")) {
+          const rawId = id.slice(3);
+          const pcs = Array.isArray(state.pendingClarifications) ? state.pendingClarifications.filter(Boolean) : [];
+          const p = pcs.find((x) => x && String(x.id || "") === rawId) || null;
+          if (!p) return null;
+          return {
+            threadId: String(p?.threadId || "").trim(),
+            requester: String(p?.requesterName || "").trim(),
+            bodyText: String(p?.clarificationQuestion || "").trim(),
+          };
+        }
+        if (id.startsWith("ir:")) {
+          const threadId = id.slice(3);
+          const rs = Array.isArray(state.latestIngestResult?.intakeResolutions) ? state.latestIngestResult.intakeResolutions.filter(Boolean) : [];
+          const r = rs.find((x) => x && String(x.threadId || "") === threadId) || null;
+          if (!r) return null;
+          return {
+            threadId,
+            requester: "",
+            bodyText: String((r?.status === "status_query" ? r?.statusAnswer : r?.clarificationQuestion) || "").trim(),
+          };
+        }
+        return null;
+      })();
+
+      const msg = lookup?.bodyText || "（mock）確認返信を送信しました。";
+      window.alert(`(mock) 確認返信を送信: ${msg}`);
       return;
     }
 
-    const replyBackEl = target.closest && target.closest("[data-reply-back]");
-    if (replyBackEl) {
-      state.activeReplyCandidateId = null;
-      renderApp();
-      return;
-    }
-
-    const replyApproveEl = target.closest && target.closest("[data-reply-approve]");
-    if (replyApproveEl) {
-      const id = replyApproveEl.getAttribute("data-reply-approve") || "";
-      const res = applyApprovalAction(id, "approve");
-      if (!res.ok) window.alert(`(mock) ${res.error}`);
-      renderApp();
-      return;
-    }
-
-    const replyHoldEl = target.closest && target.closest("[data-reply-hold]");
-    if (replyHoldEl) {
-      const id = replyHoldEl.getAttribute("data-reply-hold") || "";
-      const res = applyApprovalAction(id, "hold");
-      if (!res.ok) window.alert(`(mock) ${res.error}`);
-      renderApp();
-      return;
-    }
-
-    const replyEditEl = target.closest && target.closest("[data-reply-edit]");
-    if (replyEditEl) {
-      const id = replyEditEl.getAttribute("data-reply-edit") || "";
-      const res = applyApprovalAction(id, "edit");
-      if (!res.ok) window.alert(`(mock) ${res.error}`);
-      renderApp();
-      return;
-    }
-
-    const replyMockSendEl = target.closest && target.closest("[data-reply-mock-send]");
-    if (replyMockSendEl) {
-      const id = replyMockSendEl.getAttribute("data-reply-mock-send") || "";
-      const res = applyApprovalAction(id, "mock_send");
-      if (!res.ok) window.alert(`(mock) ${res.error}`);
-      renderApp();
+    const clarificationHoldEl = target.closest && target.closest("[data-clarification-hold]");
+    if (clarificationHoldEl) {
+      const id = String(clarificationHoldEl.getAttribute("data-clarification-hold") || "").trim();
+      if (!id) return;
+      window.alert(`(mock) 保留しました: ${id}`);
       return;
     }
 
