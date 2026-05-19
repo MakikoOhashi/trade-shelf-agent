@@ -724,6 +724,37 @@ function findActionPlanIdFromAnyId(idLike) {
   return "";
 }
 
+function matchesMutationId(item, idLike) {
+  if (!item) return false;
+  const id = String(idLike || "").trim();
+  if (!id) return false;
+
+  const candidates = [
+    item.id,
+    item.actionPlanId,
+    item.issueCandidateId,
+    item.mutationId,
+    item.approvalCandidateId,
+    item.issueId,
+    item.threadId,
+  ]
+    .map((v) => String(v || "").trim())
+    .filter(Boolean);
+
+  return candidates.includes(id);
+}
+
+function getMutationOpenId(item) {
+  if (!item) return "";
+  return (
+    String(item.id || "").trim() ||
+    String(item.actionPlanId || "").trim() ||
+    String(item.issueCandidateId || "").trim() ||
+    String(item.mutationId || "").trim() ||
+    String(item.approvalCandidateId || "").trim()
+  );
+}
+
 function updateIngestResultStatusesForActionPlan(actionPlanId, nextStatus) {
   const apId = String(actionPlanId || "").trim();
   const status = String(nextStatus || "").trim();
@@ -2535,7 +2566,7 @@ function renderNewTop() {
             return `根拠: ${src} · ${who} · ${count} messages`;
           })();
 
-          return `<div class="pending-mutations__item" role="button" tabindex="0" data-mutation-open="${escapeHtml(String(rep?.id || ""))}">
+          return `<div class="pending-mutations__item" role="button" tabindex="0" data-mutation-open="${escapeHtml(getMutationOpenId(rep))}">
             <div class="pending-mutations__top">
               <div class="pending-mutations__title-row">
                 <div class="pending-mutations__title">${escapeHtml(title)}</div>
@@ -3039,10 +3070,10 @@ function renderNewTop() {
             const updatedAt = String((approvalEntry && approvalEntry.updatedAt) || ap?.updatedAt || "");
             const updatedText = relativeUpdatedText(updatedAt);
 
-            const mutation =
+          const mutation =
               allMutations.find((m) => (issueId && String(m?.issueId || "") === issueId) || (threadId && String(m?.threadId || "") === threadId)) ||
               null;
-            const mutationOpenId = mutation && mutation.id ? String(mutation.id) : apId;
+            const mutationOpenId = getMutationOpenId(mutation) || getMutationOpenId(ap) || apId;
 
             const sourceThread = threadId ? conversationThreads.find((t) => t && String(t?.representativeThreadId || "") === threadId) : null;
             const cc = sourceThread && typeof sourceThread.messageCount === "number" ? sourceThread.messageCount : 0;
@@ -3143,8 +3174,8 @@ function renderNewTop() {
     const renderMutationDetail = (mutationId) => {
       const mutId = String(mutationId || "").trim();
       let mut =
-        pendingMutations.find((x) => x && String(x.id) === mutId) ||
-        (Array.isArray(state.issueMutationItems) ? state.issueMutationItems.find((x) => x && String(x.id) === mutId) : null) ||
+        pendingMutations.find((x) => matchesMutationId(x, mutId)) ||
+        (Array.isArray(state.issueMutationItems) ? state.issueMutationItems.find((x) => matchesMutationId(x, mutId)) : null) ||
         null;
 
       if (!mut && mutId) {
@@ -3176,7 +3207,11 @@ function renderNewTop() {
         }
       }
 
-      if (!mut) return `<div class="nt-muted">LLM候補が見つかりませんでした。</div>`;
+      if (!mut)
+        return `<div class="detail-empty">
+          <div class="nt-muted">LLM候補が見つかりませんでした。</div>
+          <div class="nt-mono nt-muted">Mutation detail not found: ${escapeHtml(mutId || "(empty)")}</div>
+        </div>`;
 
       const normalizedMut = { ...mut, title: normalizeMutationTitle(mut?.title) };
       const issueLike = buildIssueLikeFromMutation(normalizedMut);
@@ -3224,6 +3259,10 @@ function renderNewTop() {
       const approvalEntry = resolvedActionPlanId ? state.approvalsByActionPlanId?.[resolvedActionPlanId] : null;
       const approvalStatus = String((approvalEntry && approvalEntry.status) || (matchedPlan && matchedPlan.status) || "pending_approval");
       const availableActions = getAvailableApprovalActions(approvalStatus);
+      const canApprove = Boolean(availableActions.approve);
+      const canEdit = Boolean(availableActions.edit);
+      const canHold = Boolean(availableActions.hold);
+      const canMockSend = Boolean(availableActions.mock_send);
 
       const draftPreview = issueLike && issueLike.draft ? issueLike.draft : null;
 
@@ -3357,8 +3396,8 @@ function renderNewTop() {
           <button class="btn btn--primary btn--small" type="button" data-mutation-mock-send="${escapeHtml(actionKey)}" ${
             canMockSend ? "" : "disabled"
           }>Mock send</button>
-          <button class="btn btn--small" type="button" data-mutation-edit="${escapeHtml(actionKey)}" ${canApprove ? "" : "disabled"}>Edit draft</button>
-          <button class="btn btn--small" type="button" data-mutation-hold="${escapeHtml(actionKey)}" ${canApprove ? "" : "disabled"}>Hold</button>
+          <button class="btn btn--small" type="button" data-mutation-edit="${escapeHtml(actionKey)}" ${canEdit ? "" : "disabled"}>Edit draft</button>
+          <button class="btn btn--small" type="button" data-mutation-hold="${escapeHtml(actionKey)}" ${canHold ? "" : "disabled"}>Hold</button>
         </div>
       </div>`;
 
@@ -3755,8 +3794,8 @@ function renderNewTop() {
       </section>`;
     };
 
-    if (state.activeIssueId) return renderIssueDetail(state.activeIssueId);
     if (state.activeMutationId) return renderMutationDetail(state.activeMutationId);
+    if (state.activeIssueId) return renderIssueDetail(state.activeIssueId);
     if (state.activeReplyCandidateId) return renderReplyCandidateDetail(state.activeReplyCandidateId);
     return renderIssueList();
   };
@@ -8875,9 +8914,15 @@ function setupNewTop() {
     const mutationOpenEl = target.closest && target.closest("[data-mutation-open]");
     if (mutationOpenEl) {
       const id = mutationOpenEl.getAttribute("data-mutation-open") || "";
+      console.log("[CLICK mutation-open]", {
+        target,
+        row: mutationOpenEl,
+        mutationId: id,
+      });
       state.activeMutationId = id || null;
       state.activeIssueId = null;
       state.activeReplyCandidateId = null;
+      console.log("[SET activeMutationId]", state.activeMutationId);
       renderApp();
       return;
     }
@@ -9276,6 +9321,7 @@ function setupNewTop() {
     const mutationOpenEl = target.closest && target.closest("[data-mutation-open]");
     if (mutationOpenEl) {
       const id = mutationOpenEl.getAttribute("data-mutation-open") || "";
+      console.log("[KEY mutation-open]", { target, row: mutationOpenEl, mutationId: id });
       state.activeMutationId = id || null;
       state.activeIssueId = null;
       renderApp();
