@@ -507,6 +507,25 @@ function groupIssueMutationsForApproval(mutations) {
     .filter(Boolean);
 }
 
+function findCanonicalConversationIdBySourceRawInputId(sourceRawInputId) {
+  const id = String(sourceRawInputId || "").trim();
+  if (!id) return "";
+  const raw = (Array.isArray(state.rawRequests) ? state.rawRequests : []).find((r) => {
+    if (!r) return false;
+    const key = String(r.sourceRawInputId || r.originalRawInputId || r.id || "").trim();
+    return key === id;
+  });
+  return String(raw?.conversationThreadId || "").trim();
+}
+
+function findCanonicalConversationIdByOperationalThreadId(operationalThreadId) {
+  const id = String(operationalThreadId || "").trim();
+  if (!id) return "";
+  const threads = computeConversationThreadsFromRawRequests(state.rawRequests);
+  const hit = threads.find((t) => String(t?.representativeThreadId || "").trim() === id) || null;
+  return String(hit?.id || "").trim();
+}
+
 function findSourceConversationThread(candidate, conversationThreads) {
   if (!candidate) return null;
 
@@ -516,6 +535,20 @@ function findSourceConversationThread(candidate, conversationThreads) {
     ...(Array.isArray(state.latestIngestResult?.threads) ? state.latestIngestResult.threads : []),
   ].filter(Boolean);
   const allThreads = [...baseThreads, ...ingestThreads];
+  const DEBUG_SOURCE_THREAD = false;
+
+  if (DEBUG_SOURCE_THREAD) {
+    console.table(
+      allThreads.map((thread) => ({
+        id: thread?.id,
+        channel: thread?.channel || thread?.sourceChannel,
+        requester: thread?.requester || thread?.requesterName || thread?.sender,
+        messages: Array.isArray(thread?.messages) ? thread.messages.filter(Boolean).length : Number(thread?.messageCount ?? 0) || 0,
+        sourceRawInputId: thread?.sourceRawInputId,
+        rawInputId: thread?.rawInputId,
+      })),
+    );
+  }
 
   const matchesThreadId = (thread, idLike) => {
     if (!thread) return false;
@@ -548,20 +581,96 @@ function findSourceConversationThread(candidate, conversationThreads) {
     return match?.[0] || "";
   };
 
-  const findByAnyId = (ids) => {
-    const list = Array.isArray(ids) ? ids.filter(Boolean).map((x) => String(x).trim()).filter(Boolean) : [];
-    for (const id of list) {
-      const thr = allThreads.find((t) => matchesThreadId(t, id)) || null;
-      if (thr) return thr;
-    }
-    return null;
+  const getThreadMessageCount = (thread) => {
+    if (!thread) return 0;
+    const list = Array.isArray(thread.messages) ? thread.messages.filter(Boolean) : [];
+    if (list.length) return list.length;
+    const raw = thread.messageCount ?? thread.messagesCount ?? thread.count;
+    const n = Number(raw);
+    return Number.isFinite(n) ? n : 0;
   };
 
+  const scoreThreadCandidate = (thread) => {
+    if (!thread) return -999;
+    let score = 0;
+
+    const msgCount = getThreadMessageCount(thread);
+    if (msgCount > 0) score += 100;
+
+    const ch = String(thread.channel || thread.sourceChannel || "").toLowerCase();
+    if (ch === "teams" || ch === "email") score += 20;
+    else if (ch) score += 10;
+
+    const who = String(thread.requester || thread.requesterName || thread.sender || thread.from || "").trim();
+    if (who) score += 20;
+
+    const title = String(thread.title || "").trim();
+    const last = String(thread.lastMessage || thread.lastMessageText || "").trim();
+    if (title || last) score += 10;
+
+    return score;
+  };
+
+  const pickBestThreadCandidate = (candidates) => {
+    const list = Array.isArray(candidates) ? candidates.filter(Boolean) : [];
+    if (!list.length) return null;
+    return (
+      list
+        .slice()
+        .sort((a, b) => {
+          const s = scoreThreadCandidate(b) - scoreThreadCandidate(a);
+          if (s) return s;
+          return getThreadMessageCount(b) - getThreadMessageCount(a);
+        })[0] || null
+    );
+  };
+
+  const findByAnyId = (ids) => {
+    const list = Array.isArray(ids) ? ids.filter(Boolean).map((x) => String(x).trim()).filter(Boolean) : [];
+    const matched = [];
+    const seen = new Set();
+    for (const id of list) {
+      const threads = allThreads.filter((t) => matchesThreadId(t, id));
+      for (const t of threads) {
+        const key = String(t?.id || t?.threadId || t?.conversationThreadId || t?.sourceThreadId || "") || JSON.stringify(t);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        matched.push(t);
+      }
+    }
+
+    if (DEBUG_SOURCE_THREAD) {
+      console.table(
+        matched.map((thread) => ({
+          id: thread?.id,
+          channel: thread?.channel || thread?.sourceChannel,
+          requester: thread?.requester || thread?.requesterName || thread?.sender,
+          messages: getThreadMessageCount(thread),
+          score: scoreThreadCandidate(thread),
+          sourceRawInputId: thread?.sourceRawInputId,
+          rawInputId: thread?.rawInputId,
+        })),
+      );
+    }
+
+    return pickBestThreadCandidate(matched);
+  };
+
+  const canonicalConversationId = String(candidate.canonicalConversationId || candidate.canonicalId || "").trim();
+  if (canonicalConversationId) {
+    const byConv = baseThreads.find((t) => t && String(t.id || "").trim() === canonicalConversationId) || null;
+    if (byConv) return byConv;
+  }
+
+  const candidateConversationThreadId = String(candidate.conversationThreadId || "").trim();
+  const conversationIdLike = candidateConversationThreadId.startsWith("CONV:") ? candidateConversationThreadId : "";
   const explicitIds = [
+    canonicalConversationId,
+    conversationIdLike,
+    candidate.operationalThreadId,
     candidate.sourceThreadId,
-    candidate.conversationThreadId,
-    candidate.relatedConversationId,
     candidate.threadId,
+    candidate.relatedConversationId,
     extractRawThreadId(candidate.id),
   ];
 
@@ -620,7 +729,7 @@ function findSourceConversationThread(candidate, conversationThreads) {
     String(candidate.rawInputId || "").trim() ||
     extractRawInputId(candidate.id);
   if (rawInputId) {
-    const byRaw = allThreads.find((thread) =>
+    const rawMatches = allThreads.filter((thread) =>
       [
         thread.sourceRawInputId,
         thread.rawInputId,
@@ -633,6 +742,7 @@ function findSourceConversationThread(candidate, conversationThreads) {
         .filter(Boolean)
         .some((value) => String(value).includes(rawInputId)),
     );
+    const byRaw = pickBestThreadCandidate(rawMatches);
     if (byRaw) return byRaw;
   }
 
@@ -1212,22 +1322,64 @@ function displayConversationStatusLabel(status) {
   }
 }
 
+function canonicalRawInputFromRequest(r) {
+  const source = String(r?.source || "teams").trim();
+  const normalizedSource = source === "email" ? "email" : "teams";
+  const id = String(r?.originalRawInputId || r?.sourceRawInputId || r?.id || "").trim() || `raw-${shortId()}`;
+  return {
+    id,
+    source: normalizedSource,
+    receivedAt: String(r?.receivedAt || ""),
+    senderName: String(r?.from || ""),
+    channel: String(source || ""),
+    rawText: String(r?.text || ""),
+    status: "received",
+  };
+}
+
+function resolveConversationThreadIdForRawRequest(rawRequest) {
+  const pendingClarifications = Array.isArray(state.pendingClarifications) ? state.pendingClarifications.filter(Boolean) : [];
+  const canonical = resolveCanonicalConversation(canonicalRawInputFromRequest(rawRequest), { pendingClarifications, bucketMinutes: 15 });
+  return String(canonical?.conversationThreadId || "").trim() || "";
+}
+
+function nextConversationMessageSequence(conversationThreadId) {
+  const convId = String(conversationThreadId || "").trim();
+  if (!convId) return 1;
+
+  const list = Array.isArray(state.rawRequests) ? state.rawRequests.filter(Boolean) : [];
+  let max = 0;
+  for (const raw of list) {
+    const rawConv = String(raw?.conversationThreadId || "").trim() || resolveConversationThreadIdForRawRequest(raw);
+    if (!rawConv || rawConv !== convId) continue;
+    const msgs = Array.isArray(raw?.messages) ? raw.messages : [];
+    for (const m of msgs) {
+      const seq = Number(m?.sequence);
+      if (Number.isFinite(seq)) max = Math.max(max, seq);
+    }
+  }
+  return max + 1;
+}
+
+function appendConversationMessagesWithSequence(rawRequest, newMessages) {
+  if (!rawRequest) return;
+  if (!Array.isArray(rawRequest.messages)) rawRequest.messages = [];
+
+  const list = Array.isArray(newMessages) ? newMessages.filter(Boolean) : [];
+  if (!list.length) return;
+
+  const convId = String(rawRequest?.conversationThreadId || "").trim();
+  let nextSeq = convId ? nextConversationMessageSequence(convId) : 1;
+
+  for (const m of list) {
+    rawRequest.messages.push({ ...m, sequence: nextSeq });
+    nextSeq += 1;
+  }
+}
+
 function computeConversationThreadsFromRawRequests(rawRequests) {
   const list = Array.isArray(rawRequests) ? rawRequests.filter(Boolean) : [];
-  const rawInputFromRequest = (r) => {
-    const source = String(r?.source || "teams").trim();
-    const normalizedSource = source === "email" ? "email" : "teams";
-    const id = String(r?.originalRawInputId || r?.sourceRawInputId || r?.id || "").trim() || `raw-${shortId()}`;
-    return {
-      id,
-      source: normalizedSource,
-      receivedAt: String(r?.receivedAt || ""),
-      senderName: String(r?.from || ""),
-      channel: String(source || ""),
-      rawText: String(r?.text || ""),
-      status: "received",
-    };
-  };
+  const rawInputFromRequest = (r) => canonicalRawInputFromRequest(r);
 
   const pendingClarifications = Array.isArray(state.pendingClarifications) ? state.pendingClarifications.filter(Boolean) : [];
   const ingestLinks = Array.isArray(state.latestIngestResult?.links) ? state.latestIngestResult.links.filter(Boolean) : [];
@@ -1245,19 +1397,19 @@ function computeConversationThreadsFromRawRequests(rawRequests) {
   const uniq = (arr) => Array.from(new Set((Array.isArray(arr) ? arr : []).map((x) => String(x || "").trim()).filter(Boolean)));
 
   const threads = Array.from(groups.entries()).map(([key, items]) => {
-    const sorted = items
-      .slice()
-      .sort((a, b) => String(a?.receivedAt || "").localeCompare(String(b?.receivedAt || "")) || String(a?.id || "").localeCompare(String(b?.id || "")));
+    // Keep "発生順" as stored in `state.rawRequests` (append order).
+    // `receivedAt` can collide at minute resolution, so timestamp sort is unreliable.
+    const inOrder = items.slice();
 
-    const last = sorted[sorted.length - 1] || null;
-    const first = sorted[0] || null;
+    const last = inOrder[inOrder.length - 1] || null;
+    const first = inOrder[0] || null;
     const requesterName = String(last?.from || first?.from || "—");
     const sourceChannel = String(last?.source || first?.source || "");
     const updatedAt = String(last?.receivedAt || first?.receivedAt || "");
     const lastMessageText = String(last?.text || "");
 
     const messages = [];
-    for (const it of sorted) {
+    for (const it of inOrder) {
       const itMsgs = Array.isArray(it?.messages) ? it.messages.filter(Boolean) : [];
       if (itMsgs.length) {
         for (const m of itMsgs) {
@@ -1276,19 +1428,19 @@ function computeConversationThreadsFromRawRequests(rawRequests) {
     const messagesWithSequence = withStableMessageSequence(messages);
 
     const relatedSiIds = uniq(
-      sorted.flatMap((x) => (Array.isArray(x?.aiThreads) ? x.aiThreads : []).map((t) => (t && t.linkedSiNo ? String(t.linkedSiNo) : ""))),
+      inOrder.flatMap((x) => (Array.isArray(x?.aiThreads) ? x.aiThreads : []).map((t) => (t && t.linkedSiNo ? String(t.linkedSiNo) : ""))),
     );
     const relatedIssueIds = uniq(
-      sorted.flatMap((x) => (Array.isArray(x?.aiThreads) ? x.aiThreads : []).map((t) => (t && t.linkedIssueId ? String(t.linkedIssueId) : ""))),
+      inOrder.flatMap((x) => (Array.isArray(x?.aiThreads) ? x.aiThreads : []).map((t) => (t && t.linkedIssueId ? String(t.linkedIssueId) : ""))),
     );
 
     const pendingId =
-      sorted.map((x) => String(x?.pendingClarification?.id || x?.pendingClarificationId || "").trim()).find(Boolean) || "";
+      inOrder.map((x) => String(x?.pendingClarification?.id || x?.pendingClarificationId || "").trim()).find(Boolean) || "";
     const matchedId =
-      sorted.map((x) => String(x?.matchedPendingClarification?.id || x?.matchedPendingClarificationId || "").trim()).find(Boolean) || "";
+      inOrder.map((x) => String(x?.matchedPendingClarification?.id || x?.matchedPendingClarificationId || "").trim()).find(Boolean) || "";
 
     const representativeThreadId = (() => {
-      for (const x of sorted) {
+      for (const x of inOrder) {
         const threads = Array.isArray(x?.aiThreads) ? x.aiThreads.filter(Boolean) : [];
         for (const t of threads) {
           const id = String(t?.id || "").trim();
@@ -1309,7 +1461,7 @@ function computeConversationThreadsFromRawRequests(rawRequests) {
         ingestLinks.some((l) => String(l?.threadId || "") === representativeThreadId && String(l?.entityType || "") === "SI" && l?.entityId));
 
     const reflectedToApprovals = Boolean(
-      sorted.some((x) => x && x.reflectedToApprovals) ||
+      inOrder.some((x) => x && x.reflectedToApprovals) ||
         (representativeThreadId && ingestActionPlans.some((ap) => String(ap?.threadId || "") === representativeThreadId)) ||
         (canonicalIssue &&
           canonicalIssue.issueId &&
@@ -1324,7 +1476,7 @@ function computeConversationThreadsFromRawRequests(rawRequests) {
     );
 
     const threadTitles = uniq(
-      sorted.flatMap((x) => (Array.isArray(x?.aiThreads) ? x.aiThreads : []).map((t) => (t && t.title ? String(t.title) : ""))),
+      inOrder.flatMap((x) => (Array.isArray(x?.aiThreads) ? x.aiThreads : []).map((t) => (t && t.title ? String(t.title) : ""))),
     );
     const titleParts = [];
     if (threadTitles.length) titleParts.push(threadTitles[0]);
@@ -1488,6 +1640,15 @@ function formatRequestSourceLabel(source) {
   return v || "-";
 }
 
+function getConversationThreadMessageCount(thread) {
+  if (!thread) return 0;
+  const list = Array.isArray(thread.messages) ? thread.messages.filter(Boolean) : [];
+  if (list.length) return list.length;
+  const raw = thread.messageCount ?? thread.messagesCount ?? thread.count;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : 0;
+}
+
 function withStableMessageSequence(messages) {
   const list = Array.isArray(messages) ? messages.filter(Boolean) : [];
   const maxExisting = list.reduce((max, m) => {
@@ -1526,24 +1687,8 @@ function sortConversationMessagesOldestFirst(messages) {
   return messagesWithIndex;
 }
 
-function openConversationThreadModalById(threadId) {
-  const id = String(threadId || "").trim();
-  if (!id) return;
-
-  const threads = computeConversationThreadsFromRawRequests(state.rawRequests);
-  let thr = threads.find((t) => t && String(t.id) === String(id)) || null;
-  if (!thr) {
-    thr =
-      findSourceConversationThread(
-        { sourceThreadId: id, conversationThreadId: id, threadId: id, id },
-        threads,
-      ) || null;
-  }
-  if (!thr) {
-    window.alert("Conversation thread not found.");
-    return;
-  }
-
+function openConversationThreadModal(thr) {
+  if (!thr) return;
   const title = String(thr.title || "会話");
   const who = String(thr.requesterName || "—");
   const src = formatRequestSourceLabel(thr.sourceChannel);
@@ -1563,9 +1708,7 @@ function openConversationThreadModalById(threadId) {
     .join("");
 
   const normalizedMessages = withStableMessageSequence(Array.isArray(thr.messages) ? thr.messages : []);
-  const sortedMessages = sortConversationMessagesOldestFirst(normalizedMessages);
-
-  const logHtml = sortedMessages
+  const logHtml = normalizedMessages
     .map((m) => {
       const role = String(m?.role || "") === "ai" ? "ai" : "human";
       const sender = role === "ai" ? "AI" : who;
@@ -1587,6 +1730,20 @@ function openConversationThreadModalById(threadId) {
       <div class="conversation-thread-modal__log">${logHtml || `<div class="nt-muted">No messages</div>`}</div>
     </div>`,
   });
+}
+
+function openConversationThreadModalById(threadId) {
+  const id = String(threadId || "").trim();
+  if (!id) return;
+
+  const threads = computeConversationThreadsFromRawRequests(state.rawRequests);
+  const direct = threads.find((t) => t && String(t.id || "").trim() === id) || null;
+  const thr = direct || findSourceConversationThread({ canonicalConversationId: id, operationalThreadId: id, sourceThreadId: id, threadId: id, id }, threads) || null;
+  if (!thr) {
+    window.alert("Conversation thread not found.");
+    return;
+  }
+  openConversationThreadModal(thr);
 }
 
 function getMockEvidenceArchiveItems() {
@@ -2794,8 +2951,13 @@ function renderNewTop() {
             id: key,
             kind: "clarification_reply_candidate",
             threadId,
+            operationalThreadId: threadId,
             sourceThreadId: threadId,
-            conversationThreadId: threadId,
+            canonicalConversationId: findCanonicalConversationIdBySourceRawInputId(p?.sourceRawInputId) || findCanonicalConversationIdByOperationalThreadId(threadId),
+            conversationThreadId:
+              findCanonicalConversationIdBySourceRawInputId(p?.sourceRawInputId) ||
+              findCanonicalConversationIdByOperationalThreadId(threadId) ||
+              undefined,
             requesterName: String(p?.requesterName || "").trim() || "—",
             sourceChannel: String(p?.sourceChannel || "").trim(),
             followUpAt: p?.followUpAt ? String(p.followUpAt) : "",
@@ -2816,8 +2978,13 @@ function renderNewTop() {
             id: key,
             kind: "clarification_reply_candidate",
             threadId,
+            operationalThreadId: threadId,
             sourceThreadId: threadId,
-            conversationThreadId: threadId,
+            canonicalConversationId: findCanonicalConversationIdBySourceRawInputId(r?.sourceRawInputId) || findCanonicalConversationIdByOperationalThreadId(threadId),
+            conversationThreadId:
+              findCanonicalConversationIdBySourceRawInputId(r?.sourceRawInputId) ||
+              findCanonicalConversationIdByOperationalThreadId(threadId) ||
+              undefined,
             requesterName: String(thr?.requesterName || "").trim() || "—",
             sourceChannel: String(thr?.sourceChannel || "").trim(),
             followUpAt: "",
@@ -3332,17 +3499,30 @@ function renderNewTop() {
                   (x) => x && ((issueId && String(x.issueId || "") === issueId) || (threadId && String(x.threadId || "") === threadId)),
                 )
               : null) || null;
-          mut =
-            fromLinked ||
-            ({
-              id: mutId,
-              issueId: issueId || mutId,
-              threadId,
-              action: "mark_approval_required",
-              title: String(plan.title || "Issue candidate"),
-              body: String(plan.description || ""),
-              sourceRawInputId: String(plan.sourceRawInputId || ""),
-              linkedEntities: Array.isArray(plan.linkedEntities) ? plan.linkedEntities : [],
+	          mut =
+	            fromLinked ||
+	            ({
+	              id: mutId,
+	              actionPlanId: mutId,
+	              relatedActionPlanId: mutId,
+	              issueId: issueId || mutId,
+	              threadId,
+	              operationalThreadId: threadId || undefined,
+	              canonicalConversationId:
+	                findCanonicalConversationIdBySourceRawInputId(plan.sourceRawInputId) ||
+	                findCanonicalConversationIdByOperationalThreadId(threadId) ||
+	                undefined,
+	              sourceThreadId: threadId || String(plan.sourceThreadId || "").trim() || undefined,
+	              conversationThreadId:
+	                findCanonicalConversationIdBySourceRawInputId(plan.sourceRawInputId) ||
+	                findCanonicalConversationIdByOperationalThreadId(threadId) ||
+	                undefined,
+	              relatedConversationId: String(plan.relatedConversationId || "").trim(),
+	              action: "mark_approval_required",
+	              title: String(plan.title || "Issue candidate"),
+	              body: String(plan.description || ""),
+	              sourceRawInputId: String(plan.sourceRawInputId || ""),
+	              linkedEntities: Array.isArray(plan.linkedEntities) ? plan.linkedEntities : [],
               confidence: typeof plan.confidence === "number" ? plan.confidence : undefined,
               sourceLabel: String(plan.sourceLabel || ""),
             });
@@ -3364,7 +3544,7 @@ function renderNewTop() {
       const cs = issueLike.currentStatus || {};
 
       const conversationThreads = computeConversationThreadsFromRawRequests(state.rawRequests);
-      const sourceThread = resolveThreadForApprovalCandidate(normalizedMut, conversationThreads);
+      let sourceThread = resolveThreadForApprovalCandidate(normalizedMut, conversationThreads);
       if (
         !sourceThread &&
         (String(normalizedMut?.sourceThreadId || "") ||
@@ -3398,6 +3578,10 @@ function renderNewTop() {
 
       const actionPlanId = matchedPlan && matchedPlan.id ? String(matchedPlan.id) : "";
       const resolvedActionPlanId = actionPlanId || findActionPlanIdFromAnyId(String(mut?.issueId || "") || String(mut?.threadId || "") || "");
+
+      if (!sourceThread && resolvedActionPlanId) {
+        sourceThread = resolveThreadForApprovalCandidate({ ...normalizedMut, actionPlanId: resolvedActionPlanId }, conversationThreads);
+      }
       const approvalEntry = resolvedActionPlanId ? state.approvalsByActionPlanId?.[resolvedActionPlanId] : null;
       const approvalStatus = String((approvalEntry && approvalEntry.status) || (matchedPlan && matchedPlan.status) || "pending_approval");
       const availableActions = getAvailableApprovalActions(approvalStatus);
@@ -3637,14 +3821,22 @@ function renderNewTop() {
 
       const evidenceHtml = (() => {
         if (!sourceThread) return "";
+        const evidenceMessageCount = getConversationThreadMessageCount(sourceThread);
+        if (!evidenceMessageCount) return "";
         const src = formatRequestSourceLabel(sourceThread.sourceChannel);
-        const who = String(sourceThread.requesterName || "—");
-        const count = typeof sourceThread.messageCount === "number" ? sourceThread.messageCount : 0;
-        const summary = `根拠: ${src} · ${who} · ${count} messages`;
+        const who = String(sourceThread.requesterName || sourceThread.requester || sourceThread.sender || "—");
+        const summary = `根拠: ${src} · ${who} · ${evidenceMessageCount} messages`;
+        const threadId = String(sourceThread.id || "").trim();
+        if (threadId) {
+          if (!state.conversationThreadCacheById || typeof state.conversationThreadCacheById !== "object") {
+            state.conversationThreadCacheById = {};
+          }
+          state.conversationThreadCacheById[threadId] = sourceThread;
+        }
         return `<div class="candidate-card-actions" aria-label="Evidence thread">
           <div class="evidence-summary">${escapeHtml(summary)}</div>
           <button class="btn btn--ghost btn--small evidence-thread-button" type="button" data-conversation-thread-open="${escapeHtml(
-            String(sourceThread.id || ""),
+            threadId,
           )}">根拠会話を見る</button>
         </div>`;
       })();
@@ -8803,7 +8995,9 @@ function setupNewTop() {
       if (id) {
         state.activeConversationThreadId = id;
         renderApp();
-        openConversationThreadModalById(id);
+        const cached = state.conversationThreadCacheById && typeof state.conversationThreadCacheById === "object" ? state.conversationThreadCacheById[id] : null;
+        if (cached) openConversationThreadModal(cached);
+        else openConversationThreadModalById(id);
       }
       return;
     }
@@ -8917,35 +9111,37 @@ function setupNewTop() {
               };
             });
 
-            const item = {
-              id: `raw-${shortId()}`,
-              source: "teams",
-              from: "営業A",
-              text: rawText,
-              receivedAt: at,
-              aiThreads: threadsFromResult.length ? threadsFromResult : decomposeRawRequestMock(rawText),
-              originalRawInputId: String(result?.rawInput?.id || ""),
-              pendingClarificationId: (() => {
-                const pcs = Array.isArray(result?.pendingClarifications) ? result.pendingClarifications.filter(Boolean) : [];
-                return pcs[0] && pcs[0].id ? String(pcs[0].id) : "";
-              })(),
-              matchedPendingClarificationId: result?.matchedPendingClarification?.id ? String(result.matchedPendingClarification.id) : "",
-              reflectedToApprovals: true,
-              messages: (() => {
-                const msgs = [{ role: "human", text: rawText, createdAt: at, sequence: 1 }];
-                const ctx = result?.contextResolution || null;
-                const q = ctx && ctx.clarificationQuestion ? String(ctx.clarificationQuestion).trim() : "";
-                if (ctx && String(ctx.status || "") !== "resolved_enough" && q) {
-                  msgs.push({ role: "ai", text: q, createdAt: at, sequence: 2 });
-                } else {
-                  msgs.push({ role: "ai", text: "承認センターに反映しました。", createdAt: at, sequence: 2 });
-                }
-                return msgs;
-              })(),
-            };
-            state.rawRequests = [item, ...(Array.isArray(state.rawRequests) ? state.rawRequests : [])];
-            state.activeConversationThreadId = computeConversationThreadsFromRawRequests(state.rawRequests)[0]?.id || null;
-          }
+	            const item = {
+	              id: `raw-${shortId()}`,
+	              source: "teams",
+	              from: "営業A",
+	              text: rawText,
+	              receivedAt: at,
+	              aiThreads: threadsFromResult.length ? threadsFromResult : decomposeRawRequestMock(rawText),
+	              originalRawInputId: String(result?.rawInput?.id || ""),
+	              pendingClarificationId: (() => {
+	                const pcs = Array.isArray(result?.pendingClarifications) ? result.pendingClarifications.filter(Boolean) : [];
+	                return pcs[0] && pcs[0].id ? String(pcs[0].id) : "";
+	              })(),
+	              matchedPendingClarificationId: result?.matchedPendingClarification?.id ? String(result.matchedPendingClarification.id) : "",
+	              reflectedToApprovals: true,
+	              messages: [],
+	            };
+	            item.conversationThreadId = resolveConversationThreadIdForRawRequest(item);
+	            const ctx = result?.contextResolution || null;
+	            const q = ctx && ctx.clarificationQuestion ? String(ctx.clarificationQuestion).trim() : "";
+	            const aiText = ctx && String(ctx.status || "") !== "resolved_enough" && q ? q : "承認センターに反映しました。";
+	            appendConversationMessagesWithSequence(item, [
+	              { role: "human", text: rawText, createdAt: at },
+	              { role: "ai", text: aiText, createdAt: at },
+	            ]);
+
+	            const next = Array.isArray(state.rawRequests) ? state.rawRequests.slice() : [];
+	            next.push(item);
+	            state.rawRequests = next;
+
+	            if (item.conversationThreadId) state.activeConversationThreadId = item.conversationThreadId;
+	          }
 
           const events = Array.isArray(result?.activityEvents) ? result.activityEvents.filter(Boolean) : [];
           const feedItems = events.map(activityEventToFeedItem);
@@ -8956,7 +9152,7 @@ function setupNewTop() {
           const intakeResolutions = Array.isArray(result?.intakeResolutions) ? result.intakeResolutions.filter(Boolean) : [];
           const matchedThreads = Array.isArray(result?.threads) ? result.threads.filter(Boolean) : [];
 
-          const resolveSourceThreadIdForCandidate = ({ actionPlanId, issueId, sourceRawInputId, threadId } = {}) => {
+	          const resolveSourceThreadIdForCandidate = ({ actionPlanId, issueId, sourceRawInputId, threadId } = {}) => {
             const plan =
               (actionPlanId && actionPlans.find((ap) => ap && String(ap.id || "") === String(actionPlanId))) ||
               (issueId && actionPlans.find((ap) => ap && String(ap.issueId || "") === String(issueId))) ||
@@ -8974,47 +9170,51 @@ function setupNewTop() {
               (res?.threadId && matchedThreads.find((t) => t && String(t.id || "") === String(res.threadId))) ||
               null;
 
-            const sourceThreadId =
-              plan?.sourceThreadId ||
-              plan?.conversationThreadId ||
-              plan?.threadId ||
-              res?.sourceThreadId ||
-              res?.conversationThreadId ||
-              res?.threadId ||
-              (matchedThread ? matchedThread.id : "") ||
-              "";
+	            const sourceThreadId =
+	              plan?.sourceThreadId ||
+	              plan?.threadId ||
+	              res?.sourceThreadId ||
+	              res?.threadId ||
+	              (matchedThread ? matchedThread.id : "") ||
+	              "";
 
             return String(sourceThreadId || "").trim();
           };
 
-          const mutations = mutationsRaw.map((m) => {
-            const issueId = String(m?.issueId || "").trim();
-            const sourceRawInputId = String(m?.sourceRawInputId || "").trim();
-            const explicitThreadId = String(m?.sourceThreadId || m?.conversationThreadId || m?.threadId || "").trim();
-            const sourceThreadId =
-              explicitThreadId ||
-              resolveSourceThreadIdForCandidate({
-                actionPlanId: m?.actionPlanId || m?.relatedActionPlanId,
-                issueId,
-                sourceRawInputId,
-                threadId: m?.threadId,
-              });
+	          const mutations = mutationsRaw.map((m) => {
+	            const issueId = String(m?.issueId || "").trim();
+	            const sourceRawInputId = String(m?.sourceRawInputId || "").trim();
+	            const explicitThreadId = String(m?.sourceThreadId || m?.threadId || "").trim();
+	            const operationalThreadId =
+	              explicitThreadId ||
+	              resolveSourceThreadIdForCandidate({
+	                actionPlanId: m?.actionPlanId || m?.relatedActionPlanId,
+	                issueId,
+	                sourceRawInputId,
+	                threadId: m?.threadId,
+	              });
+	            const canonicalConversationId =
+	              findCanonicalConversationIdBySourceRawInputId(sourceRawInputId) ||
+	              findCanonicalConversationIdByOperationalThreadId(operationalThreadId) ||
+	              "";
 
-            return {
-              id: `mut:${String(sourceRawInputId || "raw")}:${String(sourceThreadId || "thread")}:${String(issueId || "")}:${String(m?.action || "")}`,
-              issueId: m?.issueId,
-              action: m?.action,
-              title: m?.title,
-              body: m?.body,
-              linkedEntities: Array.isArray(m?.linkedEntities) ? m.linkedEntities : undefined,
-              confidence: typeof m?.confidence === "number" ? m.confidence : undefined,
-              sourceRawInputId: m?.sourceRawInputId,
-              threadId: sourceThreadId || m?.threadId,
-              sourceThreadId: sourceThreadId || undefined,
-              conversationThreadId: sourceThreadId || undefined,
-              source: m?.sourceLabel,
-            };
-          });
+	            return {
+	              id: `mut:${String(sourceRawInputId || "raw")}:${String(operationalThreadId || "thread")}:${String(issueId || "")}:${String(m?.action || "")}`,
+	              issueId: m?.issueId,
+	              action: m?.action,
+	              title: m?.title,
+	              body: m?.body,
+	              linkedEntities: Array.isArray(m?.linkedEntities) ? m.linkedEntities : undefined,
+	              confidence: typeof m?.confidence === "number" ? m.confidence : undefined,
+	              sourceRawInputId: m?.sourceRawInputId,
+	              operationalThreadId: operationalThreadId || undefined,
+	              canonicalConversationId: canonicalConversationId || undefined,
+	              threadId: operationalThreadId || m?.threadId,
+	              sourceThreadId: operationalThreadId || undefined,
+	              conversationThreadId: canonicalConversationId || undefined,
+	              source: m?.sourceLabel,
+	            };
+	          });
           state.issueMutationItems = prependUniqueById(state.issueMutationItems, mutations);
         } catch (e) {
           state.ingestError = e && e.message ? String(e.message) : state.classifyMode === "llm" ? "LLM classify failed" : "Mock ingest failed";
@@ -9033,29 +9233,35 @@ function setupNewTop() {
       const box = rootPage && rootPage.querySelector ? rootPage.querySelector("[data-requests-input]") : null;
       const text = box && typeof box.value === "string" ? box.value.trim() : "";
       if (box) box.value = "";
-      if (text) {
-        const id = `raw-${shortId()}`;
-        const at = formatLocalTime(nowIso());
-        const item = {
-          id,
-          source: "web",
-          from: "Web UI",
-          text,
-          receivedAt: at,
-          aiThreads: decomposeRawRequestMock(text),
-          originalRawInputId: id,
-          reflectedToApprovals: true,
-          messages: [
-            { role: "human", text, createdAt: at, sequence: 1 },
-            { role: "ai", text: "（mock）承認センターに反映しました。", createdAt: at, sequence: 2 },
-          ],
-        };
-        state.rawRequests = [item, ...(Array.isArray(state.rawRequests) ? state.rawRequests : [])];
-        state.activeConversationThreadId = computeConversationThreadsFromRawRequests(state.rawRequests)[0]?.id || null;
-        renderApp();
-      }
-      return;
-    }
+	      if (text) {
+	        const id = `raw-${shortId()}`;
+	        const at = formatLocalTime(nowIso());
+	        const item = {
+	          id,
+	          source: "web",
+	          from: "Web UI",
+	          text,
+	          receivedAt: at,
+	          aiThreads: decomposeRawRequestMock(text),
+	          originalRawInputId: id,
+	          reflectedToApprovals: true,
+	          messages: [],
+	        };
+	        item.conversationThreadId = resolveConversationThreadIdForRawRequest(item);
+	        appendConversationMessagesWithSequence(item, [
+	          { role: "human", text, createdAt: at },
+	          { role: "ai", text: "（mock）承認センターに反映しました。", createdAt: at },
+	        ]);
+
+	        const next = Array.isArray(state.rawRequests) ? state.rawRequests.slice() : [];
+	        next.push(item);
+	        state.rawRequests = next;
+
+	        if (item.conversationThreadId) state.activeConversationThreadId = item.conversationThreadId;
+	        renderApp();
+	      }
+	      return;
+	    }
 
     const reqActionEl = target.closest && target.closest("[data-req-action]");
     if (reqActionEl) {
