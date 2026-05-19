@@ -675,6 +675,16 @@ function transitionApprovalState(currentState, action) {
   return null;
 }
 
+function getAvailableApprovalActions(status) {
+  const s = String(status || "planned");
+  return {
+    approve: transitionApprovalState(s, "approve") !== null,
+    edit: transitionApprovalState(s, "edit") !== null,
+    hold: transitionApprovalState(s, "hold") !== null,
+    mock_send: transitionApprovalState(s, "mock_send") !== null,
+  };
+}
+
 function approvalStatusLabelJa(status) {
   const s = String(status || "");
   if (s === "pending_approval") return "承認待ち";
@@ -735,6 +745,45 @@ function updateIngestResultStatusesForActionPlan(actionPlanId, nextStatus) {
   }
 }
 
+function recordApprovalActivityEvent(actionPlanId, nextStatus) {
+  const apId = String(actionPlanId || "").trim();
+  const status = String(nextStatus || "").trim();
+  if (!apId || !status) return;
+
+  const type = (() => {
+    if (status === "approved") return "approved";
+    if (status === "held") return "held";
+    if (status === "edited") return "edited";
+    if (status === "mock_sent") return "mock_sent";
+    return "";
+  })();
+  if (!type) return;
+
+  const seq = (() => {
+    if (type === "approved") return 70;
+    if (type === "edited") return 71;
+    if (type === "held") return 72;
+    if (type === "mock_sent") return 80;
+    return null;
+  })();
+
+  const plans = Array.isArray(state.latestIngestResult?.actionPlans) ? state.latestIngestResult.actionPlans.filter(Boolean) : [];
+  const plan = plans.find((p) => String(p?.id || "") === apId) || null;
+
+  const ev = {
+    id: `act:${shortId()}`,
+    type,
+    occurredAt: nowIso(),
+    actor: "human",
+    sequence: typeof seq === "number" ? seq : undefined,
+    threadId: plan?.threadId ? String(plan.threadId) : undefined,
+    issueId: plan?.issueId ? String(plan.issueId) : undefined,
+  };
+
+  if (!state.latestIngestResult) state.latestIngestResult = {};
+  state.latestIngestResult.activityEvents = prependUniqueById(state.latestIngestResult.activityEvents, [ev]);
+}
+
 function applyApprovalAction(idLike, action) {
   const actionPlanId = findActionPlanIdFromAnyId(idLike);
   if (!actionPlanId) return { ok: false, error: "ActionPlan が見つかりませんでした。" };
@@ -746,6 +795,7 @@ function applyApprovalAction(idLike, action) {
 
   state.approvalsByActionPlanId[actionPlanId] = { status: next, updatedAt: nowIso() };
   updateIngestResultStatusesForActionPlan(actionPlanId, next);
+  recordApprovalActivityEvent(actionPlanId, next);
 
   return { ok: true, actionPlanId, next };
 }
@@ -2356,22 +2406,50 @@ function renderNewTop() {
       return map[k] || "○";
     };
 
+    function getIssueListIcon(item) {
+      const status = item && typeof item === "object" ? item.status || item.approvalStatus || item.state || item.statusKey : "";
+      const normalized = String(status || "").trim().toLowerCase().replace(/_/g, " ");
+      if (["completed", "resolved", "approved", "mock sent", "sent"].includes(normalized)) return "✓";
+      return "○";
+    }
+
+    function issueListStatusLabelJa(statusLike) {
+      const raw = String(statusLike || "").trim();
+      const normalized = raw.toLowerCase().replace(/_/g, " ");
+      if (!normalized) return "-";
+      if (normalized === "pending approval" || normalized === "requires approval") return "承認待ち";
+      if (normalized === "edited") return "編集済み";
+      if (normalized === "on hold" || normalized === "held") return "保留中";
+      if (normalized === "mock sent") return "対応済み";
+      if (normalized === "approved") return "承認済み";
+      if (normalized === "completed" || normalized === "resolved") return "完了";
+      return raw.replace(/_/g, " ");
+    }
+
+    function deriveStatusForMockIssue(it, statusText) {
+      if (it && it.status) return String(it.status);
+      if (it && it.statusKey === "completed") return "completed";
+      if (it && it.statusKey === "requiresApproval") return "pending_approval";
+      return String(statusText || "");
+    }
+
     const issueRow = (it) => {
       const sev = String(it.severity || "low").toLowerCase();
       const sevClass = sev === "critical" || sev === "high" ? "is-high" : sev === "medium" ? "is-medium" : "is-low";
       const statusText = statusTextByKey[it.statusKey] || it.statusKey;
       const linkText = [it.siNo, it.shipmentId].filter(Boolean).join(" / ") || "-";
       const cc = typeof it.commentCount === "number" ? it.commentCount : 0;
+      const listStatus = deriveStatusForMockIssue(it, statusText);
       return `<div class="issue-row" role="button" tabindex="0" data-issue-open="${escapeHtml(it.tradeCaseId)}">
         <div class="issue-row__left">
-          <div class="issue-row__icon" aria-hidden="true">${escapeHtml(statusIcon(it.statusKey))}</div>
+          <div class="issue-row__icon" aria-hidden="true">${escapeHtml(getIssueListIcon({ status: listStatus }))}</div>
           <div class="issue-row__title">${escapeHtml(it.title)}</div>
         </div>
         <div class="issue-row__right">
           <div class="issue-row__meta">
             <span class="issue-pill nt-mono">#${escapeHtml(it.issueNo)}</span>
             <span class="issue-pill ${sevClass}">${escapeHtml(sev.toUpperCase())}</span>
-            <span class="issue-pill">${escapeHtml(statusText)}</span>
+            <span class="issue-pill">${escapeHtml(issueListStatusLabelJa(listStatus))}</span>
             <span class="issue-pill">${escapeHtml(linkText)}</span>
             <span class="issue-pill">${escapeHtml(it.updatedText || "-")}</span>
             <span class="issue-pill nt-mono">${escapeHtml(String(cc))} comments</span>
@@ -2382,15 +2460,14 @@ function renderNewTop() {
 
   const pendingMutations = Array.isArray(state.issueMutationItems) ? state.issueMutationItems.filter(Boolean) : [];
 
-    const actionLabel = (a) => {
-      const v = String(a || "");
-      if (v === "append_comment") return "既存Issue更新";
-      if (v === "create_issue_candidate") return "新規Issue候補";
-      if (v === "mark_approval_required") return "承認待ち";
-      return v || "-";
-    };
-
     const renderPendingMutations = () => {
+      const actionLabel = (a) => {
+        const v = String(a || "");
+        if (v === "append_comment") return "既存Issue更新";
+        if (v === "create_issue_candidate") return "新規Issue候補";
+        if (v === "mark_approval_required") return "承認待ち";
+        return v || "-";
+      };
       if (!pendingMutations.length) return "";
       const groups = groupIssueMutationsForApproval(pendingMutations);
       const conversationThreads = computeConversationThreadsFromRawRequests(state.rawRequests);
@@ -2879,8 +2956,9 @@ function renderNewTop() {
 
       const approvalEntry = state.approvalsByActionPlanId?.[apId] || null;
       const approvalStatus = String((approvalEntry && approvalEntry.status) || plan.status || "pending_approval");
-      const canApprove = approvalStatus === "pending_approval";
-      const canMockSend = approvalStatus === "approved";
+      const availableActions = getAvailableApprovalActions(approvalStatus);
+      const canApprove = availableActions.approve;
+      const canMockSend = availableActions.mock_send;
 
       const draft = drafts.find((d) => d && String(d.actionPlanId || "") === apId && String(d.channel || "") === "teams") || drafts.find((d) => d && String(d.actionPlanId || "") === apId) || null;
       const bodyText = draft ? String(draft.body || "") : resolution?.status === "status_query" ? String(resolution.statusAnswer || "") : String(resolution?.clarificationQuestion || "");
@@ -2933,21 +3011,16 @@ function renderNewTop() {
         });
       const body = sorted.length ? sorted.map(issueRow).join("") : `<div class="nt-muted">No items</div>`;
 
-      const renderCompletedLane = () => {
+      const renderIssueListLane = () => {
         const plans = Array.isArray(state.latestIngestResult?.actionPlans) ? state.latestIngestResult.actionPlans.filter(Boolean) : [];
-        const completedPlans = plans.filter((p) => isCompletedActionItem(p));
-        if (!completedPlans.length && !sorted.length) {
-          return `<section class="issue-list" aria-label="Completed items">
-            <div class="issue-list__section-title">対応済み</div>
-            <div class="issue-list__section-sub muted">承認・対応が完了した案件です。</div>
-            <div class="nt-muted" style="padding: 12px;">No items</div>
-          </section>`;
-        }
+        const runtimePlans = plans
+          .filter((p) => String(p?.issueId || "").trim())
+          .filter((p) => String(p?.status || "") !== "skipped");
 
         const conversationThreads = computeConversationThreadsFromRawRequests(state.rawRequests);
         const allMutations = Array.isArray(state.issueMutationItems) ? state.issueMutationItems.filter(Boolean) : [];
 
-        const runtimeRows = completedPlans
+        const runtimeRows = runtimePlans
           .slice()
           .sort((a, b) => {
             const aa = String(state.approvalsByActionPlanId?.[String(a?.id || "")]?.updatedAt || a?.updatedAt || "");
@@ -2958,15 +3031,18 @@ function renderNewTop() {
             const apId = String(ap?.id || "").trim();
             const issueId = String(ap?.issueId || "").trim();
             const threadId = String(ap?.threadId || "").trim();
-            const title = String(ap?.title || "").trim() || issueId || apId || "Completed";
+            const title = String(ap?.title || "").trim() || issueId || apId || "Issue";
 
             const approvalEntry = apId ? state.approvalsByActionPlanId?.[apId] : null;
-            const updatedAt = String((approvalEntry && approvalEntry.updatedAt) || "");
+            const approvalStatus = String((approvalEntry && approvalEntry.status) || ap?.status || "pending_approval");
+
+            const updatedAt = String((approvalEntry && approvalEntry.updatedAt) || ap?.updatedAt || "");
             const updatedText = relativeUpdatedText(updatedAt);
 
             const mutation =
-              allMutations.find((m) => (issueId && String(m?.issueId || "") === issueId) || (threadId && String(m?.threadId || "") === threadId)) || null;
-            const mutationId = mutation && mutation.id ? String(mutation.id) : "";
+              allMutations.find((m) => (issueId && String(m?.issueId || "") === issueId) || (threadId && String(m?.threadId || "") === threadId)) ||
+              null;
+            const mutationOpenId = mutation && mutation.id ? String(mutation.id) : apId;
 
             const sourceThread = threadId ? conversationThreads.find((t) => t && String(t?.representativeThreadId || "") === threadId) : null;
             const cc = sourceThread && typeof sourceThread.messageCount === "number" ? sourceThread.messageCount : 0;
@@ -2976,23 +3052,20 @@ function renderNewTop() {
             const shipment = linkedEntities.find((l) => String(l?.entityType || "").toLowerCase() === "shipment") || null;
             const linkText = [si?.entityId ? String(si.entityId) : "", shipment?.entityId ? String(shipment.entityId) : ""].filter(Boolean).join(" / ") || "-";
 
-            const status = String(ap?.status || "");
-            const statusText = status ? status.replace(/_/g, " ") : "completed";
             const sevText = "MEDIUM";
 
             const pills = [
               `<span class="issue-pill nt-mono">#${escapeHtml(issueId || apId || "-")}</span>`,
               `<span class="issue-pill is-medium">${escapeHtml(sevText)}</span>`,
-              `<span class="issue-pill">${escapeHtml(statusText)}</span>`,
+              `<span class="issue-pill">${escapeHtml(issueListStatusLabelJa(approvalStatus))}</span>`,
               `<span class="issue-pill">${escapeHtml(linkText)}</span>`,
               `<span class="issue-pill">${escapeHtml(updatedText || "-")}</span>`,
               `<span class="issue-pill nt-mono">${escapeHtml(String(cc))} comments</span>`,
             ].join("");
 
-            const dataAttr = mutationId ? `data-mutation-open="${escapeHtml(mutationId)}"` : "";
-            return `<div class="issue-row" role="button" tabindex="0" ${dataAttr}>
+            return `<div class="issue-row" role="button" tabindex="0" data-mutation-open="${escapeHtml(mutationOpenId)}">
               <div class="issue-row__left">
-                <div class="issue-row__icon" aria-hidden="true">✓</div>
+                <div class="issue-row__icon" aria-hidden="true">${escapeHtml(getIssueListIcon({ status: approvalStatus }))}</div>
                 <div class="issue-row__title">${escapeHtml(title)}</div>
               </div>
               <div class="issue-row__right">
@@ -3002,22 +3075,24 @@ function renderNewTop() {
           })
           .join("");
 
-        const sampleHeading = sorted.length ? `<div class="issue-list__subheading">サンプル既存案件</div>` : "";
+        const hasAny = Boolean(runtimeRows) || sorted.length > 0;
+        const sampleHeading = sorted.length ? `<div class="issue-list__subheading">mock existing issues</div>` : "";
         const sampleBody = sorted.length ? body : "";
+        const empty = !hasAny ? `<div class="nt-muted" style="padding: 12px;">No items</div>` : "";
 
-        return `<section class="issue-list" aria-label="Completed items">
-          <div class="issue-list__section-title">対応済み</div>
-          <div class="issue-list__section-sub muted">承認・対応が完了した案件です。</div>
+        return `<section class="issue-list" aria-label="Issue list">
+          <div class="issue-list__section-title">案件一覧</div>
+          <div class="issue-list__section-sub muted">Issue化された案件です。対応待ち・対応済みをまとめて確認できます。</div>
           ${runtimeRows || ""}
           ${sampleHeading}
           ${sampleBody}
+          ${empty}
         </section>`;
       };
 
       return `<div class="operations-main-column" aria-label="Operations main column">
         ${renderPreIssueThreads()}
-        ${renderPendingMutations()}
-        ${renderCompletedLane()}
+        ${renderIssueListLane()}
       </div>`;
     };
 
@@ -3066,10 +3141,41 @@ function renderNewTop() {
     };
 
     const renderMutationDetail = (mutationId) => {
-      const mut =
-        pendingMutations.find((x) => x && String(x.id) === String(mutationId)) ||
-        (Array.isArray(state.issueMutationItems) ? state.issueMutationItems.find((x) => x && String(x.id) === String(mutationId)) : null) ||
+      const mutId = String(mutationId || "").trim();
+      let mut =
+        pendingMutations.find((x) => x && String(x.id) === mutId) ||
+        (Array.isArray(state.issueMutationItems) ? state.issueMutationItems.find((x) => x && String(x.id) === mutId) : null) ||
         null;
+
+      if (!mut && mutId) {
+        const plans = Array.isArray(state.latestIngestResult?.actionPlans) ? state.latestIngestResult.actionPlans.filter(Boolean) : [];
+        const plan = plans.find((p) => p && String(p.id || "") === mutId) || null;
+        if (plan) {
+          const issueId = String(plan.issueId || "").trim();
+          const threadId = String(plan.threadId || "").trim();
+          const fromLinked =
+            (Array.isArray(state.issueMutationItems)
+              ? state.issueMutationItems.find(
+                  (x) => x && ((issueId && String(x.issueId || "") === issueId) || (threadId && String(x.threadId || "") === threadId)),
+                )
+              : null) || null;
+          mut =
+            fromLinked ||
+            ({
+              id: mutId,
+              issueId: issueId || mutId,
+              threadId,
+              action: "mark_approval_required",
+              title: String(plan.title || "Issue candidate"),
+              body: String(plan.description || ""),
+              sourceRawInputId: String(plan.sourceRawInputId || ""),
+              linkedEntities: Array.isArray(plan.linkedEntities) ? plan.linkedEntities : [],
+              confidence: typeof plan.confidence === "number" ? plan.confidence : undefined,
+              sourceLabel: String(plan.sourceLabel || ""),
+            });
+        }
+      }
+
       if (!mut) return `<div class="nt-muted">LLM候補が見つかりませんでした。</div>`;
 
       const normalizedMut = { ...mut, title: normalizeMutationTitle(mut?.title) };
@@ -3114,14 +3220,33 @@ function renderNewTop() {
       })();
 
       const actionPlanId = matchedPlan && matchedPlan.id ? String(matchedPlan.id) : "";
-      const approvalEntry = actionPlanId ? state.approvalsByActionPlanId?.[actionPlanId] : null;
+      const resolvedActionPlanId = actionPlanId || findActionPlanIdFromAnyId(String(mut?.issueId || "") || String(mut?.threadId || "") || "");
+      const approvalEntry = resolvedActionPlanId ? state.approvalsByActionPlanId?.[resolvedActionPlanId] : null;
       const approvalStatus = String((approvalEntry && approvalEntry.status) || (matchedPlan && matchedPlan.status) || "pending_approval");
-      const canApprove = approvalStatus === "pending_approval";
-      const canMockSend = approvalStatus === "approved";
+      const availableActions = getAvailableApprovalActions(approvalStatus);
 
       const draftPreview = issueLike && issueLike.draft ? issueLike.draft : null;
 
-      const actionKey = actionPlanId || String(issueLike.id || "");
+      const actionKey = resolvedActionPlanId || String(issueLike.id || "");
+
+      const currentActionButtonsHtml = (() => {
+        const parts = [];
+        if (availableActions.approve)
+          parts.push(
+            `<button class="btn btn--primary btn--small" type="button" data-mutation-approve="${escapeHtml(actionKey)}">Approve</button>`,
+          );
+        if (availableActions.edit)
+          parts.push(
+            `<button class="btn btn--small" type="button" data-mutation-edit="${escapeHtml(actionKey)}">Edit draft</button>`,
+          );
+        if (availableActions.hold)
+          parts.push(`<button class="btn btn--small" type="button" data-mutation-hold="${escapeHtml(actionKey)}">Hold</button>`);
+        if (availableActions.mock_send)
+          parts.push(
+            `<button class="btn btn--small" type="button" data-mutation-mock-send="${escapeHtml(actionKey)}">Mock send</button>`,
+          );
+        return parts.join("");
+      })();
 
       const currentStatusHtml = `<section class="issue-current-status ${sevClass}" aria-label="Current Status">
         <div class="issue-current-title">Current Status</div>
@@ -3130,16 +3255,7 @@ function renderNewTop() {
           <div class="issue-current-row issue-current-row--pending"><span class="k">承認待ち</span><span class="v">${escapeHtml(String(nextActionFromPlans || cs.nextAction || "AI提案内容の確認"))}</span></div>
           <div class="issue-current-row"><span class="k">AI提案</span><span class="v">${escapeHtml(String(cs.aiProposal || "-"))}</span></div>
         </div>
-        <div class="issue-current-actions" aria-label="Next actions">
-          <button class="btn btn--primary btn--small" type="button" data-mutation-approve="${escapeHtml(actionKey)}" ${
-            canApprove ? "" : "disabled"
-          }>Approve</button>
-          <button class="btn btn--small" type="button" data-mutation-edit="${escapeHtml(actionKey)}" ${canApprove ? "" : "disabled"}>Edit draft</button>
-          <button class="btn btn--small" type="button" data-mutation-hold="${escapeHtml(actionKey)}" ${canApprove ? "" : "disabled"}>Hold</button>
-          <button class="btn btn--small" type="button" data-mutation-mock-send="${escapeHtml(actionKey)}" ${
-            canMockSend ? "" : "disabled"
-          }>Mock send</button>
-        </div>
+        ${currentActionButtonsHtml ? `<div class="issue-current-actions" aria-label="Next actions">${currentActionButtonsHtml}</div>` : ""}
       </section>`;
 
       const processorFlowHtml = (() => {
@@ -3297,10 +3413,10 @@ function renderNewTop() {
                 <pre class="pre pre--compact">${escapeHtml(String(draftPreview.body || ""))}</pre>
               </div>
               <div class="issue-action-buttons">
-                <button class="btn btn--primary btn--small" type="button" data-mutation-approve="${escapeHtml(actionKey)}" ${canApprove ? "" : "disabled"}>Approve</button>
-                <button class="btn btn--small" type="button" data-mutation-edit="${escapeHtml(actionKey)}" ${canApprove ? "" : "disabled"}>Edit</button>
-                <button class="btn btn--small" type="button" data-mutation-hold="${escapeHtml(actionKey)}" ${canApprove ? "" : "disabled"}>Hold</button>
-                <button class="btn btn--small" type="button" data-mutation-mock-send="${escapeHtml(actionKey)}" ${canMockSend ? "" : "disabled"}>Mock send</button>
+                ${availableActions.approve ? `<button class="btn btn--primary btn--small" type="button" data-mutation-approve="${escapeHtml(actionKey)}">Approve</button>` : ""}
+                ${availableActions.edit ? `<button class="btn btn--small" type="button" data-mutation-edit="${escapeHtml(actionKey)}">Edit</button>` : ""}
+                ${availableActions.hold ? `<button class="btn btn--small" type="button" data-mutation-hold="${escapeHtml(actionKey)}">Hold</button>` : ""}
+                ${availableActions.mock_send ? `<button class="btn btn--small" type="button" data-mutation-mock-send="${escapeHtml(actionKey)}">Mock send</button>` : ""}
               </div>
             </div>`
           : "";
@@ -3337,10 +3453,10 @@ function renderNewTop() {
         const count = typeof sourceThread.messageCount === "number" ? sourceThread.messageCount : 0;
         const summary = `根拠: ${src} · ${who} · ${count} messages`;
         return `<div class="candidate-card-actions" aria-label="Evidence thread">
+          <div class="evidence-summary">${escapeHtml(summary)}</div>
           <button class="btn btn--ghost btn--small evidence-thread-button" type="button" data-conversation-thread-open="${escapeHtml(
             String(sourceThread.id || ""),
           )}">根拠会話を見る</button>
-          <div class="evidence-summary">${escapeHtml(summary)}</div>
         </div>`;
       })();
 
@@ -3641,6 +3757,7 @@ function renderNewTop() {
 
     if (state.activeIssueId) return renderIssueDetail(state.activeIssueId);
     if (state.activeMutationId) return renderMutationDetail(state.activeMutationId);
+    if (state.activeReplyCandidateId) return renderReplyCandidateDetail(state.activeReplyCandidateId);
     return renderIssueList();
   };
 
@@ -8768,6 +8885,63 @@ function setupNewTop() {
     const mutationBackEl = target.closest && target.closest("[data-mutation-back]");
     if (mutationBackEl) {
       state.activeMutationId = null;
+      renderApp();
+      return;
+    }
+
+    const replyCandidateOpenEl = target.closest && target.closest("[data-reply-candidate-open]");
+    if (replyCandidateOpenEl) {
+      const id = replyCandidateOpenEl.getAttribute("data-reply-candidate-open") || "";
+      state.activeReplyCandidateId = id || null;
+      state.activeIssueId = null;
+      state.activeMutationId = null;
+      renderApp();
+      return;
+    }
+
+    const replyBackEl = target.closest && target.closest("[data-reply-back]");
+    if (replyBackEl) {
+      state.activeReplyCandidateId = null;
+      renderApp();
+      return;
+    }
+
+    const replyApproveEl = target.closest && target.closest("[data-reply-approve]");
+    if (replyApproveEl) {
+      const id = replyApproveEl.getAttribute("data-reply-approve") || "";
+      const res = applyApprovalAction(id, "approve");
+      if (!res.ok) window.alert(`(mock) ${res.error}`);
+      else log(`(mock) approved: ${String(res.actionPlanId)} -> ${String(res.next)}`);
+      renderApp();
+      return;
+    }
+
+    const replyHoldEl = target.closest && target.closest("[data-reply-hold]");
+    if (replyHoldEl) {
+      const id = replyHoldEl.getAttribute("data-reply-hold") || "";
+      const res = applyApprovalAction(id, "hold");
+      if (!res.ok) window.alert(`(mock) ${res.error}`);
+      else log(`(mock) held: ${String(res.actionPlanId)} -> ${String(res.next)}`);
+      renderApp();
+      return;
+    }
+
+    const replyEditEl = target.closest && target.closest("[data-reply-edit]");
+    if (replyEditEl) {
+      const id = replyEditEl.getAttribute("data-reply-edit") || "";
+      const res = applyApprovalAction(id, "edit");
+      if (!res.ok) window.alert(`(mock) ${res.error}`);
+      else log(`(mock) edited: ${String(res.actionPlanId)} -> ${String(res.next)}`);
+      renderApp();
+      return;
+    }
+
+    const replyMockSendEl = target.closest && target.closest("[data-reply-mock-send]");
+    if (replyMockSendEl) {
+      const id = replyMockSendEl.getAttribute("data-reply-mock-send") || "";
+      const res = applyApprovalAction(id, "mock_send");
+      if (!res.ok) window.alert(`(mock) ${res.error}`);
+      else log(`(mock) mock sent: ${String(res.actionPlanId)} -> ${String(res.next)}`);
       renderApp();
       return;
     }
