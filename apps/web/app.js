@@ -685,6 +685,14 @@ function getAvailableApprovalActions(status) {
   };
 }
 
+function shouldShowApprovalActionButtons(status) {
+  // Todo.md requirement: approved/mock_sent/etc should be read-only (no buttons).
+  const s = String(status || "");
+  if (!s) return false;
+  if (s === "pending_approval") return true;
+  return false;
+}
+
 function approvalStatusLabelJa(status) {
   const s = String(status || "");
   if (s === "pending_approval") return "承認待ち";
@@ -3017,12 +3025,18 @@ function renderNewTop() {
             </div>
           </div>
         </div>
-        <div class="issue-current-actions" aria-label="Next actions" style="margin: 12px 0;">
+        ${
+          shouldShowApprovalActionButtons(approvalStatus)
+            ? `<div class="issue-current-actions" aria-label="Next actions" style="margin: 12px 0;">
           <button class="btn btn--primary btn--small" type="button" data-reply-approve="${escapeHtml(apId)}" ${canApprove ? "" : "disabled"}>Approve</button>
           <button class="btn btn--small" type="button" data-reply-edit="${escapeHtml(apId)}" ${canApprove ? "" : "disabled"}>Edit draft</button>
           <button class="btn btn--small" type="button" data-reply-hold="${escapeHtml(apId)}" ${canApprove ? "" : "disabled"}>Hold</button>
           <button class="btn btn--small" type="button" data-reply-mock-send="${escapeHtml(apId)}" ${canMockSend ? "" : "disabled"}>Mock send</button>
-        </div>
+        </div>`
+            : `<div class="issue-current-actions" aria-label="Next actions" style="margin: 12px 0;">
+          <span class="issue-pill">${escapeHtml(approvalStatusLabelJa(approvalStatus) || approvalStatus)}</span>
+        </div>`
+        }
         ${linked}
         ${draftPreviewHtml}
       </section>`;
@@ -3269,6 +3283,7 @@ function renderNewTop() {
       const actionKey = resolvedActionPlanId || String(issueLike.id || "");
 
       const currentActionButtonsHtml = (() => {
+        if (!shouldShowApprovalActionButtons(approvalStatus)) return "";
         const parts = [];
         if (availableActions.approve)
           parts.push(
@@ -3452,10 +3467,17 @@ function renderNewTop() {
                 <pre class="pre pre--compact">${escapeHtml(String(draftPreview.body || ""))}</pre>
               </div>
               <div class="issue-action-buttons">
-                ${availableActions.approve ? `<button class="btn btn--primary btn--small" type="button" data-mutation-approve="${escapeHtml(actionKey)}">Approve</button>` : ""}
-                ${availableActions.edit ? `<button class="btn btn--small" type="button" data-mutation-edit="${escapeHtml(actionKey)}">Edit</button>` : ""}
-                ${availableActions.hold ? `<button class="btn btn--small" type="button" data-mutation-hold="${escapeHtml(actionKey)}">Hold</button>` : ""}
-                ${availableActions.mock_send ? `<button class="btn btn--small" type="button" data-mutation-mock-send="${escapeHtml(actionKey)}">Mock send</button>` : ""}
+                ${
+                  shouldShowApprovalActionButtons(approvalStatus)
+                    ? `${availableActions.approve ? `<button class="btn btn--primary btn--small" type="button" data-mutation-approve="${escapeHtml(actionKey)}">Approve</button>` : ""}${
+                        availableActions.edit ? `<button class="btn btn--small" type="button" data-mutation-edit="${escapeHtml(actionKey)}">Edit</button>` : ""
+                      }${availableActions.hold ? `<button class="btn btn--small" type="button" data-mutation-hold="${escapeHtml(actionKey)}">Hold</button>` : ""}${
+                        availableActions.mock_send
+                          ? `<button class="btn btn--small" type="button" data-mutation-mock-send="${escapeHtml(actionKey)}">Mock send</button>`
+                          : ""
+                      }`
+                    : `<span class="issue-pill">${escapeHtml(approvalStatusLabelJa(approvalStatus) || approvalStatus)}</span>`
+                }
               </div>
             </div>`
           : "";
@@ -5254,6 +5276,10 @@ function summarize(payload) {
 
 function log(text) {
   const logItems = document.getElementById("log-items");
+  if (!logItems) {
+    console.log(String(text || ""));
+    return;
+  }
   const iso = nowIso();
   const row = document.createElement("div");
   row.className = "log__item";
@@ -5394,6 +5420,14 @@ function openModal({ title, bodyText, bodyHtml, variant }) {
 
 function closeModal() {
   const modal = document.getElementById("modal");
+  if (!modal) return;
+  if (modal && modal.contains(document.activeElement)) {
+    try {
+      document.activeElement.blur();
+    } catch {
+      // ignore
+    }
+  }
   modal.classList.remove("is-open");
   modal.setAttribute("aria-hidden", "true");
   modal.classList.remove("modal--conversation-thread");
@@ -5421,6 +5455,13 @@ function openWorkspaceModal(modalId, { title, bodyHtml, tradeCaseId }) {
 function closeWorkspaceModal(modalId) {
   const modal = document.getElementById(modalId);
   if (!modal) return;
+  if (modal.contains(document.activeElement)) {
+    try {
+      document.activeElement.blur();
+    } catch {
+      // ignore
+    }
+  }
   modal.classList.remove("is-open");
   modal.setAttribute("aria-hidden", "true");
   modal.removeAttribute("data-tradecase-id");
@@ -8483,9 +8524,24 @@ function setupNewTop() {
     const target = e.target;
     if (!target) return;
 
+    const guardApprovalClick = (idLike, action) => {
+      const apId = findActionPlanIdFromAnyId(idLike);
+      if (!apId) return { ok: false, ignored: true, reason: "missing_action_plan" };
+      const entry = state.approvalsByActionPlanId?.[apId] || null;
+      const fallbackPlan =
+        (Array.isArray(state.latestIngestResult?.actionPlans) ? state.latestIngestResult.actionPlans : []).find((p) => p && String(p.id || "") === apId) || null;
+      const current = String((entry && entry.status) || (fallbackPlan && fallbackPlan.status) || "planned");
+      const available = getAvailableApprovalActions(current);
+      if (!available[String(action)]) return { ok: false, ignored: true, reason: `unavailable:${current}->${String(action)}` };
+      const res = applyApprovalAction(apId, action);
+      return { ok: res.ok, ignored: false, res };
+    };
+
     const classifyModeEl = target.closest && target.closest("[data-classify-mode]");
     if (classifyModeEl) {
       if (state.ingestLoading) return;
+      e.preventDefault();
+      e.stopPropagation();
       const next = classifyModeEl.getAttribute("data-classify-mode") || "llm";
       state.classifyMode = next === "mock" ? "mock" : "llm";
       renderApp();
@@ -8494,6 +8550,8 @@ function setupNewTop() {
 
     const tabEl = target.closest && target.closest("[data-nt-tab]");
     if (tabEl) {
+      e.preventDefault();
+      e.stopPropagation();
       const key = tabEl.getAttribute("data-nt-tab") || "";
       if (newTopTabs.some((t) => t.key === key)) {
         state.topActiveTab = key;
@@ -8509,6 +8567,8 @@ function setupNewTop() {
 
     const shelfSearchOpenEl = target.closest && target.closest("[data-shelf-search-open]");
     if (shelfSearchOpenEl) {
+      e.preventDefault();
+      e.stopPropagation();
       const t = shelfSearchOpenEl.getAttribute("data-shelf-search-open-type") || "";
       const id = shelfSearchOpenEl.getAttribute("data-shelf-search-open-id") || "";
       if (t === "shipment") {
@@ -8896,6 +8956,8 @@ function setupNewTop() {
 
     const issueOpenEl = target.closest && target.closest("[data-issue-open]");
     if (issueOpenEl) {
+      e.preventDefault();
+      e.stopPropagation();
       const id = issueOpenEl.getAttribute("data-issue-open") || "";
       state.activeIssueId = id || null;
       state.activeMutationId = null;
@@ -8906,6 +8968,8 @@ function setupNewTop() {
 
     const issueBackEl = target.closest && target.closest("[data-issue-back]");
     if (issueBackEl) {
+      e.preventDefault();
+      e.stopPropagation();
       state.activeIssueId = null;
       renderApp();
       return;
@@ -8913,6 +8977,8 @@ function setupNewTop() {
 
     const mutationOpenEl = target.closest && target.closest("[data-mutation-open]");
     if (mutationOpenEl) {
+      e.preventDefault();
+      e.stopPropagation();
       const id = mutationOpenEl.getAttribute("data-mutation-open") || "";
       console.log("[CLICK mutation-open]", {
         target,
@@ -8929,6 +8995,8 @@ function setupNewTop() {
 
     const mutationBackEl = target.closest && target.closest("[data-mutation-back]");
     if (mutationBackEl) {
+      e.preventDefault();
+      e.stopPropagation();
       state.activeMutationId = null;
       renderApp();
       return;
@@ -8936,6 +9004,8 @@ function setupNewTop() {
 
     const replyCandidateOpenEl = target.closest && target.closest("[data-reply-candidate-open]");
     if (replyCandidateOpenEl) {
+      e.preventDefault();
+      e.stopPropagation();
       const id = replyCandidateOpenEl.getAttribute("data-reply-candidate-open") || "";
       state.activeReplyCandidateId = id || null;
       state.activeIssueId = null;
@@ -8946,6 +9016,8 @@ function setupNewTop() {
 
     const replyBackEl = target.closest && target.closest("[data-reply-back]");
     if (replyBackEl) {
+      e.preventDefault();
+      e.stopPropagation();
       state.activeReplyCandidateId = null;
       renderApp();
       return;
@@ -8954,9 +9026,15 @@ function setupNewTop() {
     const replyApproveEl = target.closest && target.closest("[data-reply-approve]");
     if (replyApproveEl) {
       const id = replyApproveEl.getAttribute("data-reply-approve") || "";
-      const res = applyApprovalAction(id, "approve");
-      if (!res.ok) window.alert(`(mock) ${res.error}`);
-      else log(`(mock) approved: ${String(res.actionPlanId)} -> ${String(res.next)}`);
+      e.preventDefault();
+      e.stopPropagation();
+      const attempt = guardApprovalClick(id, "approve");
+      if (!attempt.ok) {
+        if (!attempt.ignored) window.alert(`(mock) approve failed`);
+        return;
+      }
+      const res = attempt.res;
+      if (res && res.actionPlanId) log(`(mock) approved: ${String(res.actionPlanId)} -> ${String(res.next)}`);
       renderApp();
       return;
     }
@@ -8964,9 +9042,15 @@ function setupNewTop() {
     const replyHoldEl = target.closest && target.closest("[data-reply-hold]");
     if (replyHoldEl) {
       const id = replyHoldEl.getAttribute("data-reply-hold") || "";
-      const res = applyApprovalAction(id, "hold");
-      if (!res.ok) window.alert(`(mock) ${res.error}`);
-      else log(`(mock) held: ${String(res.actionPlanId)} -> ${String(res.next)}`);
+      e.preventDefault();
+      e.stopPropagation();
+      const attempt = guardApprovalClick(id, "hold");
+      if (!attempt.ok) {
+        if (!attempt.ignored) window.alert(`(mock) hold failed`);
+        return;
+      }
+      const res = attempt.res;
+      if (res && res.actionPlanId) log(`(mock) held: ${String(res.actionPlanId)} -> ${String(res.next)}`);
       renderApp();
       return;
     }
@@ -8974,9 +9058,15 @@ function setupNewTop() {
     const replyEditEl = target.closest && target.closest("[data-reply-edit]");
     if (replyEditEl) {
       const id = replyEditEl.getAttribute("data-reply-edit") || "";
-      const res = applyApprovalAction(id, "edit");
-      if (!res.ok) window.alert(`(mock) ${res.error}`);
-      else log(`(mock) edited: ${String(res.actionPlanId)} -> ${String(res.next)}`);
+      e.preventDefault();
+      e.stopPropagation();
+      const attempt = guardApprovalClick(id, "edit");
+      if (!attempt.ok) {
+        if (!attempt.ignored) window.alert(`(mock) edit failed`);
+        return;
+      }
+      const res = attempt.res;
+      if (res && res.actionPlanId) log(`(mock) edited: ${String(res.actionPlanId)} -> ${String(res.next)}`);
       renderApp();
       return;
     }
@@ -8984,9 +9074,15 @@ function setupNewTop() {
     const replyMockSendEl = target.closest && target.closest("[data-reply-mock-send]");
     if (replyMockSendEl) {
       const id = replyMockSendEl.getAttribute("data-reply-mock-send") || "";
-      const res = applyApprovalAction(id, "mock_send");
-      if (!res.ok) window.alert(`(mock) ${res.error}`);
-      else log(`(mock) mock sent: ${String(res.actionPlanId)} -> ${String(res.next)}`);
+      e.preventDefault();
+      e.stopPropagation();
+      const attempt = guardApprovalClick(id, "mock_send");
+      if (!attempt.ok) {
+        if (!attempt.ignored) window.alert(`(mock) mock send failed`);
+        return;
+      }
+      const res = attempt.res;
+      if (res && res.actionPlanId) log(`(mock) mock sent: ${String(res.actionPlanId)} -> ${String(res.next)}`);
       renderApp();
       return;
     }
@@ -9038,8 +9134,10 @@ function setupNewTop() {
     const alphaApproveEl = target.closest && target.closest("[data-alpha-approve]");
     if (alphaApproveEl) {
       const id = alphaApproveEl.getAttribute("data-alpha-approve") || "";
-      const res = applyApprovalAction(id, "approve");
-      if (!res.ok) window.alert(`(mock) ${res.error}`);
+      e.preventDefault();
+      e.stopPropagation();
+      const attempt = guardApprovalClick(id, "approve");
+      if (!attempt.ok) return;
       renderApp();
       return;
     }
@@ -9047,8 +9145,10 @@ function setupNewTop() {
     const alphaHoldEl = target.closest && target.closest("[data-alpha-hold]");
     if (alphaHoldEl) {
       const id = alphaHoldEl.getAttribute("data-alpha-hold") || "";
-      const res = applyApprovalAction(id, "hold");
-      if (!res.ok) window.alert(`(mock) ${res.error}`);
+      e.preventDefault();
+      e.stopPropagation();
+      const attempt = guardApprovalClick(id, "hold");
+      if (!attempt.ok) return;
       renderApp();
       return;
     }
@@ -9056,8 +9156,10 @@ function setupNewTop() {
     const alphaEditEl = target.closest && target.closest("[data-alpha-edit]");
     if (alphaEditEl) {
       const id = alphaEditEl.getAttribute("data-alpha-edit") || "";
-      const res = applyApprovalAction(id, "edit");
-      if (!res.ok) window.alert(`(mock) ${res.error}`);
+      e.preventDefault();
+      e.stopPropagation();
+      const attempt = guardApprovalClick(id, "edit");
+      if (!attempt.ok) return;
       renderApp();
       return;
     }
@@ -9065,8 +9167,10 @@ function setupNewTop() {
     const alphaMockSendEl = target.closest && target.closest("[data-alpha-mock-send]");
     if (alphaMockSendEl) {
       const id = alphaMockSendEl.getAttribute("data-alpha-mock-send") || "";
-      const res = applyApprovalAction(id, "mock_send");
-      if (!res.ok) window.alert(`(mock) ${res.error}`);
+      e.preventDefault();
+      e.stopPropagation();
+      const attempt = guardApprovalClick(id, "mock_send");
+      if (!attempt.ok) return;
       renderApp();
       return;
     }
@@ -9074,9 +9178,15 @@ function setupNewTop() {
     const mutationApproveEl = target.closest && target.closest("[data-mutation-approve]");
     if (mutationApproveEl) {
       const id = mutationApproveEl.getAttribute("data-mutation-approve") || "";
-      const res = applyApprovalAction(id, "approve");
-      if (!res.ok) window.alert(`(mock) ${res.error}`);
-      else log(`(mock) approved: ${String(res.actionPlanId)} -> ${String(res.next)}`);
+      e.preventDefault();
+      e.stopPropagation();
+      const attempt = guardApprovalClick(id, "approve");
+      if (!attempt.ok) {
+        if (!attempt.ignored) window.alert(`(mock) approve failed`);
+        return;
+      }
+      const res = attempt.res;
+      if (res && res.actionPlanId) log(`(mock) approved: ${String(res.actionPlanId)} -> ${String(res.next)}`);
       renderApp();
       return;
     }
@@ -9084,9 +9194,15 @@ function setupNewTop() {
     const mutationHoldEl = target.closest && target.closest("[data-mutation-hold]");
     if (mutationHoldEl) {
       const id = mutationHoldEl.getAttribute("data-mutation-hold") || "";
-      const res = applyApprovalAction(id, "hold");
-      if (!res.ok) window.alert(`(mock) ${res.error}`);
-      else log(`(mock) held: ${String(res.actionPlanId)} -> ${String(res.next)}`);
+      e.preventDefault();
+      e.stopPropagation();
+      const attempt = guardApprovalClick(id, "hold");
+      if (!attempt.ok) {
+        if (!attempt.ignored) window.alert(`(mock) hold failed`);
+        return;
+      }
+      const res = attempt.res;
+      if (res && res.actionPlanId) log(`(mock) held: ${String(res.actionPlanId)} -> ${String(res.next)}`);
       renderApp();
       return;
     }
@@ -9094,9 +9210,15 @@ function setupNewTop() {
     const mutationEditEl = target.closest && target.closest("[data-mutation-edit]");
     if (mutationEditEl) {
       const id = mutationEditEl.getAttribute("data-mutation-edit") || "";
-      const res = applyApprovalAction(id, "edit");
-      if (!res.ok) window.alert(`(mock) ${res.error}`);
-      else log(`(mock) edited: ${String(res.actionPlanId)} -> ${String(res.next)}`);
+      e.preventDefault();
+      e.stopPropagation();
+      const attempt = guardApprovalClick(id, "edit");
+      if (!attempt.ok) {
+        if (!attempt.ignored) window.alert(`(mock) edit failed`);
+        return;
+      }
+      const res = attempt.res;
+      if (res && res.actionPlanId) log(`(mock) edited: ${String(res.actionPlanId)} -> ${String(res.next)}`);
       renderApp();
       return;
     }
@@ -9104,9 +9226,15 @@ function setupNewTop() {
     const mutationMockSendEl = target.closest && target.closest("[data-mutation-mock-send]");
     if (mutationMockSendEl) {
       const id = mutationMockSendEl.getAttribute("data-mutation-mock-send") || "";
-      const res = applyApprovalAction(id, "mock_send");
-      if (!res.ok) window.alert(`(mock) ${res.error}`);
-      else log(`(mock) mock sent: ${String(res.actionPlanId)} -> ${String(res.next)}`);
+      e.preventDefault();
+      e.stopPropagation();
+      const attempt = guardApprovalClick(id, "mock_send");
+      if (!attempt.ok) {
+        if (!attempt.ignored) window.alert(`(mock) mock send failed`);
+        return;
+      }
+      const res = attempt.res;
+      if (res && res.actionPlanId) log(`(mock) mock sent: ${String(res.actionPlanId)} -> ${String(res.next)}`);
       renderApp();
       return;
     }
