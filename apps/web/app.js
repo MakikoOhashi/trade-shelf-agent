@@ -508,26 +508,64 @@ function groupIssueMutationsForApproval(mutations) {
 }
 
 function findSourceConversationThread(candidate, conversationThreads) {
-  if (!candidate || !Array.isArray(conversationThreads)) return null;
+  if (!candidate) return null;
 
-  const findByThreadId = (threadIdLike) => {
-    const threadId = String(threadIdLike || "").trim();
-    if (!threadId) return null;
-    const byRep = conversationThreads.find((t) => t && String(t.representativeThreadId || "") === threadId) || null;
-    if (byRep) return byRep;
-    const byId = conversationThreads.find((t) => t && String(t.id || "") === threadId) || null;
-    if (byId) return byId;
+  const baseThreads = Array.isArray(conversationThreads) ? conversationThreads.filter(Boolean) : [];
+  const ingestThreads = [
+    ...(Array.isArray(state.latestIngestResult?.conversationThreads) ? state.latestIngestResult.conversationThreads : []),
+    ...(Array.isArray(state.latestIngestResult?.threads) ? state.latestIngestResult.threads : []),
+  ].filter(Boolean);
+  const allThreads = [...baseThreads, ...ingestThreads];
+
+  const matchesThreadId = (thread, idLike) => {
+    if (!thread) return false;
+    const id = String(idLike || "").trim();
+    if (!id) return false;
+    return [
+      thread.id,
+      thread.threadId,
+      thread.sourceThreadId,
+      thread.conversationThreadId,
+      thread.canonicalConversationId,
+      thread.canonicalId,
+      thread.sourceRawInputId,
+      thread.rawInputId,
+      thread.representativeThreadId,
+      thread.relatedConversationId,
+    ]
+      .filter(Boolean)
+      .map((x) => String(x).trim())
+      .includes(id);
+  };
+
+  const extractRawInputId = (value) => {
+    const match = String(value || "").match(/raw-\d+/);
+    return match?.[0] || "";
+  };
+
+  const extractRawThreadId = (value) => {
+    const match = String(value || "").match(/raw-\d+-t\d+/);
+    return match?.[0] || "";
+  };
+
+  const findByAnyId = (ids) => {
+    const list = Array.isArray(ids) ? ids.filter(Boolean).map((x) => String(x).trim()).filter(Boolean) : [];
+    for (const id of list) {
+      const thr = allThreads.find((t) => matchesThreadId(t, id)) || null;
+      if (thr) return thr;
+    }
     return null;
   };
 
-  const explicitThreadId = String(
-    candidate.sourceThreadId ||
-      candidate.conversationThreadId ||
-      candidate.threadId ||
-      "",
-  ).trim();
+  const explicitIds = [
+    candidate.sourceThreadId,
+    candidate.conversationThreadId,
+    candidate.relatedConversationId,
+    candidate.threadId,
+    extractRawThreadId(candidate.id),
+  ];
 
-  const byExplicit = findByThreadId(explicitThreadId);
+  const byExplicit = findByAnyId(explicitIds);
   if (byExplicit) return byExplicit;
 
   // Fallback: infer threadId from ingest artifacts (ActionPlans / IntakeResolutions).
@@ -540,25 +578,63 @@ function findSourceConversationThread(candidate, conversationThreads) {
     ? state.latestIngestResult.intakeResolutions.filter(Boolean)
     : [];
 
-  const inferredThreadId = (() => {
+  const inferredThreadIds = (() => {
     const plan =
       ingestActionPlans.find((ap) => ap && actionPlanId && String(ap.id || "") === actionPlanId) ||
       ingestActionPlans.find((ap) => ap && issueId && String(ap.issueId || "") === issueId) ||
       ingestActionPlans.find((ap) => ap && sourceRawInputId && String(ap.sourceRawInputId || "") === sourceRawInputId) ||
       null;
-    if (plan) return String(plan.sourceThreadId || plan.conversationThreadId || plan.threadId || "");
+    if (plan) {
+      return [
+        plan.sourceThreadId,
+        plan.conversationThreadId,
+        plan.threadId,
+        plan.relatedConversationId,
+        extractRawThreadId(plan.id),
+      ];
+    }
 
     const res =
       ingestIntakeResolutions.find((r) => r && issueId && String(r.issueId || "") === issueId) ||
       ingestIntakeResolutions.find((r) => r && sourceRawInputId && String(r.sourceRawInputId || "") === sourceRawInputId) ||
       null;
-    if (res) return String(res.sourceThreadId || res.conversationThreadId || res.threadId || "");
+    if (res) {
+      return [
+        res.sourceThreadId,
+        res.conversationThreadId,
+        res.threadId,
+        res.relatedConversationId,
+        extractRawThreadId(res.id),
+      ];
+    }
 
-    return "";
+    return [];
   })();
 
-  const byInferred = findByThreadId(inferredThreadId);
+  const byInferred = findByAnyId(inferredThreadIds);
   if (byInferred) return byInferred;
+
+  // Fallback: locate by raw input id embedded in candidate id (mut:raw-...:raw-...-t1:...).
+  const rawInputId =
+    String(candidate.sourceRawInputId || "").trim() ||
+    String(candidate.rawInputId || "").trim() ||
+    extractRawInputId(candidate.id);
+  if (rawInputId) {
+    const byRaw = allThreads.find((thread) =>
+      [
+        thread.sourceRawInputId,
+        thread.rawInputId,
+        thread.id,
+        thread.representativeThreadId,
+        thread.threadId,
+        thread.conversationThreadId,
+        thread.sourceThreadId,
+      ]
+        .filter(Boolean)
+        .some((value) => String(value).includes(rawInputId)),
+    );
+    if (byRaw) return byRaw;
+  }
 
   return null;
 }
@@ -1189,12 +1265,15 @@ function computeConversationThreadsFromRawRequests(rawRequests) {
             role: String(m?.role || "human") === "ai" ? "ai" : "human",
             text: String(m?.text || ""),
             createdAt: String(m?.createdAt || it?.receivedAt || ""),
+            sequence: m?.sequence ?? m?.seq ?? m?.order ?? m?.index,
           });
         }
         continue;
       }
-      messages.push({ role: "human", text: String(it?.text || ""), createdAt: String(it?.receivedAt || "") });
+      messages.push({ role: "human", text: String(it?.text || ""), createdAt: String(it?.receivedAt || ""), sequence: null });
     }
+
+    const messagesWithSequence = withStableMessageSequence(messages);
 
     const relatedSiIds = uniq(
       sorted.flatMap((x) => (Array.isArray(x?.aiThreads) ? x.aiThreads : []).map((t) => (t && t.linkedSiNo ? String(t.linkedSiNo) : ""))),
@@ -1262,11 +1341,11 @@ function computeConversationThreadsFromRawRequests(rawRequests) {
       title,
       status,
       updatedAt,
-      messageCount: messages.length,
+      messageCount: messagesWithSequence.length,
       lastMessageText,
       relatedSiIds,
       relatedIssueIds,
-      messages,
+      messages: messagesWithSequence,
     };
   });
 
@@ -1409,9 +1488,57 @@ function formatRequestSourceLabel(source) {
   return v || "-";
 }
 
+function withStableMessageSequence(messages) {
+  const list = Array.isArray(messages) ? messages.filter(Boolean) : [];
+  const maxExisting = list.reduce((max, m) => {
+    const raw = m?.sequence ?? m?.seq ?? m?.order ?? m?.index;
+    const v = Number(raw);
+    if (!Number.isFinite(v)) return max;
+    return Math.max(max, v);
+  }, 0);
+
+  let next = maxExisting + 1;
+  return list.map((m, idx) => {
+    const raw = m?.sequence ?? m?.seq ?? m?.order ?? m?.index;
+    const existing = Number(raw);
+    if (Number.isFinite(existing)) return { ...m, sequence: existing, __index: idx };
+    const assigned = maxExisting > 0 ? next++ : idx + 1;
+    return { ...m, sequence: assigned, __index: idx };
+  });
+}
+
+function sortConversationMessagesOldestFirst(messages) {
+  const list = Array.isArray(messages) ? messages.filter(Boolean) : [];
+  const messagesWithIndex = list.map((message, index) => ({ ...message, __index: index }));
+
+  messagesWithIndex.sort((a, b) => {
+    const aSeq = a.sequence ?? a.seq ?? a.order ?? a.index ?? a.__index;
+    const bSeq = b.sequence ?? b.seq ?? b.order ?? b.index ?? b.__index;
+    if (aSeq !== bSeq) return Number(aSeq) - Number(bSeq);
+
+    const aTime = new Date(String(a.createdAt || a.timestamp || 0)).getTime();
+    const bTime = new Date(String(b.createdAt || b.timestamp || 0)).getTime();
+    if (aTime !== bTime) return aTime - bTime;
+
+    return a.__index - b.__index;
+  });
+
+  return messagesWithIndex;
+}
+
 function openConversationThreadModalById(threadId) {
+  const id = String(threadId || "").trim();
+  if (!id) return;
+
   const threads = computeConversationThreadsFromRawRequests(state.rawRequests);
-  const thr = threads.find((t) => t && String(t.id) === String(threadId)) || null;
+  let thr = threads.find((t) => t && String(t.id) === String(id)) || null;
+  if (!thr) {
+    thr =
+      findSourceConversationThread(
+        { sourceThreadId: id, conversationThreadId: id, threadId: id, id },
+        threads,
+      ) || null;
+  }
   if (!thr) {
     window.alert("Conversation thread not found.");
     return;
@@ -1435,14 +1562,18 @@ function openConversationThreadModalById(threadId) {
     .filter(Boolean)
     .join("");
 
-  const logHtml = (Array.isArray(thr.messages) ? thr.messages.filter(Boolean) : [])
+  const normalizedMessages = withStableMessageSequence(Array.isArray(thr.messages) ? thr.messages : []);
+  const sortedMessages = sortConversationMessagesOldestFirst(normalizedMessages);
+
+  const logHtml = sortedMessages
     .map((m) => {
       const role = String(m?.role || "") === "ai" ? "ai" : "human";
       const sender = role === "ai" ? "AI" : who;
       const at = String(m?.createdAt || "");
       const text = String(m?.text || "");
+      const meta = `${escapeHtml(sender)}${at ? ` <span class="muted nt-mono">${escapeHtml(at)}</span>` : ""}`;
       return `<div class="conversation-message ${role}">
-        <div class="conversation-message__sender">${escapeHtml(sender)}${at ? ` <span class="muted nt-mono">${escapeHtml(at)}</span>` : ""}</div>
+        <div class="conversation-message__meta">${meta}</div>
         <div class="conversation-message__body">${escapeHtml(text)}</div>
       </div>`;
     })
@@ -1454,9 +1585,6 @@ function openConversationThreadModalById(threadId) {
     bodyHtml: `<div class="conversation-thread-modal">
       <div class="conversation-thread-modal__meta">${metaChips}</div>
       <div class="conversation-thread-modal__log">${logHtml || `<div class="nt-muted">No messages</div>`}</div>
-      <div class="conversation-thread-modal__actions">
-        <button class="btn btn--primary" type="button" data-open-approval-center="1">Open Issues（承認センター）</button>
-      </div>
     </div>`,
   });
 }
@@ -5406,6 +5534,12 @@ function openModal({ title, bodyText, bodyHtml, variant }) {
   const backBtn = document.getElementById("btn-back");
   if (backBtn) backBtn.style.display = v === "conversation_thread" ? "none" : "";
 
+  const closeBtn = document.getElementById("btn-close");
+  if (closeBtn) {
+    closeBtn.classList.toggle("modal-close-btn", v === "conversation_thread");
+    closeBtn.textContent = v === "conversation_thread" ? "×" : "閉じる";
+  }
+
   const modalTitle = modal.querySelector(".modal__title");
   const modalBody = document.getElementById("modal-body");
   if (modalTitle) modalTitle.textContent = title || "案件詳細";
@@ -5434,6 +5568,11 @@ function closeModal() {
   modal.classList.add("modal--tradecase");
   const backBtn = document.getElementById("btn-back");
   if (backBtn) backBtn.style.display = "";
+  const closeBtn = document.getElementById("btn-close");
+  if (closeBtn) {
+    closeBtn.classList.remove("modal-close-btn");
+    closeBtn.textContent = "閉じる";
+  }
   state.modalTradeCaseId = null;
   state.activeContextDrawer = null;
 }
@@ -8793,13 +8932,13 @@ function setupNewTop() {
               matchedPendingClarificationId: result?.matchedPendingClarification?.id ? String(result.matchedPendingClarification.id) : "",
               reflectedToApprovals: true,
               messages: (() => {
-                const msgs = [{ role: "human", text: rawText, createdAt: at }];
+                const msgs = [{ role: "human", text: rawText, createdAt: at, sequence: 1 }];
                 const ctx = result?.contextResolution || null;
                 const q = ctx && ctx.clarificationQuestion ? String(ctx.clarificationQuestion).trim() : "";
                 if (ctx && String(ctx.status || "") !== "resolved_enough" && q) {
-                  msgs.push({ role: "ai", text: q, createdAt: at });
+                  msgs.push({ role: "ai", text: q, createdAt: at, sequence: 2 });
                 } else {
-                  msgs.push({ role: "ai", text: "承認センターに反映しました。", createdAt: at });
+                  msgs.push({ role: "ai", text: "承認センターに反映しました。", createdAt: at, sequence: 2 });
                 }
                 return msgs;
               })(),
@@ -8907,8 +9046,8 @@ function setupNewTop() {
           originalRawInputId: id,
           reflectedToApprovals: true,
           messages: [
-            { role: "human", text, createdAt: at },
-            { role: "ai", text: "（mock）承認センターに反映しました。", createdAt: at },
+            { role: "human", text, createdAt: at, sequence: 1 },
+            { role: "ai", text: "（mock）承認センターに反映しました。", createdAt: at, sequence: 2 },
           ],
         };
         state.rawRequests = [item, ...(Array.isArray(state.rawRequests) ? state.rawRequests : [])];

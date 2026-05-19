@@ -2225,6 +2225,18 @@ body {
   color: #24292f;
 }
 
+.modal--conversation-thread #btn-close.modal-close-btn {
+  min-width: auto;
+  padding: 4px 10px;
+  font-size: 18px;
+  line-height: 1;
+  border-radius: 999px;
+}
+
+.modal--conversation-thread #btn-close.modal-close-btn:hover {
+  background: rgba(208, 215, 222, 0.35);
+}
+
 .modal--conversation-thread .modal__body {
   margin-top: 0;
   border: 0;
@@ -4775,32 +4787,36 @@ body {
 }
 
 #app .conversation-message {
-  border: 1px solid #d0d7de;
-  border-radius: 12px;
-  padding: 10px;
-  background: #ffffff;
-  font-size: 13px;
+  padding: 8px 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+}
+
+#app .conversation-message + .conversation-message {
+  border-top: 1px solid rgba(148, 163, 184, 0.18);
 }
 
 #app .conversation-message.ai {
-  border-color: color-mix(in srgb, #8250df 25%, #d0d7de);
-  background: color-mix(in srgb, #8250df 6%, #ffffff);
+  background: transparent;
 }
 
 #app .conversation-message.human {
-  background: #ffffff;
+  background: transparent;
 }
 
-#app .conversation-message__sender {
+#app .conversation-message__meta {
   font-size: 12px;
-  font-weight: 900;
-  color: #57606a;
-  margin-bottom: 6px;
+  font-weight: 700;
+  color: #64748b;
+  margin-bottom: 3px;
 }
 
 #app .conversation-message__body {
   color: #24292f;
   white-space: pre-wrap;
+  font-size: 14px;
+  line-height: 1.6;
 }
 
 #modal .conversation-thread-modal__meta {
@@ -4812,40 +4828,37 @@ body {
 }
 
 #modal .conversation-thread-modal__log {
-  display: grid;
-  gap: 10px;
+  display: block;
   margin-top: 10px;
 }
 
-#modal .conversation-thread-modal__actions {
-  margin-top: 12px;
-  display: flex;
-  justify-content: flex-end;
+#modal .conversation-message {
+  padding: 8px 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
 }
 
-#modal .conversation-message {
-  border: 1px solid #d0d7de;
-  border-radius: 12px;
-  padding: 10px;
-  background: #ffffff;
-  font-size: 13px;
+#modal .conversation-message + .conversation-message {
+  border-top: 1px solid rgba(148, 163, 184, 0.18);
 }
 
 #modal .conversation-message.ai {
-  border-color: color-mix(in srgb, #8250df 25%, #d0d7de);
-  background: color-mix(in srgb, #8250df 6%, #ffffff);
+  background: transparent;
 }
 
-#modal .conversation-message__sender {
+#modal .conversation-message__meta {
   font-size: 12px;
-  font-weight: 900;
-  color: #57606a;
-  margin-bottom: 6px;
+  font-weight: 700;
+  color: #64748b;
+  margin-bottom: 3px;
 }
 
 #modal .conversation-message__body {
   color: #24292f;
   white-space: pre-wrap;
+  font-size: 14px;
+  line-height: 1.6;
 }
 
 #app .request-action-panel__head {
