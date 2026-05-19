@@ -842,23 +842,43 @@ function transitionApprovalState(currentState, action) {
   const s = String(currentState || "planned");
   const a = String(action || "");
 
-  if (a === "approve") {
-    if (s !== "pending_approval") return null;
-    return "approved";
+  // Todo.md transitions (runtime candidate only)
+  // pending_approval + approve -> approved
+  // pending_approval + edit -> edited
+  // pending_approval + hold -> held
+  //
+  // edited + approve -> approved
+  // edited + edit -> edited
+  // edited + hold -> held
+  //
+  // held + resume -> pending_approval
+  //
+  // approved + mock_send -> mock_sent
+  // mock_sent is terminal.
+  switch (a) {
+    case "approve": {
+      if (s === "pending_approval" || s === "edited") return "approved";
+      return null;
+    }
+    case "edit": {
+      if (s === "pending_approval" || s === "edited") return "edited";
+      return null;
+    }
+    case "hold": {
+      if (s === "pending_approval" || s === "edited") return "held";
+      return null;
+    }
+    case "resume": {
+      if (s === "held") return "pending_approval";
+      return null;
+    }
+    case "mock_send": {
+      if (s === "approved") return "mock_sent";
+      return null;
+    }
+    default:
+      return null;
   }
-  if (a === "edit") {
-    if (s !== "pending_approval") return null;
-    return "edited";
-  }
-  if (a === "hold") {
-    if (s !== "pending_approval") return null;
-    return "held";
-  }
-  if (a === "mock_send") {
-    if (s !== "approved") return null;
-    return "mock_sent";
-  }
-  return null;
 }
 
 function getAvailableApprovalActions(status) {
@@ -867,15 +887,21 @@ function getAvailableApprovalActions(status) {
     approve: transitionApprovalState(s, "approve") !== null,
     edit: transitionApprovalState(s, "edit") !== null,
     hold: transitionApprovalState(s, "hold") !== null,
+    resume: transitionApprovalState(s, "resume") !== null,
     mock_send: transitionApprovalState(s, "mock_send") !== null,
   };
 }
 
 function shouldShowApprovalActionButtons(status) {
-  // Todo.md requirement: approved/mock_sent/etc should be read-only (no buttons).
+  // Todo.md requirement:
+  // - pending_approval / edited / held / approved: show action buttons area
+  // - mock_sent: read-only
   const s = String(status || "");
   if (!s) return false;
   if (s === "pending_approval") return true;
+  if (s === "edited") return true;
+  if (s === "held") return true;
+  if (s === "approved") return true;
   return false;
 }
 
@@ -970,12 +996,61 @@ function updateIngestResultStatusesForActionPlan(actionPlanId, nextStatus) {
   }
 }
 
+function findDraftByActionPlanId(actionPlanId, { preferredChannel } = {}) {
+  const apId = String(actionPlanId || "").trim();
+  if (!apId) return null;
+  const drafts = Array.isArray(state.latestIngestResult?.drafts) ? state.latestIngestResult.drafts.filter(Boolean) : [];
+  const related = drafts.filter((d) => String(d?.actionPlanId || "") === apId);
+  if (!related.length) return null;
+  const pc = String(preferredChannel || "").trim();
+  if (pc) return related.find((d) => String(d?.channel || "") === pc) || related[0] || null;
+  return related[0] || null;
+}
+
+function updateDraftBodyForActionPlan(actionPlanId, nextBody, { preferredChannel } = {}) {
+  const apId = String(actionPlanId || "").trim();
+  if (!apId) return { ok: false, error: "missing_action_plan" };
+  if (typeof nextBody !== "string") return { ok: false, error: "invalid_body" };
+  if (!state.latestIngestResult || !Array.isArray(state.latestIngestResult.drafts)) return { ok: false, error: "drafts_not_found" };
+
+  const drafts = state.latestIngestResult.drafts.filter(Boolean);
+  const pc = String(preferredChannel || "").trim();
+  let idx = drafts.findIndex(
+    (d) =>
+      d &&
+      String(d.actionPlanId || "") === apId &&
+      (pc ? String(d.channel || "") === pc : true),
+  );
+  if (idx < 0 && pc) {
+    idx = drafts.findIndex((d) => d && String(d.actionPlanId || "") === apId);
+  }
+  if (idx < 0) return { ok: false, error: "draft_not_found" };
+
+  const current = String(drafts[idx]?.body || "");
+  if (nextBody === current) return { ok: false, error: "no_change" };
+
+  const updated = { ...drafts[idx], body: nextBody };
+  const nextDrafts = drafts.slice();
+  nextDrafts[idx] = updated;
+  state.latestIngestResult.drafts = nextDrafts;
+  return { ok: true };
+}
+
 function recordApprovalActivityEvent(actionPlanId, nextStatus) {
   const apId = String(actionPlanId || "").trim();
   const status = String(nextStatus || "").trim();
   if (!apId || !status) return;
 
+  recordApprovalActivityEventDetailed(apId, { nextStatus: status });
+}
+
+function recordApprovalActivityEventDetailed(actionPlanId, { action, nextStatus, description } = {}) {
+  const apId = String(actionPlanId || "").trim();
+  const status = String(nextStatus || "").trim();
+  if (!apId || !status) return;
+
   const type = (() => {
+    if (action === "resume") return "resumed";
     if (status === "approved") return "approved";
     if (status === "held") return "held";
     if (status === "edited") return "edited";
@@ -988,6 +1063,7 @@ function recordApprovalActivityEvent(actionPlanId, nextStatus) {
     if (type === "approved") return 70;
     if (type === "edited") return 71;
     if (type === "held") return 72;
+    if (type === "resumed") return 73;
     if (type === "mock_sent") return 80;
     return null;
   })();
@@ -998,8 +1074,15 @@ function recordApprovalActivityEvent(actionPlanId, nextStatus) {
   const ev = {
     id: `act:${shortId()}`,
     type,
+    title: (() => {
+      if (type === "edited") return "Edit draft";
+      if (type === "mock_sent") return "mock_sent";
+      return type;
+    })(),
     occurredAt: nowIso(),
     actor: "human",
+    description: description ? String(description) : undefined,
+    status,
     sequence: typeof seq === "number" ? seq : undefined,
     threadId: plan?.threadId ? String(plan.threadId) : undefined,
     issueId: plan?.issueId ? String(plan.issueId) : undefined,
@@ -1007,9 +1090,16 @@ function recordApprovalActivityEvent(actionPlanId, nextStatus) {
 
   if (!state.latestIngestResult) state.latestIngestResult = {};
   state.latestIngestResult.activityEvents = prependUniqueById(state.latestIngestResult.activityEvents, [ev]);
+
+  // Also reflect to Activity page immediately.
+  const reflectable = new Set(["edited", "approved", "held", "resumed", "mock_sent"]);
+  if (reflectable.has(type)) {
+    const feedItem = activityEventToFeedItem(ev);
+    state.activityFeedItems = prependUniqueById(state.activityFeedItems, [feedItem]);
+  }
 }
 
-function applyApprovalAction(idLike, action) {
+function applyApprovalAction(idLike, action, { description } = {}) {
   const actionPlanId = findActionPlanIdFromAnyId(idLike);
   if (!actionPlanId) return { ok: false, error: "ActionPlan が見つかりませんでした。" };
 
@@ -1020,7 +1110,7 @@ function applyApprovalAction(idLike, action) {
 
   state.approvalsByActionPlanId[actionPlanId] = { status: next, updatedAt: nowIso() };
   updateIngestResultStatusesForActionPlan(actionPlanId, next);
-  recordApprovalActivityEvent(actionPlanId, next);
+  recordApprovalActivityEventDetailed(actionPlanId, { action, nextStatus: next, description });
 
   return { ok: true, actionPlanId, next };
 }
@@ -1232,6 +1322,8 @@ function activityEventToFeedItem(ev) {
         return "保留";
       case "edited":
         return "編集済み";
+      case "resumed":
+        return "再開";
       case "mock_sent":
         return "mock送信";
       case "failed_processing":
@@ -2733,7 +2825,7 @@ function renderNewTop() {
     function getIssueListIcon(item) {
       const status = item && typeof item === "object" ? item.status || item.approvalStatus || item.state || item.statusKey : "";
       const normalized = String(status || "").trim().toLowerCase().replace(/_/g, " ");
-      if (["completed", "resolved", "approved", "mock sent", "sent"].includes(normalized)) return "✓";
+      if (["completed", "resolved", "mock sent", "sent"].includes(normalized)) return "✓";
       return "○";
     }
 
@@ -3291,8 +3383,6 @@ function renderNewTop() {
       const approvalEntry = state.approvalsByActionPlanId?.[apId] || null;
       const approvalStatus = String((approvalEntry && approvalEntry.status) || plan.status || "pending_approval");
       const availableActions = getAvailableApprovalActions(approvalStatus);
-      const canApprove = availableActions.approve;
-      const canMockSend = availableActions.mock_send;
 
       const draft = drafts.find((d) => d && String(d.actionPlanId || "") === apId && String(d.channel || "") === "teams") || drafts.find((d) => d && String(d.actionPlanId || "") === apId) || null;
       const bodyText = draft ? String(draft.body || "") : resolution?.status === "status_query" ? String(resolution.statusAnswer || "") : String(resolution?.clarificationQuestion || "");
@@ -3323,10 +3413,11 @@ function renderNewTop() {
         ${
           shouldShowApprovalActionButtons(approvalStatus)
             ? `<div class="issue-current-actions" aria-label="Next actions" style="margin: 12px 0;">
-          <button class="btn btn--primary btn--small" type="button" data-reply-approve="${escapeHtml(apId)}" ${canApprove ? "" : "disabled"}>Approve</button>
-          <button class="btn btn--small" type="button" data-reply-edit="${escapeHtml(apId)}" ${canApprove ? "" : "disabled"}>Edit draft</button>
-          <button class="btn btn--small" type="button" data-reply-hold="${escapeHtml(apId)}" ${canApprove ? "" : "disabled"}>Hold</button>
-          <button class="btn btn--small" type="button" data-reply-mock-send="${escapeHtml(apId)}" ${canMockSend ? "" : "disabled"}>Mock send</button>
+          ${availableActions.approve ? `<button class="btn btn--primary btn--small" type="button" data-reply-approve="${escapeHtml(apId)}">Approve</button>` : ""}
+          ${availableActions.edit ? `<button class="btn btn--small" type="button" data-reply-edit="${escapeHtml(apId)}">Edit draft</button>` : ""}
+          ${availableActions.hold ? `<button class="btn btn--small" type="button" data-reply-hold="${escapeHtml(apId)}">Hold</button>` : ""}
+          ${availableActions.resume ? `<button class="btn btn--small" type="button" data-reply-resume="${escapeHtml(apId)}">Resume</button>` : ""}
+          ${availableActions.mock_send ? `<button class="btn btn--small" type="button" data-reply-mock-send="${escapeHtml(apId)}">Mock send</button>` : ""}
         </div>`
             : `<div class="issue-current-actions" aria-label="Next actions" style="margin: 12px 0;">
           <span class="issue-pill">${escapeHtml(approvalStatusLabelJa(approvalStatus) || approvalStatus)}</span>
@@ -3607,6 +3698,8 @@ function renderNewTop() {
           );
         if (availableActions.hold)
           parts.push(`<button class="btn btn--small" type="button" data-mutation-hold="${escapeHtml(actionKey)}">Hold</button>`);
+        if (availableActions.resume)
+          parts.push(`<button class="btn btn--small" type="button" data-mutation-resume="${escapeHtml(actionKey)}">Resume</button>`);
         if (availableActions.mock_send)
           parts.push(
             `<button class="btn btn--small" type="button" data-mutation-mock-send="${escapeHtml(actionKey)}">Mock send</button>`,
@@ -3767,7 +3860,12 @@ function renderNewTop() {
       </aside>`;
 
       const actionCardHtml =
-        draftPreview && (approvalStatus === "pending_approval" || approvalStatus === "approved" || approvalStatus === "planned")
+        draftPreview &&
+        (approvalStatus === "pending_approval" ||
+          approvalStatus === "edited" ||
+          approvalStatus === "held" ||
+          approvalStatus === "approved" ||
+          approvalStatus === "planned")
           ? `<div class="issue-action-card" aria-label="Human action card">
               <div class="issue-action-card__title">AIが仕入先確認メールを作成しました。</div>
               <div class="issue-draft-preview">
@@ -3784,6 +3882,8 @@ function renderNewTop() {
                     ? `${availableActions.approve ? `<button class="btn btn--primary btn--small" type="button" data-mutation-approve="${escapeHtml(actionKey)}">Approve</button>` : ""}${
                         availableActions.edit ? `<button class="btn btn--small" type="button" data-mutation-edit="${escapeHtml(actionKey)}">Edit</button>` : ""
                       }${availableActions.hold ? `<button class="btn btn--small" type="button" data-mutation-hold="${escapeHtml(actionKey)}">Hold</button>` : ""}${
+                        availableActions.resume ? `<button class="btn btn--small" type="button" data-mutation-resume="${escapeHtml(actionKey)}">Resume</button>` : ""
+                      }${
                         availableActions.mock_send
                           ? `<button class="btn btn--small" type="button" data-mutation-mock-send="${escapeHtml(actionKey)}">Mock send</button>`
                           : ""
@@ -8855,7 +8955,7 @@ function setupNewTop() {
     const target = e.target;
     if (!target) return;
 
-    const guardApprovalClick = (idLike, action) => {
+    const guardApprovalClick = (idLike, action, { description } = {}) => {
       const apId = findActionPlanIdFromAnyId(idLike);
       if (!apId) return { ok: false, ignored: true, reason: "missing_action_plan" };
       const entry = state.approvalsByActionPlanId?.[apId] || null;
@@ -8864,7 +8964,7 @@ function setupNewTop() {
       const current = String((entry && entry.status) || (fallbackPlan && fallbackPlan.status) || "planned");
       const available = getAvailableApprovalActions(current);
       if (!available[String(action)]) return { ok: false, ignored: true, reason: `unavailable:${current}->${String(action)}` };
-      const res = applyApprovalAction(apId, action);
+      const res = applyApprovalAction(apId, action, { description });
       return { ok: res.ok, ignored: false, res };
     };
 
@@ -9405,13 +9505,42 @@ function setupNewTop() {
       const id = replyEditEl.getAttribute("data-reply-edit") || "";
       e.preventDefault();
       e.stopPropagation();
-      const attempt = guardApprovalClick(id, "edit");
-      if (!attempt.ok) {
-        if (!attempt.ignored) window.alert(`(mock) edit failed`);
+      const apId = findActionPlanIdFromAnyId(id);
+      if (!apId) return;
+
+      const draft = findDraftByActionPlanId(apId, { preferredChannel: "teams" });
+      if (!draft) {
+        window.alert("(mock) draft not found");
         return;
       }
+      const currentBody = String(draft.body || "");
+      const nextBody = window.prompt("Edit draft body", currentBody);
+      if (typeof nextBody !== "string") return;
+
+      const updateRes = updateDraftBodyForActionPlan(apId, nextBody, { preferredChannel: "teams" });
+      if (!updateRes.ok) {
+        if (updateRes.error === "no_change") window.alert("Edit cancelled: body is unchanged");
+        else window.alert("(mock) edit failed");
+        return;
+      }
+
+      const attempt = guardApprovalClick(apId, "edit");
+      if (!attempt.ok) return;
       const res = attempt.res;
       if (res && res.actionPlanId) log(`(mock) edited: ${String(res.actionPlanId)} -> ${String(res.next)}`);
+      renderApp();
+      return;
+    }
+
+    const replyResumeEl = target.closest && target.closest("[data-reply-resume]");
+    if (replyResumeEl) {
+      const id = replyResumeEl.getAttribute("data-reply-resume") || "";
+      e.preventDefault();
+      e.stopPropagation();
+      const attempt = guardApprovalClick(id, "resume");
+      if (!attempt.ok) return;
+      const res = attempt.res;
+      if (res && res.actionPlanId) log(`(mock) resumed: ${String(res.actionPlanId)} -> ${String(res.next)}`);
       renderApp();
       return;
     }
@@ -9421,7 +9550,18 @@ function setupNewTop() {
       const id = replyMockSendEl.getAttribute("data-reply-mock-send") || "";
       e.preventDefault();
       e.stopPropagation();
-      const attempt = guardApprovalClick(id, "mock_send");
+      const apId = findActionPlanIdFromAnyId(id);
+      const draft = apId ? findDraftByActionPlanId(apId) : null;
+      const toText = (() => {
+        const raw = draft?.to;
+        if (Array.isArray(raw)) return raw.map((x) => String(x)).filter(Boolean).join(", ");
+        if (typeof raw === "string") return raw;
+        return "";
+      })();
+      const subject = draft?.subject ? String(draft.subject) : "";
+      const desc = `mock送信：${toText || "-"} / ${subject || "-"}`;
+
+      const attempt = guardApprovalClick(id, "mock_send", { description: desc });
       if (!attempt.ok) {
         if (!attempt.ignored) window.alert(`(mock) mock send failed`);
         return;
@@ -9557,13 +9697,42 @@ function setupNewTop() {
       const id = mutationEditEl.getAttribute("data-mutation-edit") || "";
       e.preventDefault();
       e.stopPropagation();
-      const attempt = guardApprovalClick(id, "edit");
-      if (!attempt.ok) {
-        if (!attempt.ignored) window.alert(`(mock) edit failed`);
+      const apId = findActionPlanIdFromAnyId(id);
+      if (!apId) return;
+
+      const draft = findDraftByActionPlanId(apId, { preferredChannel: "email" });
+      if (!draft) {
+        window.alert("(mock) draft not found");
         return;
       }
+      const currentBody = String(draft.body || "");
+      const nextBody = window.prompt("Edit draft body", currentBody);
+      if (typeof nextBody !== "string") return;
+
+      const updateRes = updateDraftBodyForActionPlan(apId, nextBody, { preferredChannel: "email" });
+      if (!updateRes.ok) {
+        if (updateRes.error === "no_change") window.alert("Edit cancelled: body is unchanged");
+        else window.alert("(mock) edit failed");
+        return;
+      }
+
+      const attempt = guardApprovalClick(apId, "edit");
+      if (!attempt.ok) return;
       const res = attempt.res;
       if (res && res.actionPlanId) log(`(mock) edited: ${String(res.actionPlanId)} -> ${String(res.next)}`);
+      renderApp();
+      return;
+    }
+
+    const mutationResumeEl = target.closest && target.closest("[data-mutation-resume]");
+    if (mutationResumeEl) {
+      const id = mutationResumeEl.getAttribute("data-mutation-resume") || "";
+      e.preventDefault();
+      e.stopPropagation();
+      const attempt = guardApprovalClick(id, "resume");
+      if (!attempt.ok) return;
+      const res = attempt.res;
+      if (res && res.actionPlanId) log(`(mock) resumed: ${String(res.actionPlanId)} -> ${String(res.next)}`);
       renderApp();
       return;
     }
@@ -9573,7 +9742,18 @@ function setupNewTop() {
       const id = mutationMockSendEl.getAttribute("data-mutation-mock-send") || "";
       e.preventDefault();
       e.stopPropagation();
-      const attempt = guardApprovalClick(id, "mock_send");
+      const apId = findActionPlanIdFromAnyId(id);
+      const draft = apId ? findDraftByActionPlanId(apId, { preferredChannel: "email" }) : null;
+      const toText = (() => {
+        const raw = draft?.to;
+        if (Array.isArray(raw)) return raw.map((x) => String(x)).filter(Boolean).join(", ");
+        if (typeof raw === "string") return raw;
+        return "";
+      })();
+      const subject = draft?.subject ? String(draft.subject) : "";
+      const desc = `mock送信：${toText || "-"} / ${subject || "-"}`;
+
+      const attempt = guardApprovalClick(id, "mock_send", { description: desc });
       if (!attempt.ok) {
         if (!attempt.ignored) window.alert(`(mock) mock send failed`);
         return;
