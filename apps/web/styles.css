@@ -1828,6 +1828,11 @@ body {
   background: rgba(251, 191, 36, 0.14);
 }
 
+.pill--danger {
+  border-color: rgba(248, 113, 113, 0.85);
+  background: rgba(248, 113, 113, 0.16);
+}
+
 .pill--muted {
   opacity: 0.85;
 }
@@ -2418,6 +2423,16 @@ body {
   margin: 12px 16px 16px;
 }
 
+.workspace-topbar {
+  margin-bottom: 10px;
+}
+
+.workspace-topbar__chips {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .workspace-desk {
   background: var(--bg);
   border: 1px solid var(--border);
@@ -2600,6 +2615,11 @@ body {
 .document-tab.is-missing {
   border-color: color-mix(in srgb, #ef4444 45%, var(--border));
   box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.10);
+}
+
+.document-tab.is-danger {
+  border-color: color-mix(in srgb, #f97316 55%, var(--border));
+  box-shadow: 0 0 0 3px rgba(249, 115, 22, 0.12);
 }
 
 .paper-document {

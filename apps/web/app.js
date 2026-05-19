@@ -237,11 +237,17 @@ function shipmentStageIndexFromState(shipmentState) {
 }
 
 function openShipmentWorkspace(tradeCaseId) {
-  openDocumentWorkspace(tradeCaseId, "inv");
+  const tc = tradeCaseId ? getTradeCaseById(tradeCaseId) : null;
+  if (!tc) return;
+  const shipmentId = String(tc?.shipmentEntity?.id || "").trim();
+  openDocumentWorkspace(tc.id, "shipment", shipmentId || "-", "shipment");
 }
 
 function openSiWorkspace(tradeCaseId) {
-  openDocumentWorkspace(tradeCaseId, "si");
+  const tc = tradeCaseId ? getTradeCaseById(tradeCaseId) : null;
+  if (!tc) return;
+  const siNo = String(tc?.siEntity?.siNo || "").trim();
+  openDocumentWorkspace(tc.id, "si", siNo || "-", "si");
 }
 
 function normalizeInvoiceNo(input) {
@@ -249,6 +255,159 @@ function normalizeInvoiceNo(input) {
   if (!s) return "";
   if (/^inv[-\s_]*\d+/i.test(s)) return `INV-${s.replace(/^inv[-\s_]*/i, "").trim()}`;
   return s;
+}
+
+function normalizeFocusType(input) {
+  const t = String(input || "").trim().toLowerCase();
+  if (t === "si") return "si";
+  if (t === "invoice" || t === "inv") return "invoice";
+  if (t === "shipment") return "shipment";
+  if (t === "document" || t === "doc") return "document";
+  if (t === "case" || t === "tradecase" || t === "trade_case") return "case";
+  return "case";
+}
+
+function formatFocusLabel(focusType, focusId) {
+  const type = normalizeFocusType(focusType);
+  const id = String(focusId || "").trim();
+  if (!id || id === "-") {
+    if (type === "si") return "SI -";
+    if (type === "invoice") return "INV -";
+    if (type === "shipment") return "Shipment -";
+    if (type === "document") return "Document -";
+    return "Case -";
+  }
+  if (type === "si") return id;
+  if (type === "invoice") return normalizeInvoiceNo(id);
+  if (type === "shipment") return id;
+  if (type === "document") return id;
+  return `Case ${id}`;
+}
+
+function buildLinkedDocumentsForFocus(tradeCase, focusType, focusId) {
+  const tc = tradeCase || null;
+  const sh = tc?.shipmentEntity || null;
+  const si = tc?.siEntity || null;
+  const type = normalizeFocusType(focusType);
+  const id = String(focusId || "").trim();
+
+  const invoiceRefs = Array.isArray(tc?.invoiceNumbers) ? tc.invoiceNumbers.filter(Boolean) : [];
+  const invNos = uniqStrings([
+    ...invoiceRefs.map((x) => normalizeInvoiceNo(x?.invoiceNo)),
+    ...(sh?.supplierInvoices || []).map(normalizeInvoiceNo),
+    ...(si?.relatedInvoiceNos || []).map(normalizeInvoiceNo),
+  ]).filter(Boolean);
+
+  const blNo = String(sh?.blNo || (Array.isArray(tc?.blNumbers) ? tc.blNumbers[0] : "") || "").trim() || "-";
+  const plLabel = "PL missing";
+  const shipmentId = String(sh?.id || "-");
+  const siNo = String(si?.siNo || "-");
+
+  if (type === "si") {
+    return {
+      title: `Linked to this SI:`,
+      items: uniqStrings([
+        ...invNos,
+        plLabel,
+        blNo !== "-" ? blNo : null,
+        shipmentId !== "-" ? shipmentId : null,
+      ]).filter(Boolean),
+    };
+  }
+
+  if (type === "invoice") {
+    return {
+      title: `Linked to this INV:`,
+      items: uniqStrings([
+        siNo !== "-" ? siNo : null,
+        shipmentId !== "-" ? shipmentId : null,
+        blNo !== "-" ? blNo : null,
+        plLabel,
+      ]).filter(Boolean),
+    };
+  }
+
+  if (type === "shipment") {
+    return {
+      title: `Linked to this Shipment:`,
+      items: uniqStrings([
+        siNo !== "-" ? siNo : null,
+        ...invNos,
+        blNo !== "-" ? blNo : null,
+        plLabel,
+      ]).filter(Boolean),
+    };
+  }
+
+  if (type === "document") {
+    return {
+      title: `Linked documents`,
+      items: uniqStrings([
+        siNo !== "-" ? siNo : null,
+        ...invNos,
+        plLabel,
+        blNo !== "-" ? blNo : null,
+        shipmentId !== "-" ? shipmentId : null,
+      ]).filter(Boolean),
+    };
+  }
+
+  return {
+    title: `Linked documents`,
+    items: uniqStrings([
+      siNo !== "-" ? siNo : null,
+      ...invNos,
+      plLabel,
+      blNo !== "-" ? blNo : null,
+      shipmentId !== "-" ? shipmentId : null,
+    ]).filter(Boolean),
+  };
+}
+
+function resolveFocusDocId({ focusType, focusId, documents }) {
+  const docs = Array.isArray(documents) ? documents.filter(Boolean) : [];
+  if (!docs.length) return null;
+  const type = normalizeFocusType(focusType);
+  const id = String(focusId || "").trim();
+  if (!id) return null;
+
+  if (type === "si") {
+    return (
+      docs.find((d) => String(d?.id || "").startsWith("si-"))?.id ||
+      docs.find((d) => String(d?.label || "") === id)?.id ||
+      null
+    );
+  }
+  if (type === "invoice") {
+    const target = invoiceDocId(id);
+    return (
+      docs.find((d) => String(d?.id || "") === target)?.id ||
+      docs.find((d) => String(d?.label || "") === normalizeInvoiceNo(id))?.id ||
+      null
+    );
+  }
+  if (type === "shipment") {
+    return docs.find((d) => String(d?.id || "") === "shipment")?.id || docs.find((d) => String(d?.label || "") === id)?.id || null;
+  }
+  if (type === "document") {
+    return docs.find((d) => String(d?.id || "") === id)?.id || docs.find((d) => String(d?.label || "") === id)?.id || null;
+  }
+  if (type === "case") return null;
+
+  return null;
+}
+
+function focusFromDoc({ docId, docLabel, tradeCase }) {
+  const tc = tradeCase || null;
+  const id = String(docId || "").trim();
+  const label = String(docLabel || "").trim();
+  if (!id) return { focusType: "case", focusId: tc?.id ? String(tc.id) : "-" };
+
+  if (id.startsWith("si-")) return { focusType: "si", focusId: String(tc?.siEntity?.siNo || label || "-") };
+  if (id === "shipment") return { focusType: "shipment", focusId: String(tc?.shipmentEntity?.id || "-") };
+  if (id.startsWith("inv-")) return { focusType: "invoice", focusId: label || "-" };
+
+  return { focusType: "document", focusId: label || id };
 }
 
 function invoiceDocId(invoiceNo) {
@@ -290,25 +449,33 @@ function resolveInitialDocId(initialDocId, documents) {
   return null;
 }
 
-function openDocumentWorkspace(tradeCaseId, initialDocId) {
+function openDocumentWorkspace(tradeCaseId, focusType, focusId, initialDocId) {
   const tc = tradeCaseId ? getTradeCaseById(tradeCaseId) : null;
   if (!tc) return;
   state.modalTradeCaseId = tc.id;
-  const documents = buildDocumentWorkspaceDocuments(tc);
-  const resolved = resolveInitialDocId(initialDocId, documents);
+  const type = normalizeFocusType(focusType);
+  const id = String(focusId || "").trim();
+  const documents = buildDocumentWorkspaceDocuments(tc, type, id);
+
+  const ui = getWorkspaceUi("document-workspace-modal");
+  ui.focusType = type;
+  ui.focusId = id || "-";
+
+  const resolvedInitial = resolveInitialDocId(initialDocId, documents);
+  const resolvedFocus = resolveFocusDocId({ focusType: type, focusId: id, documents });
+  const resolved = resolvedFocus || resolvedInitial;
   if (resolved) {
-    const ui = getWorkspaceUi("document-workspace-modal");
     ui.activeDocId = resolved;
     ui.activePageByDocId[resolved] = 0;
   }
   openWorkspaceModal("document-workspace-modal", {
     title: "Document Workspace",
-    bodyHtml: renderDocumentWorkspace(tc, initialDocId),
+    bodyHtml: renderDocumentWorkspace(tc, { focusType: type, focusId: id, initialDocId }),
     tradeCaseId: tc.id,
   });
 }
 
-function renderDocumentWorkspace(tradeCase, initialDocId) {
+function renderDocumentWorkspace(tradeCase, { focusType, focusId, initialDocId } = {}) {
   const tc = tradeCase || null;
   if (!tc) return "";
 
@@ -317,12 +484,26 @@ function renderDocumentWorkspace(tradeCase, initialDocId) {
   const customer = tc.customer || null;
   const supplier = tc.supplier || null;
 
-  const documents = buildDocumentWorkspaceDocuments(tc);
-  const initialResolved = resolveInitialDocId(initialDocId, documents);
-  if (initialResolved) {
-    const ui = getWorkspaceUi("document-workspace-modal");
-    ui.activeDocId = initialResolved;
-    ui.activePageByDocId[initialResolved] = 0;
+  const ui = getWorkspaceUi("document-workspace-modal");
+  const type = normalizeFocusType(focusType || ui.focusType);
+  const id = String(focusId || ui.focusId || "").trim();
+  ui.focusType = type;
+  ui.focusId = id || "-";
+
+  const documents = buildDocumentWorkspaceDocuments(tc, type, id);
+
+  if (initialDocId) {
+    const initialResolved = resolveInitialDocId(initialDocId, documents);
+    if (initialResolved) {
+      ui.activeDocId = initialResolved;
+      ui.activePageByDocId[initialResolved] = 0;
+    }
+  } else if (!ui.activeDocId) {
+    const focusResolved = resolveFocusDocId({ focusType: type, focusId: id, documents });
+    if (focusResolved) {
+      ui.activeDocId = focusResolved;
+      ui.activePageByDocId[focusResolved] = 0;
+    }
   }
 
   const viewerHtml = renderDocumentViewer(documents, { modalId: "document-workspace-modal", viewerKey: "document" });
@@ -402,15 +583,10 @@ function renderDocumentWorkspace(tradeCase, initialDocId) {
     return `<div class="muted">（placeholder）</div>`;
   })();
 
-  const linkedDocLabels = [
-    si?.siNo ? si.siNo : null,
-    ...invNos.map((x) => x),
-    "PL missing",
-    blNo,
-  ].filter(Boolean);
+  const linkedInfo = buildLinkedDocumentsForFocus(tc, type, id);
 
-  const linkedDocsHtml = linkedDocLabels.length
-    ? `<ul class="list">${linkedDocLabels.map((x) => `<li>${escapeHtml(x)}</li>`).join("")}</ul>`
+  const linkedDocsHtml = linkedInfo.items.length
+    ? `<ul class="list">${linkedInfo.items.map((x) => `<li>${escapeHtml(x)}</li>`).join("")}</ul>`
     : `<div class="muted">-</div>`;
 
   const splitStatusHtml = (() => {
@@ -425,6 +601,12 @@ function renderDocumentWorkspace(tradeCase, initialDocId) {
   })();
 
   return `
+    <div class="workspace-topbar">
+      <div class="workspace-topbar__chips">
+        <span class="pill pill--muted">Focus: ${escapeHtml(formatFocusLabel(type, id))}</span>
+        <span class="pill pill--muted">Case ${escapeHtml(tc.id || "-")}</span>
+      </div>
+    </div>
     <div class="workspace-desk">
       <div class="workspace-layout">
         <aside class="workspace-pane workspace-pane--left" aria-label="Case context">
@@ -440,7 +622,7 @@ function renderDocumentWorkspace(tradeCase, initialDocId) {
           </div>
 
           <div class="workspace-section">
-            <div class="workspace-section__title">Linked documents</div>
+            <div class="workspace-section__title">${escapeHtml(linkedInfo.title)}</div>
             ${linkedDocsHtml}
           </div>
 
@@ -6205,7 +6387,7 @@ function isAnyWorkspaceModalOpen() {
 
 function getWorkspaceUi(modalId) {
   if (!state.workspaceUiByModalId[modalId]) {
-    state.workspaceUiByModalId[modalId] = { activeDocId: null, activePageByDocId: {}, zoomByDocId: {}, showMarkers: true };
+    state.workspaceUiByModalId[modalId] = { activeDocId: null, activePageByDocId: {}, zoomByDocId: {}, showMarkers: true, focusType: "case", focusId: "-" };
   }
   return state.workspaceUiByModalId[modalId];
 }
@@ -6242,11 +6424,12 @@ function renderDocumentViewer(documents, { modalId, viewerKey }) {
           const isActive = Boolean(activeDocId && d.id === activeDocId);
           const label = d.label || d.id;
           const isMissing = d.status === "missing";
-          return `<button class="document-tab ${isActive ? "is-active" : ""} ${isMissing ? "is-missing" : ""}" type="button" role="tab"
+          const isMismatch = d.status === "mismatch";
+          return `<button class="document-tab ${isActive ? "is-active" : ""} ${isMissing ? "is-missing" : ""} ${isMismatch ? "is-danger" : ""}" type="button" role="tab"
             aria-selected="${isActive ? "true" : "false"}"
             data-doc-tab="${escapeHtml(d.id)}"
             data-workspace-viewer="${escapeHtml(viewerKey)}"
-          >${escapeHtml(label)}${isMissing ? ` <span class="pill pill--mini pill--warn">missing</span>` : ""}</button>`;
+          >${escapeHtml(label)}${isMissing ? ` <span class="pill pill--mini pill--warn">missing</span>` : ""}${isMismatch ? ` <span class="pill pill--mini pill--danger">mismatch</span>` : ""}</button>`;
         })
         .join("")}
     </div>
@@ -6524,12 +6707,14 @@ function buildSiWorkspaceDocuments(tradeCase) {
   ];
 }
 
-function buildDocumentWorkspaceDocuments(tradeCase) {
+function buildDocumentWorkspaceDocuments(tradeCase, focusType, focusId) {
   const tc = tradeCase || null;
   if (!tc) return [];
 
   const sh = tc.shipmentEntity || null;
   const si = tc.siEntity || null;
+  const type = normalizeFocusType(focusType);
+  const focusKey = String(focusId || "").trim();
 
   const base = buildSiWorkspaceDocuments(tc);
   const siDoc = base.find((d) => String(d?.id || "").startsWith("si-")) || null;
@@ -6568,11 +6753,13 @@ function buildDocumentWorkspaceDocuments(tradeCase) {
     const qty = typeof ref?.qty === "number" ? ref.qty : null;
     const supplierName = String(ref?.supplier || tc?.supplier?.name || "ACME Components (Shenzhen)");
     const blNo = String(sh?.blNo || "BL-SZX-7781");
+    const isQtyMismatch = siQty != null && qty != null && siQty !== qty;
     return {
       id: id || `inv-${String(invNo || "").toLowerCase().replace(/[^a-z0-9]+/g, "-")}`,
       label: invNo,
       type: "Invoice",
       title: "Commercial Invoice",
+      status: isQtyMismatch ? "mismatch" : undefined,
       mockPages: [
         {
           title: "COMMERCIAL INVOICE",
@@ -6586,13 +6773,13 @@ function buildDocumentWorkspaceDocuments(tradeCase) {
             {
               k: "Qty",
               v: qty != null ? `${qty} pcs` : "—",
-              warn: siQty != null && qty != null && siQty !== qty ? `⚠ SI ${siQty}pcs` : "",
+              warn: isQtyMismatch ? `⚠ SI ${siQty}pcs` : "",
             },
             { k: "Amount", v: "USD 12,800.00" },
           ],
-          annotation: siQty != null && qty != null && siQty !== qty ? "⚠ Quantity mismatch detected" : "",
+          annotation: isQtyMismatch ? "⚠ Quantity mismatch detected" : "",
           markers:
-            siQty != null && qty != null && siQty !== qty
+            isQtyMismatch
               ? [
                   { kind: "warn", x: 72, y: 34, text: "⚠ Qty mismatch" },
                   { kind: "note", x: 16, y: 72, text: "Confirm split shipment?" },
@@ -6664,7 +6851,53 @@ function buildDocumentWorkspaceDocuments(tradeCase) {
   out.push(blDoc);
   out.push(shipmentDoc);
 
-  return out.filter(Boolean);
+  const docs = out.filter(Boolean);
+  const focusDocId = resolveFocusDocId({ focusType: type, focusId: focusKey, documents: docs });
+
+  const kindOf = (d) => {
+    const id = String(d?.id || "");
+    if (id.startsWith("si-")) return "si";
+    if (id === "sales-response") return "salesResponse";
+    if (id === "sales-commitment") return "salesCommitment";
+    if (id.startsWith("inv-")) return "invoice";
+    if (id === "pl-missing" || id.startsWith("pl-")) return "pl";
+    if (id.startsWith("bl-")) return "bl";
+    if (id === "shipment") return "shipment";
+    return "other";
+  };
+
+  const orderByFocus = (() => {
+    if (type === "si") return ["si", "salesResponse", "invoice", "pl", "bl", "shipment", "salesCommitment", "other"];
+    if (type === "invoice") return ["invoice", "si", "shipment", "pl", "bl", "salesResponse", "salesCommitment", "other"];
+    if (type === "shipment") return ["shipment", "invoice", "pl", "bl", "si", "salesResponse", "salesCommitment", "other"];
+    if (type === "document") return ["other", "si", "invoice", "pl", "bl", "shipment", "salesResponse", "salesCommitment"];
+    return ["si", "invoice", "pl", "bl", "shipment", "salesResponse", "salesCommitment", "other"];
+  })();
+
+  const rankKind = new Map(orderByFocus.map((k, i) => [k, i]));
+
+  return docs
+    .slice()
+    .sort((a, b) => {
+      const ak = kindOf(a);
+      const bk = kindOf(b);
+      const ar = rankKind.has(ak) ? rankKind.get(ak) : 999;
+      const br = rankKind.has(bk) ? rankKind.get(bk) : 999;
+      if (ar !== br) return ar - br;
+
+      // Within the focused kind, bring the focus doc to the front.
+      if (focusDocId) {
+        if (String(a?.id || "") === focusDocId) return -1;
+        if (String(b?.id || "") === focusDocId) return 1;
+      }
+
+      // Keep missing docs near the end of their kind (except when focused).
+      const am = a?.status === "missing";
+      const bm = b?.status === "missing";
+      if (am !== bm) return am ? 1 : -1;
+
+      return String(a?.label || a?.id || "").localeCompare(String(b?.label || b?.id || ""));
+    });
 }
 
 function renderShipmentWorkspace(tradeCase) {
@@ -8934,13 +9167,19 @@ function setupWorkspaceModals() {
   const doc = document.getElementById("document-workspace-modal");
 
   const renderWorkspaceBody = (modalId, tc) => {
-    if (modalId === "document-workspace-modal") return renderDocumentWorkspace(tc);
+    if (modalId === "document-workspace-modal") {
+      const ui = getWorkspaceUi(modalId);
+      return renderDocumentWorkspace(tc, { focusType: ui.focusType, focusId: ui.focusId });
+    }
     if (modalId === "shipment-workspace-modal") return renderShipmentWorkspace(tc);
     return renderSiWorkspace(tc);
   };
 
   const buildWorkspaceDocs = (modalId, tc) => {
-    if (modalId === "document-workspace-modal") return buildDocumentWorkspaceDocuments(tc);
+    if (modalId === "document-workspace-modal") {
+      const ui = getWorkspaceUi(modalId);
+      return buildDocumentWorkspaceDocuments(tc, ui.focusType, ui.focusId);
+    }
     if (modalId === "shipment-workspace-modal") return buildShipmentWorkspaceDocuments(tc);
     return buildSiWorkspaceDocuments(tc);
   };
@@ -9011,6 +9250,13 @@ function setupWorkspaceModals() {
         }
         const tradeCaseId = modalEl.getAttribute("data-tradecase-id");
         const tc = tradeCaseId ? getTradeCaseById(tradeCaseId) : null;
+        if (tc && modalId === "document-workspace-modal" && docId) {
+          const documents = buildWorkspaceDocs(modalId, tc);
+          const doc = Array.isArray(documents) ? documents.find((d) => d && String(d.id || "") === String(docId)) : null;
+          const nextFocus = focusFromDoc({ docId, docLabel: doc?.label, tradeCase: tc });
+          ui.focusType = normalizeFocusType(nextFocus.focusType);
+          ui.focusId = String(nextFocus.focusId || "-");
+        }
         if (tc) {
           const body = modalEl.querySelector(".modal__body");
           if (body) body.innerHTML = renderWorkspaceBody(modalId, tc);
