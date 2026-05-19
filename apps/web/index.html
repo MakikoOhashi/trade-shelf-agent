@@ -78,6 +78,22 @@
       </div>
     </div>
 
+    <div id="document-workspace-modal" class="modal modal--tradecase modal--workspace" aria-hidden="true">
+      <div class="modal__backdrop" data-close-workspace></div>
+      <div class="modal__dialog" role="dialog" aria-modal="true" aria-label="Document workspace">
+        <div class="modal__top">
+          <button class="btn btn--ghost btn--back" type="button" data-close-workspace aria-label="Back to Case detail">
+            <span class="btn--back__arrow">←</span>
+            <span class="btn--back__ja">案件詳細へ戻る</span>
+            <span class="btn--back__en">Back to Case</span>
+          </button>
+          <div class="modal__title">Document Workspace</div>
+          <button class="btn btn--ghost" type="button" data-close-workspace aria-label="Close">閉じる</button>
+        </div>
+        <div id="document-workspace-body" class="modal__body"></div>
+      </div>
+    </div>
+
     <div id="operational-thread-modal" class="modal modal--op-thread" aria-hidden="true">
       <div class="modal__backdrop" data-close-op-thread></div>
       <div class="modal__dialog" role="dialog" aria-modal="true" aria-label="Operational Thread detail">

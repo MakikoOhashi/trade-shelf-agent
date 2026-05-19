@@ -237,17 +237,249 @@ function shipmentStageIndexFromState(shipmentState) {
 }
 
 function openShipmentWorkspace(tradeCaseId) {
-  const tc = tradeCaseId ? getTradeCaseById(tradeCaseId) : null;
-  if (!tc) return;
-  state.modalTradeCaseId = tc.id;
-  openWorkspaceModal("shipment-workspace-modal", { title: "Shipment Workspace", bodyHtml: renderShipmentWorkspace(tc), tradeCaseId: tc.id });
+  openDocumentWorkspace(tradeCaseId, "inv");
 }
 
 function openSiWorkspace(tradeCaseId) {
+  openDocumentWorkspace(tradeCaseId, "si");
+}
+
+function normalizeInvoiceNo(input) {
+  const s = String(input || "").trim();
+  if (!s) return "";
+  if (/^inv[-\s_]*\d+/i.test(s)) return `INV-${s.replace(/^inv[-\s_]*/i, "").trim()}`;
+  return s;
+}
+
+function invoiceDocId(invoiceNo) {
+  const inv = normalizeInvoiceNo(invoiceNo);
+  if (!inv) return "";
+  return inv.toLowerCase().replace(/^inv-/, "inv-");
+}
+
+function resolveInitialDocId(initialDocId, documents) {
+  const raw = String(initialDocId || "").trim();
+  if (!raw) return null;
+  const docs = Array.isArray(documents) ? documents.filter(Boolean) : [];
+  if (!docs.length) return null;
+
+  const byId = new Map(docs.map((d) => [String(d.id || ""), d]));
+  if (byId.has(raw)) return raw;
+
+  const lower = raw.toLowerCase();
+  if (lower === "si") {
+    const siDoc = docs.find((d) => String(d.id || "").startsWith("si-")) || docs.find((d) => String(d.type || "").toLowerCase().includes("shipping"));
+    return siDoc ? siDoc.id : null;
+  }
+  if (lower === "inv") {
+    const invDoc = docs.find((d) => String(d.id || "").startsWith("inv-")) || docs.find((d) => String(d.type || "").toLowerCase().includes("invoice"));
+    return invDoc ? invDoc.id : null;
+  }
+  if (lower === "pl") {
+    const plDoc = docs.find((d) => String(d.id || "").includes("pl")) || docs.find((d) => String(d.type || "").toLowerCase().includes("packing"));
+    return plDoc ? plDoc.id : null;
+  }
+  if (lower === "bl") {
+    const blDoc = docs.find((d) => String(d.id || "").startsWith("bl-")) || docs.find((d) => String(d.type || "").toLowerCase().includes("b/l"));
+    return blDoc ? blDoc.id : null;
+  }
+  if (/^inv[-\s_]*\d+/i.test(raw) || /^inv-\d+/i.test(lower)) {
+    const id = invoiceDocId(raw);
+    return byId.has(id) ? id : null;
+  }
+  return null;
+}
+
+function openDocumentWorkspace(tradeCaseId, initialDocId) {
   const tc = tradeCaseId ? getTradeCaseById(tradeCaseId) : null;
   if (!tc) return;
   state.modalTradeCaseId = tc.id;
-  openWorkspaceModal("si-workspace-modal", { title: "SI Workspace", bodyHtml: renderSiWorkspace(tc), tradeCaseId: tc.id });
+  const documents = buildDocumentWorkspaceDocuments(tc);
+  const resolved = resolveInitialDocId(initialDocId, documents);
+  if (resolved) {
+    const ui = getWorkspaceUi("document-workspace-modal");
+    ui.activeDocId = resolved;
+    ui.activePageByDocId[resolved] = 0;
+  }
+  openWorkspaceModal("document-workspace-modal", {
+    title: "Document Workspace",
+    bodyHtml: renderDocumentWorkspace(tc, initialDocId),
+    tradeCaseId: tc.id,
+  });
+}
+
+function renderDocumentWorkspace(tradeCase, initialDocId) {
+  const tc = tradeCase || null;
+  if (!tc) return "";
+
+  const sh = tc.shipmentEntity || null;
+  const si = tc.siEntity || null;
+  const customer = tc.customer || null;
+  const supplier = tc.supplier || null;
+
+  const documents = buildDocumentWorkspaceDocuments(tc);
+  const initialResolved = resolveInitialDocId(initialDocId, documents);
+  if (initialResolved) {
+    const ui = getWorkspaceUi("document-workspace-modal");
+    ui.activeDocId = initialResolved;
+    ui.activePageByDocId[initialResolved] = 0;
+  }
+
+  const viewerHtml = renderDocumentViewer(documents, { modalId: "document-workspace-modal", viewerKey: "document" });
+
+  const invoiceRefs = Array.isArray(tc.invoiceNumbers) ? tc.invoiceNumbers.filter(Boolean) : [];
+  const invQtyByNo = Object.create(null);
+  for (const inv of invoiceRefs) {
+    const no = normalizeInvoiceNo(inv?.invoiceNo);
+    if (!no) continue;
+    const qty = typeof inv?.qty === "number" ? inv.qty : null;
+    if (typeof qty === "number") invQtyByNo[no] = qty;
+  }
+  const invNos = uniqStrings([
+    ...invoiceRefs.map((x) => normalizeInvoiceNo(x?.invoiceNo)),
+    ...(sh?.supplierInvoices || []).map(normalizeInvoiceNo),
+    ...(si?.relatedInvoiceNos || []).map(normalizeInvoiceNo),
+  ]).filter(Boolean);
+  const blNo = String(sh?.blNo || (Array.isArray(tc.blNumbers) ? tc.blNumbers[0] : "") || "").trim() || "-";
+
+  const siTotalQty =
+    typeof tc?.products?.[0]?.quantityInstructed === "number"
+      ? tc.products[0].quantityInstructed
+      : typeof tc?.products?.[0]?.quantityOrdered === "number"
+        ? tc.products[0].quantityOrdered
+        : null;
+  const invTotalQty = invNos.reduce((sum, no) => sum + (typeof invQtyByNo[no] === "number" ? invQtyByNo[no] : 0), 0);
+  const remainingQty = typeof siTotalQty === "number" ? Math.max(0, siTotalQty - invTotalQty) : null;
+
+  const incidents = detectIncidents(tc).filter((i) => i && i.status !== "resolved");
+  const riskHtml = incidents.length
+    ? `<ul class="list">${incidents
+        .map((i) => `<li>${escapeHtml(incidentTitleJa(i))} <span class="muted">(${escapeHtml(i.severity || "low")})</span></li>`)
+        .join("")}</ul>`
+    : `<div class="muted">(no active risks)</div>`;
+
+  const aiNotes = [
+    incidents.some((i) => i.type === "invoiceQuantityMismatch") ? "INV数量がSIと一致していません" : null,
+    documents.some((d) => String(d?.id || "") === "pl-missing" || String(d?.status || "") === "missing") ? "PLが未着です" : null,
+    sh?.blNo ? "BLはBooking情報と紐づいています" : null,
+  ].filter(Boolean);
+
+  const followUpStatusHtml = (() => {
+    const run = tc.resolutionAgentRun || null;
+    const steps = Array.isArray(run?.steps) ? run.steps : [];
+    const sent = steps
+      .filter((s) => s && s.status === "sent" && s.proposedMessage)
+      .slice()
+      .sort((a, b) => String(b.approvedAt || "").localeCompare(String(a.approvedAt || "")))[0];
+    if (sent && sent.proposedMessage) return `<div>PL確認メール送信済み / 返答待ち</div>`;
+    return `<div class="muted">未対応</div>`;
+  })();
+
+  const latestFollowUpHtml = (() => {
+    const run = tc.resolutionAgentRun || null;
+    const steps = Array.isArray(run?.steps) ? run.steps : [];
+    const sent = steps.filter((s) => s && s.status === "sent" && s.proposedMessage).slice().sort((a, b) => String(b.approvedAt || "").localeCompare(String(a.approvedAt || "")))[0];
+    if (sent && sent.proposedMessage) {
+      const msg = sent.proposedMessage;
+      const to = Array.isArray(msg.to) ? msg.to.join(", ") : "";
+      return `<div class="workspace-kv">
+        <div>${escapeHtml(msg.subject || "（mock）送信済み")}</div>
+        <div><span class="muted">to</span> <span class="mono">${escapeHtml(to || "-")}</span></div>
+        <div><span class="muted">status</span> <span class="mono">waiting supplier reply</span></div>
+      </div>`;
+    }
+    const proposed = steps.find((s) => s && s.requiresHumanApproval && s.proposedMessage) || null;
+    if (proposed && proposed.proposedMessage) {
+      const msg = proposed.proposedMessage;
+      const to = Array.isArray(msg.to) ? msg.to.join(", ") : "";
+      return `<div class="workspace-kv">
+        <div class="muted">（未送信）</div>
+        <div>${escapeHtml(msg.subject || proposed.title || "Follow-up draft")}</div>
+        <div><span class="muted">to</span> <span class="mono">${escapeHtml(to || "-")}</span></div>
+        <div><span class="muted">status</span> <span class="mono">requires approval</span></div>
+      </div>`;
+    }
+    return `<div class="muted">（placeholder）</div>`;
+  })();
+
+  const linkedDocLabels = [
+    si?.siNo ? si.siNo : null,
+    ...invNos.map((x) => x),
+    "PL missing",
+    blNo,
+  ].filter(Boolean);
+
+  const linkedDocsHtml = linkedDocLabels.length
+    ? `<ul class="list">${linkedDocLabels.map((x) => `<li>${escapeHtml(x)}</li>`).join("")}</ul>`
+    : `<div class="muted">-</div>`;
+
+  const splitStatusHtml = (() => {
+    const rows = [];
+    for (const no of invNos) {
+      const qty = typeof invQtyByNo[no] === "number" ? invQtyByNo[no] : null;
+      rows.push(`<div><span class="muted">${escapeHtml(no)}</span> <span class="mono">${escapeHtml(qty != null ? `${qty}pcs` : "-")}</span></div>`);
+    }
+    if (typeof siTotalQty === "number") rows.push(`<div><span class="muted">SI</span> <span class="mono">${escapeHtml(`${siTotalQty}pcs`)}</span></div>`);
+    if (typeof remainingQty === "number") rows.push(`<div><span class="muted">remaining</span> <span class="mono">${escapeHtml(`${remainingQty}pcs`)}</span></div>`);
+    return rows.length ? `<div class="workspace-kv">${rows.join("")}</div>` : `<div class="muted">-</div>`;
+  })();
+
+  return `
+    <div class="workspace-desk">
+      <div class="workspace-layout">
+        <aside class="workspace-pane workspace-pane--left" aria-label="Case context">
+          <div class="workspace-section">
+            <div class="workspace-section__title">Case summary</div>
+            <div class="workspace-kv">
+              <div><span class="muted">SI No</span> <span class="mono">${escapeHtml(si?.siNo || "-")}</span></div>
+              <div><span class="muted">Shipment</span> <span class="mono">${escapeHtml(sh?.id || "-")}</span></div>
+              <div><span class="muted">Customer</span> <span class="mono">${escapeHtml(customer?.name || "-")}</span></div>
+              <div><span class="muted">Supplier</span> <span class="mono">${escapeHtml(supplier?.name || "-")}</span></div>
+              <div><span class="muted">ETA</span> <span class="mono">${escapeHtml(sh?.eta || "-")}</span></div>
+            </div>
+          </div>
+
+          <div class="workspace-section">
+            <div class="workspace-section__title">Linked documents</div>
+            ${linkedDocsHtml}
+          </div>
+
+          <div class="workspace-section">
+            <div class="workspace-section__title">Split shipment status</div>
+            ${splitStatusHtml}
+          </div>
+
+          <div class="workspace-section">
+            <div class="workspace-section__title">Follow-up status</div>
+            ${followUpStatusHtml}
+          </div>
+        </aside>
+
+        <main class="workspace-pane workspace-pane--center" aria-label="Document viewer">
+          ${viewerHtml}
+        </main>
+
+        <aside class="workspace-pane workspace-pane--right" aria-label="Decision helper">
+          <div class="workspace-section">
+            <div class="workspace-section__title">AI Notes</div>
+            ${aiNotes.length ? `<ul class="list">${aiNotes.map((x) => `<li>${escapeHtml(x)}</li>`).join("")}</ul>` : `<div class="muted">-</div>`}
+          </div>
+          <div class="workspace-section">
+            <div class="workspace-section__title">Delivery risk</div>
+            ${riskHtml}
+          </div>
+          <div class="workspace-section">
+            <div class="workspace-section__title">Latest follow-up</div>
+            ${latestFollowUpHtml}
+          </div>
+          <div class="workspace-section">
+            <div class="workspace-section__title">Human memo</div>
+            <div class="muted">（mock）短文メモだけ。長文は Case detail に集約。</div>
+          </div>
+        </aside>
+      </div>
+    </div>
+  `;
 }
 
 function openNewWindow(url) {
@@ -5963,7 +6195,12 @@ function closeWorkspaceModal(modalId) {
 function isAnyWorkspaceModalOpen() {
   const shipment = document.getElementById("shipment-workspace-modal");
   const si = document.getElementById("si-workspace-modal");
-  return Boolean((shipment && shipment.classList.contains("is-open")) || (si && si.classList.contains("is-open")));
+  const doc = document.getElementById("document-workspace-modal");
+  return Boolean(
+    (shipment && shipment.classList.contains("is-open")) ||
+      (si && si.classList.contains("is-open")) ||
+      (doc && doc.classList.contains("is-open")),
+  );
 }
 
 function getWorkspaceUi(modalId) {
@@ -6285,6 +6522,149 @@ function buildSiWorkspaceDocuments(tradeCase) {
       ],
     },
   ];
+}
+
+function buildDocumentWorkspaceDocuments(tradeCase) {
+  const tc = tradeCase || null;
+  if (!tc) return [];
+
+  const sh = tc.shipmentEntity || null;
+  const si = tc.siEntity || null;
+
+  const base = buildSiWorkspaceDocuments(tc);
+  const siDoc = base.find((d) => String(d?.id || "").startsWith("si-")) || null;
+  const salesResponseDoc = base.find((d) => String(d?.id || "") === "sales-response") || null;
+  const salesCommitmentDoc = base.find((d) => String(d?.id || "") === "sales-commitment") || null;
+  const salesResponseDocForTabs = salesResponseDoc ? { ...salesResponseDoc, label: "Sales response" } : null;
+  const salesCommitmentDocForTabs = salesCommitmentDoc ? { ...salesCommitmentDoc, label: "売約" } : null;
+
+  const invoiceRefs = Array.isArray(tc.invoiceNumbers) ? tc.invoiceNumbers.filter(Boolean) : [];
+  const invoiceNos = uniqStrings([
+    ...invoiceRefs.map((x) => normalizeInvoiceNo(x?.invoiceNo)),
+    ...(sh?.supplierInvoices || []).map(normalizeInvoiceNo),
+    ...(si?.relatedInvoiceNos || []).map(normalizeInvoiceNo),
+  ]).filter(Boolean);
+
+  const invByNo = new Map();
+  for (const inv of invoiceRefs) {
+    const no = normalizeInvoiceNo(inv?.invoiceNo);
+    if (!no) continue;
+    invByNo.set(no, inv);
+  }
+
+  const incidents = detectIncidents(tc);
+  const mismatch = incidents.find((i) => i && i.type === "invoiceQuantityMismatch") || null;
+  const details = mismatch && mismatch.details && typeof mismatch.details === "object" ? mismatch.details : null;
+  const siQty =
+    typeof details?.siQuantity === "number"
+      ? details.siQuantity
+      : typeof tc?.products?.[0]?.quantityInstructed === "number"
+        ? tc.products[0].quantityInstructed
+        : null;
+
+  const invDocs = invoiceNos.map((invNo) => {
+    const ref = invByNo.get(invNo) || null;
+    const id = invoiceDocId(invNo);
+    const qty = typeof ref?.qty === "number" ? ref.qty : null;
+    const supplierName = String(ref?.supplier || tc?.supplier?.name || "ACME Components (Shenzhen)");
+    const blNo = String(sh?.blNo || "BL-SZX-7781");
+    return {
+      id: id || `inv-${String(invNo || "").toLowerCase().replace(/[^a-z0-9]+/g, "-")}`,
+      label: invNo,
+      type: "Invoice",
+      title: "Commercial Invoice",
+      mockPages: [
+        {
+          title: "COMMERCIAL INVOICE",
+          subtitle: "Mock / paper view",
+          rows: [
+            { k: "Invoice No", v: invNo },
+            { k: "Supplier", v: supplierName },
+            { k: "SI No", v: si?.siNo || "SI-2026-001" },
+            { k: "BL", v: blNo },
+            { k: "Item", v: tc?.products?.[0]?.sku || "UC-1M-BK" },
+            {
+              k: "Qty",
+              v: qty != null ? `${qty} pcs` : "—",
+              warn: siQty != null && qty != null && siQty !== qty ? `⚠ SI ${siQty}pcs` : "",
+            },
+            { k: "Amount", v: "USD 12,800.00" },
+          ],
+          annotation: siQty != null && qty != null && siQty !== qty ? "⚠ Quantity mismatch detected" : "",
+          markers:
+            siQty != null && qty != null && siQty !== qty
+              ? [
+                  { kind: "warn", x: 72, y: 34, text: "⚠ Qty mismatch" },
+                  { kind: "note", x: 16, y: 72, text: "Confirm split shipment?" },
+                ]
+              : [{ kind: "note", x: 16, y: 72, text: "Check customer impact" }],
+        },
+      ],
+    };
+  });
+
+  const hasAnyPlMissing = true;
+  const plDoc = {
+    id: "pl-missing",
+    label: "PL missing",
+    type: "Packing List",
+    status: hasAnyPlMissing ? "missing" : undefined,
+  };
+
+  const blNo = String(sh?.blNo || tc?.blNumbers?.[0] || "BL-SZX-7781");
+  const blId = blNo ? blNo.toLowerCase().replace(/^bl-/, "bl-") : "bl";
+  const blDoc = {
+    id: blId,
+    label: blNo,
+    type: "B/L",
+    title: "Bill of Lading",
+    mockPages: [
+      {
+        title: "BILL OF LADING",
+        subtitle: "Mock / paper view",
+        rows: [
+          { k: "B/L No", v: blNo || "BL-SZX-7781" },
+          { k: "Booking No", v: sh?.bookingNo || "BK-44521" },
+          { k: "Container", v: sh?.containerNo || "TCLU1234567" },
+          { k: "ETD", v: sh?.etd || "2026-05-03" },
+          { k: "ETA", v: sh?.eta || "2026-05-10" },
+          { k: "POL → POD", v: "Shenzhen → Tokyo" },
+        ],
+        markers: [{ kind: "pin", x: 18, y: 18, text: "Vessel schedule" }],
+      },
+    ],
+  };
+
+  const shipmentDoc = {
+    id: "shipment",
+    label: "Shipment",
+    type: "Shipment",
+    title: "Shipment Overview",
+    mockPages: [
+      {
+        title: "SHIPMENT OVERVIEW",
+        subtitle: "Mock summary",
+        rows: [
+          { k: "Shipment", v: sh?.id || "SHP-2026-009" },
+          { k: "Booking", v: sh?.bookingNo || "BK-88201" },
+          { k: "Container", v: sh?.containerNo || "TCLU-998877" },
+          { k: "ETA", v: sh?.eta || "2026-05-12" },
+          { k: "Status", v: shipmentStateLabelJa(sh?.shipmentState || tc?.shipmentState || "") || "-" },
+        ],
+      },
+    ],
+  };
+
+  const out = [];
+  if (siDoc) out.push(siDoc);
+  if (salesResponseDocForTabs) out.push(salesResponseDocForTabs);
+  if (salesCommitmentDocForTabs) out.push(salesCommitmentDocForTabs);
+  out.push(...invDocs);
+  out.push(plDoc);
+  out.push(blDoc);
+  out.push(shipmentDoc);
+
+  return out.filter(Boolean);
 }
 
 function renderShipmentWorkspace(tradeCase) {
@@ -8365,14 +8745,14 @@ function setupModal() {
     const openShipmentWorkspaceEl = target.closest && target.closest("[data-open-shipment-workspace]");
     if (openShipmentWorkspaceEl) {
       const tc = state.modalTradeCaseId ? getTradeCaseById(state.modalTradeCaseId) : null;
-      if (tc) openWorkspaceModal("shipment-workspace-modal", { title: "Shipment Workspace", bodyHtml: renderShipmentWorkspace(tc) });
+      if (tc) openShipmentWorkspace(tc.id);
       return;
     }
 
     const openSiWorkspaceEl = target.closest && target.closest("[data-open-si-workspace]");
     if (openSiWorkspaceEl) {
       const tc = state.modalTradeCaseId ? getTradeCaseById(state.modalTradeCaseId) : null;
-      if (tc) openWorkspaceModal("si-workspace-modal", { title: "SI Workspace", bodyHtml: renderSiWorkspace(tc) });
+      if (tc) openSiWorkspace(tc.id);
       return;
     }
 
@@ -8541,6 +8921,7 @@ function setupModal() {
     if (isAnyWorkspaceModalOpen()) {
       closeWorkspaceModal("shipment-workspace-modal");
       closeWorkspaceModal("si-workspace-modal");
+      closeWorkspaceModal("document-workspace-modal");
       return;
     }
     closeModal();
@@ -8550,6 +8931,19 @@ function setupModal() {
 function setupWorkspaceModals() {
   const shipment = document.getElementById("shipment-workspace-modal");
   const si = document.getElementById("si-workspace-modal");
+  const doc = document.getElementById("document-workspace-modal");
+
+  const renderWorkspaceBody = (modalId, tc) => {
+    if (modalId === "document-workspace-modal") return renderDocumentWorkspace(tc);
+    if (modalId === "shipment-workspace-modal") return renderShipmentWorkspace(tc);
+    return renderSiWorkspace(tc);
+  };
+
+  const buildWorkspaceDocs = (modalId, tc) => {
+    if (modalId === "document-workspace-modal") return buildDocumentWorkspaceDocuments(tc);
+    if (modalId === "shipment-workspace-modal") return buildShipmentWorkspaceDocuments(tc);
+    return buildSiWorkspaceDocuments(tc);
+  };
 
   const attach = (modalEl, modalId) => {
     if (!modalEl) return;
@@ -8567,7 +8961,7 @@ function setupWorkspaceModals() {
         const tc = tradeCaseId ? getTradeCaseById(tradeCaseId) : null;
         if (tc) {
           const body = modalEl.querySelector(".modal__body");
-          if (body) body.innerHTML = modalId === "shipment-workspace-modal" ? renderShipmentWorkspace(tc) : renderSiWorkspace(tc);
+          if (body) body.innerHTML = renderWorkspaceBody(modalId, tc);
         }
         return;
       }
@@ -8585,7 +8979,7 @@ function setupWorkspaceModals() {
         const tc = tradeCaseId ? getTradeCaseById(tradeCaseId) : null;
         if (tc) {
           const body = modalEl.querySelector(".modal__body");
-          if (body) body.innerHTML = modalId === "shipment-workspace-modal" ? renderShipmentWorkspace(tc) : renderSiWorkspace(tc);
+          if (body) body.innerHTML = renderWorkspaceBody(modalId, tc);
         }
         return;
       }
@@ -8602,7 +8996,7 @@ function setupWorkspaceModals() {
         const tc = tradeCaseId ? getTradeCaseById(tradeCaseId) : null;
         if (tc) {
           const body = modalEl.querySelector(".modal__body");
-          if (body) body.innerHTML = modalId === "shipment-workspace-modal" ? renderShipmentWorkspace(tc) : renderSiWorkspace(tc);
+          if (body) body.innerHTML = renderWorkspaceBody(modalId, tc);
         }
         return;
       }
@@ -8610,7 +9004,6 @@ function setupWorkspaceModals() {
       const tabEl = target.closest && target.closest("[data-doc-tab]");
       if (tabEl) {
         const docId = tabEl.getAttribute("data-doc-tab");
-        const viewerKey = tabEl.getAttribute("data-workspace-viewer") || "";
         const ui = getWorkspaceUi(modalId);
         if (docId) {
           ui.activeDocId = docId;
@@ -8620,7 +9013,7 @@ function setupWorkspaceModals() {
         const tc = tradeCaseId ? getTradeCaseById(tradeCaseId) : null;
         if (tc) {
           const body = modalEl.querySelector(".modal__body");
-          if (body) body.innerHTML = modalId === "shipment-workspace-modal" ? renderShipmentWorkspace(tc) : renderSiWorkspace(tc);
+          if (body) body.innerHTML = renderWorkspaceBody(modalId, tc);
         }
         return;
       }
@@ -8630,17 +9023,17 @@ function setupWorkspaceModals() {
       if (prevEl || nextEl) {
         const ui = getWorkspaceUi(modalId);
         if (!ui.activeDocId) return;
-        const documents = modalId === "shipment-workspace-modal" ? buildShipmentWorkspaceDocuments(getTradeCaseById(modalEl.getAttribute("data-tradecase-id") || "")) : buildSiWorkspaceDocuments(getTradeCaseById(modalEl.getAttribute("data-tradecase-id") || ""));
+        const tradeCaseId = modalEl.getAttribute("data-tradecase-id") || "";
+        const tc = tradeCaseId ? getTradeCaseById(tradeCaseId) : null;
+        const documents = tc ? buildWorkspaceDocs(modalId, tc) : [];
         const activeDoc = Array.isArray(documents) ? documents.find((d) => d && d.id === ui.activeDocId) : null;
         const pageCount = activeDoc && Array.isArray(activeDoc.mockPages) ? activeDoc.mockPages.length : 1;
         const current = typeof ui.activePageByDocId[ui.activeDocId] === "number" ? ui.activePageByDocId[ui.activeDocId] : 0;
         const nextPage = clamp(current + (nextEl ? 1 : -1), 0, Math.max(0, pageCount - 1));
         ui.activePageByDocId[ui.activeDocId] = nextPage;
-        const tradeCaseId = modalEl.getAttribute("data-tradecase-id");
-        const tc = tradeCaseId ? getTradeCaseById(tradeCaseId) : null;
         if (tc) {
           const body = modalEl.querySelector(".modal__body");
-          if (body) body.innerHTML = modalId === "shipment-workspace-modal" ? renderShipmentWorkspace(tc) : renderSiWorkspace(tc);
+          if (body) body.innerHTML = renderWorkspaceBody(modalId, tc);
         }
         return;
       }
@@ -8649,6 +9042,7 @@ function setupWorkspaceModals() {
 
   attach(shipment, "shipment-workspace-modal");
   attach(si, "si-workspace-modal");
+  attach(doc, "document-workspace-modal");
 }
 
 function setupOperationalThreadModal() {
