@@ -1227,6 +1227,42 @@ function isPreIssueItem(item) {
   return false;
 }
 
+function normalizeActionStatusLike(statusLike) {
+  const raw = String(statusLike || "").trim();
+  if (!raw) return "";
+  const s = raw.toLowerCase();
+
+  // normalize common aliases / legacy keys
+  if (s === "requiresapproval" || s === "requires_approval") return "pending_approval";
+  if (s === "on_hold") return "held";
+  if (s === "draft_created") return "drafted";
+
+  return s;
+}
+
+function isPendingActionItem(item) {
+  const status = normalizeActionStatusLike(item?.status || item?.approvalStatus || item?.state || item?.statusKey || "");
+  return [
+    "planned",
+    "pending_approval",
+    "edited",
+    "held",
+    "drafted",
+  ].includes(status);
+}
+
+function isCompletedActionItem(item) {
+  const status = normalizeActionStatusLike(item?.status || item?.approvalStatus || item?.state || item?.statusKey || "");
+  return [
+    "approved",
+    "sent",
+    "mock_sent",
+    "completed",
+    "resolved",
+    "done",
+  ].includes(status);
+}
+
 function isApprovalCandidateItem(item) {
   const status = String(item?.status || item?.resolutionStatus || item?.kind || "").trim();
 
@@ -2358,10 +2394,27 @@ function renderNewTop() {
       if (!pendingMutations.length) return "";
       const groups = groupIssueMutationsForApproval(pendingMutations);
       const conversationThreads = computeConversationThreadsFromRawRequests(state.rawRequests);
+      const plans = Array.isArray(state.latestIngestResult?.actionPlans) ? state.latestIngestResult.actionPlans.filter(Boolean) : [];
+
+      const approvalStatusForGroup = (g) => {
+        if (!g) return { status: "pending_approval", actionPlanId: "" };
+        const issueId = String(g?.issueId || "").trim();
+        const threadId = String(g?.threadId || "").trim();
+        const actionPlan =
+          plans.find((p) => (issueId && String(p?.issueId || "") === issueId) || (threadId && String(p?.threadId || "") === threadId)) || null;
+        const actionPlanId = actionPlan && actionPlan.id ? String(actionPlan.id) : "";
+        const approvalEntry = actionPlanId ? state.approvalsByActionPlanId?.[actionPlanId] : null;
+        const status = String((approvalEntry && approvalEntry.status) || (actionPlan && actionPlan.status) || "pending_approval");
+        return { status, actionPlanId };
+      };
+
       const rows = groups
         .map((g) => {
           const rep = g.representative;
           if (!rep) return "";
+
+          const { status: groupStatus } = approvalStatusForGroup(g);
+          if (!isPendingActionItem({ status: groupStatus })) return "";
           const issueId = String(g.issueId || "");
           const repAction = String(rep?.action || "");
           const title = normalizeMutationTitle(String(rep?.title || "")) || "-";
@@ -2434,7 +2487,7 @@ function renderNewTop() {
         })
         .join("");
       return `<section class="pending-mutations" aria-label="Pending AI mutations">
-        <div class="pending-mutations__h">AIからの確認・対応候補</div>
+        <div class="pending-mutations__h">対応待ち</div>
         <div class="pending-mutations__subline muted">AIが整理済みの対応案です。承認・編集・保留できます。</div>
         ${rows}
       </section>`;
@@ -2879,14 +2932,92 @@ function renderNewTop() {
           return String(a?.issueNo || "").localeCompare(String(b?.issueNo || ""));
         });
       const body = sorted.length ? sorted.map(issueRow).join("") : `<div class="nt-muted">No items</div>`;
+
+      const renderCompletedLane = () => {
+        const plans = Array.isArray(state.latestIngestResult?.actionPlans) ? state.latestIngestResult.actionPlans.filter(Boolean) : [];
+        const completedPlans = plans.filter((p) => isCompletedActionItem(p));
+        if (!completedPlans.length && !sorted.length) {
+          return `<section class="issue-list" aria-label="Completed items">
+            <div class="issue-list__section-title">対応済み</div>
+            <div class="issue-list__section-sub muted">承認・対応が完了した案件です。</div>
+            <div class="nt-muted" style="padding: 12px;">No items</div>
+          </section>`;
+        }
+
+        const conversationThreads = computeConversationThreadsFromRawRequests(state.rawRequests);
+        const allMutations = Array.isArray(state.issueMutationItems) ? state.issueMutationItems.filter(Boolean) : [];
+
+        const runtimeRows = completedPlans
+          .slice()
+          .sort((a, b) => {
+            const aa = String(state.approvalsByActionPlanId?.[String(a?.id || "")]?.updatedAt || a?.updatedAt || "");
+            const bb = String(state.approvalsByActionPlanId?.[String(b?.id || "")]?.updatedAt || b?.updatedAt || "");
+            return String(bb).localeCompare(String(aa)) || String(b?.id || "").localeCompare(String(a?.id || ""));
+          })
+          .map((ap) => {
+            const apId = String(ap?.id || "").trim();
+            const issueId = String(ap?.issueId || "").trim();
+            const threadId = String(ap?.threadId || "").trim();
+            const title = String(ap?.title || "").trim() || issueId || apId || "Completed";
+
+            const approvalEntry = apId ? state.approvalsByActionPlanId?.[apId] : null;
+            const updatedAt = String((approvalEntry && approvalEntry.updatedAt) || "");
+            const updatedText = relativeUpdatedText(updatedAt);
+
+            const mutation =
+              allMutations.find((m) => (issueId && String(m?.issueId || "") === issueId) || (threadId && String(m?.threadId || "") === threadId)) || null;
+            const mutationId = mutation && mutation.id ? String(mutation.id) : "";
+
+            const sourceThread = threadId ? conversationThreads.find((t) => t && String(t?.representativeThreadId || "") === threadId) : null;
+            const cc = sourceThread && typeof sourceThread.messageCount === "number" ? sourceThread.messageCount : 0;
+
+            const linkedEntities = Array.isArray(ap?.linkedEntities) ? ap.linkedEntities.filter(Boolean) : [];
+            const si = linkedEntities.find((l) => String(l?.entityType || "").toLowerCase() === "si") || null;
+            const shipment = linkedEntities.find((l) => String(l?.entityType || "").toLowerCase() === "shipment") || null;
+            const linkText = [si?.entityId ? String(si.entityId) : "", shipment?.entityId ? String(shipment.entityId) : ""].filter(Boolean).join(" / ") || "-";
+
+            const status = String(ap?.status || "");
+            const statusText = status ? status.replace(/_/g, " ") : "completed";
+            const sevText = "MEDIUM";
+
+            const pills = [
+              `<span class="issue-pill nt-mono">#${escapeHtml(issueId || apId || "-")}</span>`,
+              `<span class="issue-pill is-medium">${escapeHtml(sevText)}</span>`,
+              `<span class="issue-pill">${escapeHtml(statusText)}</span>`,
+              `<span class="issue-pill">${escapeHtml(linkText)}</span>`,
+              `<span class="issue-pill">${escapeHtml(updatedText || "-")}</span>`,
+              `<span class="issue-pill nt-mono">${escapeHtml(String(cc))} comments</span>`,
+            ].join("");
+
+            const dataAttr = mutationId ? `data-mutation-open="${escapeHtml(mutationId)}"` : "";
+            return `<div class="issue-row" role="button" tabindex="0" ${dataAttr}>
+              <div class="issue-row__left">
+                <div class="issue-row__icon" aria-hidden="true">✓</div>
+                <div class="issue-row__title">${escapeHtml(title)}</div>
+              </div>
+              <div class="issue-row__right">
+                <div class="issue-row__meta">${pills}</div>
+              </div>
+            </div>`;
+          })
+          .join("");
+
+        const sampleHeading = sorted.length ? `<div class="issue-list__subheading">サンプル既存案件</div>` : "";
+        const sampleBody = sorted.length ? body : "";
+
+        return `<section class="issue-list" aria-label="Completed items">
+          <div class="issue-list__section-title">対応済み</div>
+          <div class="issue-list__section-sub muted">承認・対応が完了した案件です。</div>
+          ${runtimeRows || ""}
+          ${sampleHeading}
+          ${sampleBody}
+        </section>`;
+      };
+
       return `<div class="operations-main-column" aria-label="Operations main column">
         ${renderPreIssueThreads()}
         ${renderPendingMutations()}
-        <section class="issue-list" aria-label="Issues list">
-          <div class="issue-list__section-title">既存Issue</div>
-          <div class="issue-list__section-sub muted">すでにIssue化された案件です。</div>
-          ${body}
-        </section>
+        ${renderCompletedLane()}
       </div>`;
     };
 

@@ -806,6 +806,15 @@ body {
   border-bottom: 1px solid #d0d7de;
 }
 
+#app .issue-list__subheading {
+  padding: 10px 12px;
+  font-size: 12px;
+  font-weight: 800;
+  color: #57606a;
+  border-top: 1px solid #d0d7de;
+  background: #f6f8fa;
+}
+
 #app .issue-detail {
   border: 1px solid #d0d7de;
   border-radius: 12px;
