@@ -124,6 +124,11 @@ const state = {
    */
   activeReplyCandidateId: null,
   /**
+   * 承認センターで開いている draft edit modal の actionPlanId
+   * @type {string | null}
+   */
+  activeDraftEditActionPlanId: null,
+  /**
    * tradeCaseId -> sequential issue number (1-based)
    * @type {Record<string, number>}
    */
@@ -2257,6 +2262,62 @@ function agentRunEdit(tradeCaseId) {
 function renderNewTop() {
   const rawTab = state.topActiveTab || "shelf";
   const tab = newTopTabs.some((t) => t && String(t.key) === String(rawTab)) ? rawTab : "issues";
+
+  const renderDraftEditModal = () => {
+    const apId = String(state.activeDraftEditActionPlanId || "").trim();
+    if (!apId) return "";
+    const drafts = Array.isArray(state.latestIngestResult?.drafts) ? state.latestIngestResult.drafts.filter(Boolean) : [];
+    const draft = drafts.find((d) => String(d?.actionPlanId || "") === apId) || null;
+    if (!draft) return "";
+
+    const toText = (() => {
+      const raw = draft?.to;
+      if (Array.isArray(raw)) return raw.map((x) => String(x || "")).filter(Boolean).join(", ");
+      if (typeof raw === "string") return raw;
+      return "";
+    })();
+    const ccText = (() => {
+      const raw = draft?.cc;
+      if (Array.isArray(raw)) return raw.map((x) => String(x || "")).filter(Boolean).join(", ");
+      if (typeof raw === "string") return raw;
+      return "";
+    })();
+
+    const subjectText = draft?.subject ? String(draft.subject) : "";
+    const bodyText = draft?.body ? String(draft.body) : "";
+
+    return `
+      <div class="draft-edit-overlay" data-draft-edit-overlay="1" role="dialog" aria-modal="true" aria-label="Edit supplier email">
+        <div class="draft-edit-modal" data-draft-edit-modal="1">
+          <div class="draft-edit-modal__top">
+            <div class="draft-edit-modal__title">Edit supplier email</div>
+          </div>
+          <div class="draft-edit-modal__form" aria-label="Draft fields">
+            <label class="draft-edit-modal__field">
+              <div class="draft-edit-modal__label">To</div>
+              <input class="draft-edit-modal__input" data-draft-edit-to value="${escapeHtml(toText)}" />
+            </label>
+            <label class="draft-edit-modal__field">
+              <div class="draft-edit-modal__label">CC</div>
+              <input class="draft-edit-modal__input" data-draft-edit-cc value="${escapeHtml(ccText)}" />
+            </label>
+            <label class="draft-edit-modal__field">
+              <div class="draft-edit-modal__label">Subject</div>
+              <input class="draft-edit-modal__input" data-draft-edit-subject value="${escapeHtml(subjectText)}" />
+            </label>
+            <label class="draft-edit-modal__field">
+              <div class="draft-edit-modal__label">Body</div>
+              <textarea class="draft-edit-modal__textarea" data-draft-edit-body>${escapeHtml(bodyText)}</textarea>
+            </label>
+          </div>
+          <div class="draft-edit-modal__actions" aria-label="Draft edit actions">
+            <button class="btn btn--ghost" type="button" data-draft-edit-cancel="1">Cancel</button>
+            <button class="btn btn--primary" type="button" data-draft-edit-save="1">Save draft</button>
+          </div>
+        </div>
+      </div>
+    `;
+  };
 
   const navIconByKey = {
     shelf: "🗂️",
@@ -4900,6 +4961,7 @@ function renderNewTop() {
 	      </header>
 	      ${navHtml}
 	      <main class="nt-main" aria-label="Main">${mainHtml}</main>
+        ${renderDraftEditModal()}
 	    </div>
 	  `;
 }
@@ -8968,6 +9030,99 @@ function setupNewTop() {
       return { ok: res.ok, ignored: false, res };
     };
 
+    const draftEditCancelEl = target.closest && target.closest("[data-draft-edit-cancel]");
+    if (draftEditCancelEl) {
+      e.preventDefault();
+      e.stopPropagation();
+      state.activeDraftEditActionPlanId = null;
+      renderApp();
+      return;
+    }
+
+    const draftEditOverlayEl = target.closest && target.closest("[data-draft-edit-overlay]");
+    if (draftEditOverlayEl && target === draftEditOverlayEl) {
+      e.preventDefault();
+      e.stopPropagation();
+      state.activeDraftEditActionPlanId = null;
+      renderApp();
+      return;
+    }
+
+    const draftEditSaveEl = target.closest && target.closest("[data-draft-edit-save]");
+    if (draftEditSaveEl) {
+      e.preventDefault();
+      e.stopPropagation();
+
+      const apId = String(state.activeDraftEditActionPlanId || "").trim();
+      if (!apId) return;
+
+      const modal = draftEditSaveEl.closest && draftEditSaveEl.closest("[data-draft-edit-modal]");
+      if (!modal || !modal.querySelector) {
+        state.activeDraftEditActionPlanId = null;
+        renderApp();
+        return;
+      }
+
+      const readValue = (sel) => {
+        const el = modal.querySelector(sel);
+        if (!el) return "";
+        if (typeof el.value === "string") return el.value;
+        return "";
+      };
+
+      const nextToText = String(readValue("[data-draft-edit-to]") || "").trim();
+      const nextCcText = String(readValue("[data-draft-edit-cc]") || "").trim();
+      const nextSubject = String(readValue("[data-draft-edit-subject]") || "").trim();
+      const nextBody = String(readValue("[data-draft-edit-body]") || "");
+
+      const parseRecipients = (text) =>
+        String(text || "")
+          .split(/[;,]/g)
+          .map((s) => String(s || "").trim())
+          .filter(Boolean);
+
+      if (!state.latestIngestResult || !Array.isArray(state.latestIngestResult.drafts)) {
+        window.alert("(mock) drafts not found");
+        state.activeDraftEditActionPlanId = null;
+        renderApp();
+        return;
+      }
+
+      const drafts = state.latestIngestResult.drafts.filter(Boolean);
+      const idx = drafts.findIndex((d) => d && String(d.actionPlanId || "") === apId);
+      if (idx < 0) {
+        window.alert("(mock) draft not found");
+        state.activeDraftEditActionPlanId = null;
+        renderApp();
+        return;
+      }
+
+      const current = drafts[idx] || {};
+      const shouldStoreAsArrayTo = Array.isArray(current.to);
+      const shouldStoreAsArrayCc = Array.isArray(current.cc);
+
+      const updated = {
+        ...current,
+        to: shouldStoreAsArrayTo ? parseRecipients(nextToText) : nextToText,
+        cc: shouldStoreAsArrayCc ? parseRecipients(nextCcText) : nextCcText,
+        subject: nextSubject,
+        body: nextBody,
+      };
+
+      const nextDrafts = drafts.slice();
+      nextDrafts[idx] = updated;
+      state.latestIngestResult.drafts = nextDrafts;
+
+      const attempt = guardApprovalClick(apId, "edit");
+      if (!attempt.ok) {
+        if (!attempt.ignored) window.alert("(mock) edit failed");
+      }
+
+      state.activeDraftEditActionPlanId = null;
+      renderApp();
+      return;
+    }
+
     const classifyModeEl = target.closest && target.closest("[data-classify-mode]");
     if (classifyModeEl) {
       if (state.ingestLoading) return;
@@ -9508,26 +9663,7 @@ function setupNewTop() {
       const apId = findActionPlanIdFromAnyId(id);
       if (!apId) return;
 
-      const draft = findDraftByActionPlanId(apId, { preferredChannel: "teams" });
-      if (!draft) {
-        window.alert("(mock) draft not found");
-        return;
-      }
-      const currentBody = String(draft.body || "");
-      const nextBody = window.prompt("Edit draft body", currentBody);
-      if (typeof nextBody !== "string") return;
-
-      const updateRes = updateDraftBodyForActionPlan(apId, nextBody, { preferredChannel: "teams" });
-      if (!updateRes.ok) {
-        if (updateRes.error === "no_change") window.alert("Edit cancelled: body is unchanged");
-        else window.alert("(mock) edit failed");
-        return;
-      }
-
-      const attempt = guardApprovalClick(apId, "edit");
-      if (!attempt.ok) return;
-      const res = attempt.res;
-      if (res && res.actionPlanId) log(`(mock) edited: ${String(res.actionPlanId)} -> ${String(res.next)}`);
+      state.activeDraftEditActionPlanId = apId;
       renderApp();
       return;
     }
@@ -9700,26 +9836,7 @@ function setupNewTop() {
       const apId = findActionPlanIdFromAnyId(id);
       if (!apId) return;
 
-      const draft = findDraftByActionPlanId(apId, { preferredChannel: "email" });
-      if (!draft) {
-        window.alert("(mock) draft not found");
-        return;
-      }
-      const currentBody = String(draft.body || "");
-      const nextBody = window.prompt("Edit draft body", currentBody);
-      if (typeof nextBody !== "string") return;
-
-      const updateRes = updateDraftBodyForActionPlan(apId, nextBody, { preferredChannel: "email" });
-      if (!updateRes.ok) {
-        if (updateRes.error === "no_change") window.alert("Edit cancelled: body is unchanged");
-        else window.alert("(mock) edit failed");
-        return;
-      }
-
-      const attempt = guardApprovalClick(apId, "edit");
-      if (!attempt.ok) return;
-      const res = attempt.res;
-      if (res && res.actionPlanId) log(`(mock) edited: ${String(res.actionPlanId)} -> ${String(res.next)}`);
+      state.activeDraftEditActionPlanId = apId;
       renderApp();
       return;
     }

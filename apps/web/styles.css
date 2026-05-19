@@ -2075,6 +2075,89 @@ body {
   gap: 10px;
 }
 
+.draft-edit-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1400;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(15, 23, 42, 0.45);
+}
+
+.draft-edit-modal {
+  width: min(720px, calc(100vw - 32px));
+  max-width: 720px;
+  background: #ffffff;
+  border-radius: 18px;
+  box-shadow: 0 24px 60px rgba(2, 6, 23, 0.28);
+  padding: 24px;
+  color: #0f172a;
+  border: 1px solid rgba(148, 163, 184, 0.45);
+}
+
+.draft-edit-modal__top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.draft-edit-modal__title {
+  font-size: 16px;
+  font-weight: 900;
+  letter-spacing: 0.2px;
+}
+
+.draft-edit-modal__form {
+  margin-top: 16px;
+  display: grid;
+  gap: 12px;
+}
+
+.draft-edit-modal__field {
+  display: grid;
+  gap: 6px;
+}
+
+.draft-edit-modal__label {
+  font-size: 12px;
+  font-weight: 800;
+  color: rgba(15, 23, 42, 0.75);
+}
+
+.draft-edit-modal__input,
+.draft-edit-modal__textarea {
+  width: 100%;
+  border-radius: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.55);
+  background: #ffffff;
+  color: #0f172a;
+  padding: 10px 12px;
+  outline: none;
+  font-size: 13px;
+}
+
+.draft-edit-modal__input:focus,
+.draft-edit-modal__textarea:focus {
+  border-color: rgba(14, 165, 233, 0.7);
+  box-shadow: 0 0 0 4px rgba(14, 165, 233, 0.18);
+}
+
+.draft-edit-modal__textarea {
+  min-height: 180px;
+  resize: vertical;
+  line-height: 1.5;
+}
+
+.draft-edit-modal__actions {
+  margin-top: 18px;
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
 /* Operational Thread modal (Requests page) */
 .modal--op-thread {
   z-index: 1300;
