@@ -696,20 +696,20 @@ function renderDocumentWorkspace(tradeCase, { focusType, focusId, initialDocId }
 
         <aside class="workspace-pane workspace-pane--right" aria-label="Decision helper">
           <div class="workspace-section">
-            <div class="workspace-section__title">AI Notes</div>
+            <div class="workspace-section__title">AIの気づき</div>
             ${aiNotes.length ? `<ul class="list">${aiNotes.map((x) => `<li>${escapeHtml(x)}</li>`).join("")}</ul>` : `<div class="muted">-</div>`}
           </div>
           <div class="workspace-section">
-            <div class="workspace-section__title">Delivery risk</div>
+            <div class="workspace-section__title">人間メモ</div>
+            <div class="muted">（mock）短文メモだけ。長文は Case detail に集約。</div>
+          </div>
+          <div class="workspace-section">
+            <div class="workspace-section__title">納期・物流リスク</div>
             ${riskHtml}
           </div>
           <div class="workspace-section">
-            <div class="workspace-section__title">Latest follow-up</div>
+            <div class="workspace-section__title">最新フォロー</div>
             ${latestFollowUpHtml}
-          </div>
-          <div class="workspace-section">
-            <div class="workspace-section__title">Human memo</div>
-            <div class="muted">（mock）短文メモだけ。長文は Case detail に集約。</div>
           </div>
         </aside>
       </div>
@@ -7025,16 +7025,16 @@ function renderShipmentWorkspace(tradeCase) {
 
         <aside class="workspace-pane workspace-pane--right" aria-label="Decision helper">
           <div class="workspace-section">
-            <div class="workspace-section__title">AI Notes</div>
+            <div class="workspace-section__title">AIの気づき</div>
             ${aiNotes.length ? `<ul class="list">${aiNotes.map((x) => `<li>${escapeHtml(x)}</li>`).join("")}</ul>` : `<div class="muted">-</div>`}
           </div>
           <div class="workspace-section">
-            <div class="workspace-section__title">Delivery risk</div>
-            ${riskHtml}
+            <div class="workspace-section__title">人間メモ</div>
+            <div class="muted">（mock）短文メモだけ。長文は Case detail に集約。</div>
           </div>
           <div class="workspace-section">
-            <div class="workspace-section__title">Human memo</div>
-            <div class="muted">（mock）短文メモだけ。長文は Case detail に集約。</div>
+            <div class="workspace-section__title">納期・物流リスク</div>
+            ${riskHtml}
           </div>
         </aside>
       </div>
@@ -7127,16 +7127,16 @@ function renderSiWorkspace(tradeCase) {
 
         <aside class="workspace-pane workspace-pane--right" aria-label="Decision helper">
           <div class="workspace-section">
-            <div class="workspace-section__title">AI Notes</div>
+            <div class="workspace-section__title">AIの気づき</div>
             ${aiNotes.length ? `<ul class="list">${aiNotes.map((x) => `<li>${escapeHtml(x)}</li>`).join("")}</ul>` : `<div class="muted">-</div>`}
           </div>
           <div class="workspace-section">
-            <div class="workspace-section__title">Delivery risk</div>
-            ${riskNotes.length ? `<ul class="list">${riskNotes.map((x) => `<li>${escapeHtml(x)}</li>`).join("")}</ul>` : `<div class="muted">-</div>`}
+            <div class="workspace-section__title">人間メモ</div>
+            <div class="muted">（mock）営業コメントは短く。長文は Case detail に集約。</div>
           </div>
           <div class="workspace-section">
-            <div class="workspace-section__title">Human memo</div>
-            <div class="muted">（mock）営業コメントは短く。長文は Case detail に集約。</div>
+            <div class="workspace-section__title">納期・物流リスク</div>
+            ${riskNotes.length ? `<ul class="list">${riskNotes.map((x) => `<li>${escapeHtml(x)}</li>`).join("")}</ul>` : `<div class="muted">-</div>`}
           </div>
         </aside>
       </div>
