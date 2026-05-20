@@ -878,33 +878,6 @@ function renderDocumentWorkspace(tradeCase, { focusType, focusId, initialDocId }
   const docCheckResults = buildDocumentCheckResults(tc, type, id);
   const docCheckHtml = renderDocumentCheckResults(docCheckResults);
 
-  const latestFollowUpHtml = (() => {
-    const run = tc.resolutionAgentRun || null;
-    const steps = Array.isArray(run?.steps) ? run.steps : [];
-    const sent = steps.filter((s) => s && s.status === "sent" && s.proposedMessage).slice().sort((a, b) => String(b.approvedAt || "").localeCompare(String(a.approvedAt || "")))[0];
-    if (sent && sent.proposedMessage) {
-      const msg = sent.proposedMessage;
-      const to = Array.isArray(msg.to) ? msg.to.join(", ") : "";
-      return `<div class="workspace-kv">
-        <div>${escapeHtml(msg.subject || "（mock）送信済み")}</div>
-        <div><span class="muted">to</span> <span class="mono">${escapeHtml(to || "-")}</span></div>
-        <div><span class="muted">status</span> <span class="mono">waiting supplier reply</span></div>
-      </div>`;
-    }
-    const proposed = steps.find((s) => s && s.requiresHumanApproval && s.proposedMessage) || null;
-    if (proposed && proposed.proposedMessage) {
-      const msg = proposed.proposedMessage;
-      const to = Array.isArray(msg.to) ? msg.to.join(", ") : "";
-      return `<div class="workspace-kv">
-        <div class="muted">（未送信）</div>
-        <div>${escapeHtml(msg.subject || proposed.title || "Follow-up draft")}</div>
-        <div><span class="muted">to</span> <span class="mono">${escapeHtml(to || "-")}</span></div>
-        <div><span class="muted">status</span> <span class="mono">requires approval</span></div>
-      </div>`;
-    }
-    return `<div class="muted">（placeholder）</div>`;
-  })();
-
   const relationshipTree = buildWorkspaceRelationshipTree(tc, type, id);
   const relationshipTreeHtml = renderWorkspaceRelationshipTree(relationshipTree);
   const operationalSummary = buildWorkspaceOperationalSummary(tc, type, id);
@@ -1022,10 +995,6 @@ function renderDocumentWorkspace(tradeCase, { focusType, focusId, initialDocId }
               <button class="btn btn--ghost btn--tiny" type="button" data-open-timeline-scenario>理想シナリオ</button>
             </div>
             ${riskHtml}
-          </div>
-          <div class="workspace-section">
-            <div class="workspace-section__title">最新フォロー</div>
-            ${latestFollowUpHtml}
           </div>
         </aside>
       </div>
