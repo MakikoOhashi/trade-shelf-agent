@@ -1111,33 +1111,34 @@ function renderExecutionTimelineScenarioModalHtml(risk) {
   const scenario = Array.isArray(r?.scenario) ? r.scenario.filter(Boolean) : [];
   const customerDeliveryDate = "2026-05-25";
 
-  const statusPill = (status) => {
+  const statusChip = (status) => {
     const st = String(status || "");
-    if (st === "late") return `<span class="pill pill--mini pill--warn">遅延</span>`;
-    if (st === "at_risk") return `<span class="pill pill--mini pill--high">要注意</span>`;
-    if (st === "deadline") return `<span class="pill pill--mini pill--incident">納期</span>`;
-    return `<span class="pill pill--mini pill--muted">予定</span>`;
+    if (st === "late") return `<span class="timeline-status timeline-status--late">遅延</span>`;
+    if (st === "at_risk") return `<span class="timeline-status timeline-status--at-risk">要注意</span>`;
+    if (st === "deadline") return `<span class="timeline-status timeline-status--deadline">納期</span>`;
+    return `<span class="timeline-status timeline-status--planned">予定</span>`;
   };
 
   const itemsHtml = scenario.length
-    ? `<ul class="timeline-scenario__list">
+    ? `<ol class="timeline-scenario__timeline" role="list">
       ${scenario
         .map((s) => {
           const date = String(s?.date || "").trim();
           const milestone = String(s?.milestone || "").trim();
           const note = String(s?.note || "").trim();
           const status = String(s?.status || "").trim();
-          return `<li class="timeline-scenario__item">
-            <div class="timeline-scenario__top">
-              <div class="timeline-scenario__when mono">${escapeHtml(date || "-")}</div>
-              <div class="timeline-scenario__pill">${statusPill(status)}</div>
+          const statusKey = status === "late" || status === "at_risk" || status === "deadline" || status === "planned" ? status : "planned";
+          return `<li class="timeline-scenario__timeline-item timeline-scenario__timeline-item--${statusKey}">
+            <div class="timeline-scenario__date mono">${escapeHtml(date || "-")}</div>
+            <div class="timeline-scenario__row">
+              <div class="timeline-scenario__milestone">${escapeHtml(milestone || "-")}</div>
+              <div class="timeline-scenario__status">${statusChip(status)}</div>
             </div>
-            <div class="timeline-scenario__milestone">${escapeHtml(milestone || "-")}</div>
-            <div class="timeline-scenario__note muted">${escapeHtml(note || "-")}</div>
+            <div class="timeline-scenario__note">${escapeHtml(note || "-")}</div>
           </li>`;
         })
         .join("")}
-    </ul>`
+    </ol>`
     : `<div class="muted">-</div>`;
 
   return `
@@ -1145,11 +1146,13 @@ function renderExecutionTimelineScenarioModalHtml(risk) {
       <div class="timeline-scenario-overlay__backdrop" data-close-timeline-scenario></div>
       <div class="timeline-scenario-modal">
         <div class="timeline-scenario-modal__top">
-          <div class="timeline-scenario-modal__title">理想実行シナリオ</div>
+          <div class="timeline-scenario-modal__heading">
+            <div class="timeline-scenario-modal__title">理想実行シナリオ</div>
+            <div class="timeline-scenario-modal__subtitle">顧客納期 ${escapeHtml(customerDeliveryDate)} から逆算した理想タイムライン</div>
+          </div>
           <button class="btn btn--ghost btn--tiny" type="button" data-close-timeline-scenario aria-label="Close">×</button>
         </div>
         <div class="timeline-scenario-modal__body">
-          <div class="timeline-scenario__desc muted">顧客納期 ${escapeHtml(customerDeliveryDate)} から逆算した理想タイムラインを表示。</div>
           <div class="timeline-scenario__meta">
             <span class="pill pill--mini pill--muted">顧客納期: <span class="mono">${escapeHtml(customerDeliveryDate)}</span></span>
           </div>

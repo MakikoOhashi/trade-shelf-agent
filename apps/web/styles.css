@@ -2651,42 +2651,54 @@ body {
 .timeline-scenario-overlay__backdrop {
   position: absolute;
   inset: 0;
-  background: rgba(0, 0, 0, 0.62);
+  background: rgba(15, 23, 42, 0.28);
+  backdrop-filter: blur(2px);
 }
 
 .timeline-scenario-modal {
   position: relative;
-  width: min(720px, 96vw);
-  border: 1px solid var(--border);
-  border-radius: 16px;
-  background: rgba(10, 14, 26, 0.92);
-  box-shadow: var(--shadow);
-  padding: 14px;
+  width: min(800px, 96vw);
+  border: 1px solid rgba(148, 163, 184, 0.45);
+  border-radius: 14px;
+  background: #ffffff;
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.12);
+  padding: 14px 14px 12px;
+  color: #0f172a;
 }
 
 .timeline-scenario-modal__top {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
+}
+
+.timeline-scenario-modal__heading {
+  display: grid;
+  gap: 2px;
 }
 
 .timeline-scenario-modal__title {
   font-weight: 900;
   letter-spacing: 0.2px;
-  color: var(--text);
+  color: #0f172a;
+}
+
+.timeline-scenario-modal__subtitle {
+  font-size: 12px;
+  color: rgba(51, 65, 85, 0.92);
 }
 
 .timeline-scenario-modal__body {
   margin-top: 10px;
-  border: 1px solid var(--border);
+  border: 1px solid rgba(148, 163, 184, 0.35);
   border-radius: 12px;
-  background: rgba(0, 0, 0, 0.25);
-  padding: 12px;
-  color: var(--muted);
+  background: rgba(248, 250, 252, 0.92);
+  padding: 12px 12px 10px;
+  color: rgba(51, 65, 85, 0.95);
   font-size: 13px;
   line-height: 1.55;
-  max-height: 56vh;
+  max-height: 62vh;
   overflow: auto;
 }
 
@@ -2697,42 +2709,124 @@ body {
   gap: 8px;
 }
 
-.timeline-scenario__list {
-  list-style: none;
-  padding: 0;
-  margin: 12px 0 0;
-  display: grid;
-  gap: 10px;
-}
-
-.timeline-scenario__item {
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.04);
-  padding: 10px;
-}
-
-.timeline-scenario__top {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
 .timeline-scenario__milestone {
-  margin-top: 6px;
-  color: var(--text);
   font-weight: 800;
+  color: #0f172a;
 }
 
 .timeline-scenario__note {
-  margin-top: 4px;
+  margin-top: 6px;
+  color: rgba(51, 65, 85, 0.95);
 }
 
 .timeline-scenario-modal__actions {
   margin-top: 12px;
   display: flex;
   justify-content: flex-end;
+}
+
+.timeline-scenario__timeline {
+  list-style: none;
+  padding: 0 0 0 28px;
+  margin: 14px 0 0;
+  position: relative;
+  display: grid;
+  gap: 14px;
+}
+
+.timeline-scenario__timeline::before {
+  content: "";
+  position: absolute;
+  left: 12px;
+  top: 4px;
+  bottom: 4px;
+  width: 2px;
+  background: rgba(148, 163, 184, 0.55);
+}
+
+.timeline-scenario__timeline-item {
+  position: relative;
+  padding: 2px 0 2px;
+}
+
+.timeline-scenario__timeline-item::before {
+  content: "";
+  position: absolute;
+  left: -20px;
+  top: 9px;
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  background: #ffffff;
+  border: 2px solid rgba(100, 116, 139, 0.55);
+  box-shadow: 0 1px 0 rgba(15, 23, 42, 0.06);
+}
+
+.timeline-scenario__timeline-item--late::before {
+  border-color: rgba(239, 68, 68, 0.9);
+}
+
+.timeline-scenario__timeline-item--at_risk::before {
+  border-color: rgba(245, 158, 11, 0.95);
+}
+
+.timeline-scenario__timeline-item--deadline::before {
+  border-color: rgba(99, 102, 241, 0.9);
+}
+
+.timeline-scenario__date {
+  font-size: 12px;
+  color: rgba(71, 85, 105, 0.9);
+}
+
+.timeline-scenario__row {
+  margin-top: 2px;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.timeline-scenario__status {
+  flex: none;
+}
+
+.timeline-status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(148, 163, 184, 0.6);
+  background: rgba(248, 250, 252, 0.95);
+  color: rgba(51, 65, 85, 0.95);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.2px;
+}
+
+.timeline-status--planned {
+  border-color: rgba(148, 163, 184, 0.6);
+  background: rgba(241, 245, 249, 0.95);
+}
+
+.timeline-status--late {
+  border-color: rgba(239, 68, 68, 0.45);
+  background: rgba(239, 68, 68, 0.08);
+  color: rgba(185, 28, 28, 0.98);
+}
+
+.timeline-status--at-risk {
+  border-color: rgba(245, 158, 11, 0.5);
+  background: rgba(245, 158, 11, 0.1);
+  color: rgba(146, 64, 14, 0.98);
+}
+
+.timeline-status--deadline {
+  border-color: rgba(99, 102, 241, 0.45);
+  background: rgba(99, 102, 241, 0.1);
+  color: rgba(55, 48, 163, 0.98);
 }
 
 .human-memo__list {
