@@ -261,6 +261,8 @@ function normalizeFocusType(input) {
   const t = String(input || "").trim().toLowerCase();
   if (t === "si") return "si";
   if (t === "invoice" || t === "inv") return "invoice";
+  if (t === "packing_list" || t === "packinglist" || t === "pl") return "packing_list";
+  if (t === "bl") return "bl";
   if (t === "shipment") return "shipment";
   if (t === "document" || t === "doc") return "document";
   if (t === "case" || t === "tradecase" || t === "trade_case") return "case";
@@ -273,12 +275,16 @@ function formatFocusLabel(focusType, focusId) {
   if (!id || id === "-") {
     if (type === "si") return "SI -";
     if (type === "invoice") return "INV -";
+    if (type === "packing_list") return "PL -";
+    if (type === "bl") return "BL -";
     if (type === "shipment") return "Shipment -";
     if (type === "document") return "Document -";
     return "Case -";
   }
   if (type === "si") return id;
   if (type === "invoice") return normalizeInvoiceNo(id);
+  if (type === "packing_list") return id;
+  if (type === "bl") return id;
   if (type === "shipment") return id;
   if (type === "document") return id;
   return `Case ${id}`;
@@ -362,6 +368,124 @@ function buildLinkedDocumentsForFocus(tradeCase, focusType, focusId) {
       shipmentId !== "-" ? shipmentId : null,
     ]).filter(Boolean),
   };
+}
+
+function buildWorkspaceOperationalSummary(tradeCase, focusType, focusId) {
+  const tc = tradeCase || null;
+  if (!tc) return { title: "状況", sections: [] };
+
+  const type = normalizeFocusType(focusType);
+  const id = String(focusId || "").trim();
+
+  const sh = tc?.shipmentEntity || null;
+  const si = tc?.siEntity || null;
+  const customer = tc?.customer || null;
+  const supplier = tc?.supplier || null;
+
+  const invoiceRefs = Array.isArray(tc?.invoiceNumbers) ? tc.invoiceNumbers.filter(Boolean) : [];
+  const invQtyByNo = Object.create(null);
+  for (const inv of invoiceRefs) {
+    const no = normalizeInvoiceNo(inv?.invoiceNo);
+    if (!no) continue;
+    const qty = typeof inv?.qty === "number" ? inv.qty : null;
+    if (typeof qty === "number") invQtyByNo[no] = qty;
+  }
+  const invNos = uniqStrings([
+    ...invoiceRefs.map((x) => normalizeInvoiceNo(x?.invoiceNo)),
+    ...(sh?.supplierInvoices || []).map(normalizeInvoiceNo),
+    ...(si?.relatedInvoiceNos || []).map(normalizeInvoiceNo),
+  ]).filter(Boolean);
+
+  const siTotalQty =
+    typeof tc?.products?.[0]?.quantityInstructed === "number"
+      ? tc.products[0].quantityInstructed
+      : typeof tc?.products?.[0]?.quantityOrdered === "number"
+        ? tc.products[0].quantityOrdered
+        : null;
+  const invTotalQty = invNos.reduce((sum, no) => sum + (typeof invQtyByNo[no] === "number" ? invQtyByNo[no] : 0), 0);
+  const remainingQty = typeof siTotalQty === "number" ? Math.max(0, siTotalQty - invTotalQty) : null;
+
+  if (type === "si") {
+    const titleId = String(si?.siNo || id || "-");
+    const splitItems = [];
+    for (const no of invNos) {
+      const qty = typeof invQtyByNo[no] === "number" ? invQtyByNo[no] : null;
+      splitItems.push({ type: "text", label: `${no}: ${qty != null ? `${qty}pcs` : "-"}` });
+    }
+    if (typeof remainingQty === "number") splitItems.push({ type: "text", label: `Remaining: ${remainingQty}pcs` });
+    if (!splitItems.length) splitItems.push({ type: "text", label: "-" });
+
+    return {
+      title: `${titleId} の状況`,
+      sections: [
+        { label: "分納状況", items: splitItems },
+        { label: "書類関連", items: [{ type: "follow_up", status: "waiting_reply", label: "PL発行待ち" }] },
+        { label: "物流関連", items: [{ type: "follow_up", status: "waiting_reply", label: "BL発行待ち" }, { type: "follow_up", status: "waiting_reply", label: "ETA更新待ち" }] },
+      ],
+    };
+  }
+
+  if (type === "invoice" || type === "packing_list" || type === "bl" || type === "shipment") {
+    const titleId = type === "invoice" ? normalizeInvoiceNo(id || "-") : id || "-";
+    const warehouseEta = String(sh?.eta || "2026-05-15");
+    return {
+      title: `${titleId} の状況`,
+      sections: [
+        {
+          label: "書類関連",
+          items: [{ type: "follow_up", status: "waiting_reply", label: "PL発行待ち（督促中）" }, { type: "follow_up", status: "waiting_reply", label: "BL未着" }],
+        },
+        {
+          label: "物流関連",
+          items: [{ type: "text", label: "工場出荷済み" }, { type: "text", label: "船ブッキング済み" }, { type: "text", label: "ETD確認中" }],
+        },
+        {
+          label: "取引先",
+          items: [
+            { type: "entity", label: `Supplier: ${String(supplier?.name || "ACME Components")}` },
+            { type: "entity", label: `Customer: ${String(customer?.name || "AAA Company")}` },
+          ],
+        },
+        { label: "入荷予定", items: [{ type: "date", label: `倉庫入荷予定: ${warehouseEta}` }] },
+      ],
+    };
+  }
+
+  return {
+    title: "状況",
+    sections: [{ label: "概要", items: [{ type: "text", label: "-" }] }],
+  };
+}
+
+function renderOperationalItem(item) {
+  const it = typeof item === "string" ? { label: item } : item || {};
+  const label = String(it.label || it.text || "").trim();
+  if (!label) return "";
+  const status = String(it.status || "").trim();
+  const suffix = status ? ` <span class="muted">(${escapeHtml(status)})</span>` : "";
+  return `<li>${escapeHtml(label)}${suffix}</li>`;
+}
+
+function renderWorkspaceOperationalSummaryHtml(summary) {
+  const s = summary || null;
+  const sections = Array.isArray(s?.sections) ? s.sections.filter(Boolean) : [];
+  const title = String(s?.title || "").trim();
+  if (!title && !sections.length) return `<div class="muted">-</div>`;
+
+  const titleHtml = title ? `<div class="workspace-kv"><div><span class="mono">■</span> ${escapeHtml(title)}</div></div>` : "";
+  const sectionsHtml = sections
+    .map((sec) => {
+      const label = String(sec?.label || "").trim();
+      const items = Array.isArray(sec?.items) ? sec.items : [];
+      const itemsHtml = items.map(renderOperationalItem).filter(Boolean).join("");
+      return `<div class="workspace-kv">
+        <div><span class="muted">${escapeHtml(label || "-")}</span></div>
+        ${itemsHtml ? `<ul class="list">${itemsHtml}</ul>` : `<div class="muted">-</div>`}
+      </div>`;
+    })
+    .join("");
+
+  return `${titleHtml}${sectionsHtml || `<div class="muted">-</div>`}`;
 }
 
 function resolveFocusDocId({ focusType, focusId, documents }) {
@@ -508,30 +632,6 @@ function renderDocumentWorkspace(tradeCase, { focusType, focusId, initialDocId }
 
   const viewerHtml = renderDocumentViewer(documents, { modalId: "document-workspace-modal", viewerKey: "document" });
 
-  const invoiceRefs = Array.isArray(tc.invoiceNumbers) ? tc.invoiceNumbers.filter(Boolean) : [];
-  const invQtyByNo = Object.create(null);
-  for (const inv of invoiceRefs) {
-    const no = normalizeInvoiceNo(inv?.invoiceNo);
-    if (!no) continue;
-    const qty = typeof inv?.qty === "number" ? inv.qty : null;
-    if (typeof qty === "number") invQtyByNo[no] = qty;
-  }
-  const invNos = uniqStrings([
-    ...invoiceRefs.map((x) => normalizeInvoiceNo(x?.invoiceNo)),
-    ...(sh?.supplierInvoices || []).map(normalizeInvoiceNo),
-    ...(si?.relatedInvoiceNos || []).map(normalizeInvoiceNo),
-  ]).filter(Boolean);
-  const blNo = String(sh?.blNo || (Array.isArray(tc.blNumbers) ? tc.blNumbers[0] : "") || "").trim() || "-";
-
-  const siTotalQty =
-    typeof tc?.products?.[0]?.quantityInstructed === "number"
-      ? tc.products[0].quantityInstructed
-      : typeof tc?.products?.[0]?.quantityOrdered === "number"
-        ? tc.products[0].quantityOrdered
-        : null;
-  const invTotalQty = invNos.reduce((sum, no) => sum + (typeof invQtyByNo[no] === "number" ? invQtyByNo[no] : 0), 0);
-  const remainingQty = typeof siTotalQty === "number" ? Math.max(0, siTotalQty - invTotalQty) : null;
-
   const incidents = detectIncidents(tc).filter((i) => i && i.status !== "resolved");
   const riskHtml = incidents.length
     ? `<ul class="list">${incidents
@@ -588,17 +688,8 @@ function renderDocumentWorkspace(tradeCase, { focusType, focusId, initialDocId }
   const linkedDocsHtml = linkedInfo.items.length
     ? `<ul class="list">${linkedInfo.items.map((x) => `<li>${escapeHtml(x)}</li>`).join("")}</ul>`
     : `<div class="muted">-</div>`;
-
-  const splitStatusHtml = (() => {
-    const rows = [];
-    for (const no of invNos) {
-      const qty = typeof invQtyByNo[no] === "number" ? invQtyByNo[no] : null;
-      rows.push(`<div><span class="muted">${escapeHtml(no)}</span> <span class="mono">${escapeHtml(qty != null ? `${qty}pcs` : "-")}</span></div>`);
-    }
-    if (typeof siTotalQty === "number") rows.push(`<div><span class="muted">SI</span> <span class="mono">${escapeHtml(`${siTotalQty}pcs`)}</span></div>`);
-    if (typeof remainingQty === "number") rows.push(`<div><span class="muted">remaining</span> <span class="mono">${escapeHtml(`${remainingQty}pcs`)}</span></div>`);
-    return rows.length ? `<div class="workspace-kv">${rows.join("")}</div>` : `<div class="muted">-</div>`;
-  })();
+  const operationalSummary = buildWorkspaceOperationalSummary(tc, type, id);
+  const operationalSummaryHtml = renderWorkspaceOperationalSummaryHtml(operationalSummary);
 
   return `
     <div class="workspace-topbar">
@@ -611,24 +702,13 @@ function renderDocumentWorkspace(tradeCase, { focusType, focusId, initialDocId }
       <div class="workspace-layout">
         <aside class="workspace-pane workspace-pane--left" aria-label="Case context">
           <div class="workspace-section">
-            <div class="workspace-section__title">Case summary</div>
-            <div class="workspace-kv">
-              <div><span class="muted">SI No</span> <span class="mono">${escapeHtml(si?.siNo || "-")}</span></div>
-              <div><span class="muted">Shipment</span> <span class="mono">${escapeHtml(sh?.id || "-")}</span></div>
-              <div><span class="muted">Customer</span> <span class="mono">${escapeHtml(customer?.name || "-")}</span></div>
-              <div><span class="muted">Supplier</span> <span class="mono">${escapeHtml(supplier?.name || "-")}</span></div>
-              <div><span class="muted">ETA</span> <span class="mono">${escapeHtml(sh?.eta || "-")}</span></div>
-            </div>
+            <div class="workspace-section__title">現在の状況</div>
+            ${operationalSummaryHtml}
           </div>
 
           <div class="workspace-section">
             <div class="workspace-section__title">${escapeHtml(linkedInfo.title)}</div>
             ${linkedDocsHtml}
-          </div>
-
-          <div class="workspace-section">
-            <div class="workspace-section__title">Split shipment status</div>
-            ${splitStatusHtml}
           </div>
 
           <div class="workspace-section">
