@@ -957,47 +957,45 @@ function renderDocumentWorkspace(tradeCase, { focusType, focusId, initialDocId }
         <span class="pill pill--muted">Case ${escapeHtml(tc.id || "-")}</span>
       </div>
     </div>
-    <div class="workspace-desk">
-      <div class="workspace-layout">
-        <aside class="workspace-pane workspace-pane--left" aria-label="Case context">
-          <div class="workspace-section">
-            <div class="workspace-section__title">現在の状況</div>
-            ${operationalSummaryHtml}
-          </div>
+    <div class="workspace-layout">
+      <aside class="workspace-pane workspace-pane--left" aria-label="Case context">
+        <div class="workspace-section">
+          <div class="workspace-section__title">現在の状況</div>
+          ${operationalSummaryHtml}
+        </div>
 
-          <div class="workspace-section">
-            <div class="workspace-section__title">紐付き</div>
-            ${relationshipTreeHtml}
-          </div>
-        </aside>
+        <div class="workspace-section">
+          <div class="workspace-section__title">紐付き</div>
+          ${relationshipTreeHtml}
+        </div>
+      </aside>
 
-        <main class="workspace-pane workspace-pane--center" aria-label="Document viewer">
-          ${viewerHtml}
-        </main>
+      <main class="workspace-pane workspace-pane--center" aria-label="Document viewer">
+        ${viewerHtml}
+      </main>
 
-        <aside class="workspace-pane workspace-pane--right" aria-label="Decision helper">
-          <div class="workspace-section">
-            <div class="workspace-section__title">${escapeHtml(docCheckResults?.title || "AIの書類チェック")}</div>
-            ${docCheckHtml}
+      <aside class="workspace-pane workspace-pane--right" aria-label="Decision helper">
+        <div class="workspace-section">
+          <div class="workspace-section__title">${escapeHtml(docCheckResults?.title || "AIの書類チェック")}</div>
+          ${docCheckHtml}
+        </div>
+        <div class="workspace-section">
+          <div class="workspace-section__title human-memo__header">
+            <span>人間メモ</span>
+            <button class="btn btn--ghost btn--tiny memo-action-btn" type="button" data-human-memo-add>+ メモ追加</button>
           </div>
-          <div class="workspace-section">
-            <div class="workspace-section__title human-memo__header">
-              <span>人間メモ</span>
-              <button class="btn btn--ghost btn--tiny memo-action-btn" type="button" data-human-memo-add>+ メモ追加</button>
-            </div>
-            <div class="human-memo__list">
-              ${memoListHtml}
-            </div>
+          <div class="human-memo__list">
+            ${memoListHtml}
           </div>
-          <div class="workspace-section">
-            <div class="workspace-section__title workspace-section__header">
-              <span>納期・物流リスク</span>
-              <button class="btn btn--ghost btn--tiny" type="button" data-open-timeline-scenario>理想シナリオ</button>
-            </div>
-            ${riskHtml}
+        </div>
+        <div class="workspace-section">
+          <div class="workspace-section__title workspace-section__header">
+            <span>納期・物流リスク</span>
+            <button class="btn btn--ghost btn--tiny" type="button" data-open-timeline-scenario>理想シナリオ</button>
           </div>
-        </aside>
-      </div>
+          ${riskHtml}
+        </div>
+      </aside>
     </div>
     ${scenarioModalHtml}
   `;
@@ -7702,58 +7700,56 @@ function renderShipmentWorkspace(tradeCase) {
   ].filter(Boolean);
 
   return `
-    <div class="workspace-desk">
-      <div class="workspace-layout">
-        <aside class="workspace-pane workspace-pane--left" aria-label="Shipment context">
-          <div class="workspace-section">
-            <div class="workspace-section__title">貨物 / 基本情報</div>
-            <div class="workspace-kv">
-              <div><span class="muted">Shipment</span> <span class="mono">${escapeHtml(sh?.id || "-")}</span></div>
-              <div><span class="muted">Booking</span> <span class="mono">${escapeHtml(sh?.bookingNo || "-")}</span></div>
-              <div><span class="muted">BL</span> <span class="mono">${escapeHtml(sh?.blNo || "-")}</span></div>
-              <div><span class="muted">Container</span> <span class="mono">${escapeHtml(sh?.containerNo || "-")}</span></div>
-              <div><span class="muted">ETD</span> <span class="mono">${escapeHtml(sh?.etd || "-")}</span></div>
-              <div><span class="muted">ETA</span> <span class="mono">${escapeHtml(sh?.eta || "-")}</span></div>
-            </div>
+    <div class="workspace-layout">
+      <aside class="workspace-pane workspace-pane--left" aria-label="Shipment context">
+        <div class="workspace-section">
+          <div class="workspace-section__title">貨物 / 基本情報</div>
+          <div class="workspace-kv">
+            <div><span class="muted">Shipment</span> <span class="mono">${escapeHtml(sh?.id || "-")}</span></div>
+            <div><span class="muted">Booking</span> <span class="mono">${escapeHtml(sh?.bookingNo || "-")}</span></div>
+            <div><span class="muted">BL</span> <span class="mono">${escapeHtml(sh?.blNo || "-")}</span></div>
+            <div><span class="muted">Container</span> <span class="mono">${escapeHtml(sh?.containerNo || "-")}</span></div>
+            <div><span class="muted">ETD</span> <span class="mono">${escapeHtml(sh?.etd || "-")}</span></div>
+            <div><span class="muted">ETA</span> <span class="mono">${escapeHtml(sh?.eta || "-")}</span></div>
           </div>
+        </div>
 
-          <div class="workspace-section">
-            <div class="workspace-section__title">書類 / 関連INV</div>
-            <div class="case-cover__meta">${invHtml}</div>
-            ${docSummaryHtml}
-          </div>
+        <div class="workspace-section">
+          <div class="workspace-section__title">書類 / 関連INV</div>
+          <div class="case-cover__meta">${invHtml}</div>
+          ${docSummaryHtml}
+        </div>
 
-          <div class="workspace-section">
-            <div class="workspace-section__title">Related</div>
-            <div class="workspace-kv">
-              <div><span class="muted">Case</span> <span class="mono">${escapeHtml(tradeCase?.id || "-")}</span></div>
-              <div><span class="muted">Related SI</span> <span class="mono">${escapeHtml(si?.siNo || "-")}</span></div>
-            </div>
+        <div class="workspace-section">
+          <div class="workspace-section__title">Related</div>
+          <div class="workspace-kv">
+            <div><span class="muted">Case</span> <span class="mono">${escapeHtml(tradeCase?.id || "-")}</span></div>
+            <div><span class="muted">Related SI</span> <span class="mono">${escapeHtml(si?.siNo || "-")}</span></div>
           </div>
-        </aside>
+        </div>
+      </aside>
 
-        <main class="workspace-pane workspace-pane--center" aria-label="Document viewer">
-          ${viewerHtml}
-        </main>
+      <main class="workspace-pane workspace-pane--center" aria-label="Document viewer">
+        ${viewerHtml}
+      </main>
 
-        <aside class="workspace-pane workspace-pane--right" aria-label="Decision helper">
-          <div class="workspace-section">
-            <div class="workspace-section__title">AIの気づき</div>
-            ${aiNotes.length ? `<ul class="list">${aiNotes.map((x) => `<li>${escapeHtml(x)}</li>`).join("")}</ul>` : `<div class="muted">-</div>`}
-          </div>
-          <div class="workspace-section">
-            <div class="workspace-section__title">人間メモ</div>
-            <div class="muted">（mock）短文メモだけ。長文は Case detail に集約。</div>
-          </div>
-          <div class="workspace-section">
-            <div class="workspace-section__title">納期・物流リスク</div>
-            ${riskHtml}
-          </div>
-        </aside>
-      </div>
-      <div class="workspace-role-note">
-        <span class="muted">UI note:</span> Shipment Workspace は「貨物と船積書類を見る」。問題と判断は Case detail に集約する。
-      </div>
+      <aside class="workspace-pane workspace-pane--right" aria-label="Decision helper">
+        <div class="workspace-section">
+          <div class="workspace-section__title">AIの気づき</div>
+          ${aiNotes.length ? `<ul class="list">${aiNotes.map((x) => `<li>${escapeHtml(x)}</li>`).join("")}</ul>` : `<div class="muted">-</div>`}
+        </div>
+        <div class="workspace-section">
+          <div class="workspace-section__title">人間メモ</div>
+          <div class="muted">（mock）短文メモだけ。長文は Case detail に集約。</div>
+        </div>
+        <div class="workspace-section">
+          <div class="workspace-section__title">納期・物流リスク</div>
+          ${riskHtml}
+        </div>
+      </aside>
+    </div>
+    <div class="workspace-role-note">
+      <span class="muted">UI note:</span> Shipment Workspace は「貨物と船積書類を見る」。問題と判断は Case detail に集約する。
     </div>
   `;
 }
@@ -7795,67 +7791,65 @@ function renderSiWorkspace(tradeCase) {
   ].filter(Boolean);
 
   return `
-    <div class="workspace-desk">
-      <div class="workspace-layout">
-        <aside class="workspace-pane workspace-pane--left" aria-label="SI summary">
-          <div class="workspace-section">
-            <div class="workspace-section__title">SI summary</div>
-            <div class="workspace-kv">
-              <div><span class="muted">SI No</span> <span class="mono">${escapeHtml(si?.siNo || "-")}</span></div>
-              <div><span class="muted">顧客納期</span> <span class="mono">${escapeHtml(si?.requestedDeliveryDate || "-")}</span></div>
-              <div><span class="muted">営業担当</span> <span class="case-cover__meta">${ownersHtml}</span></div>
+    <div class="workspace-layout">
+      <aside class="workspace-pane workspace-pane--left" aria-label="SI summary">
+        <div class="workspace-section">
+          <div class="workspace-section__title">SI summary</div>
+          <div class="workspace-kv">
+            <div><span class="muted">SI No</span> <span class="mono">${escapeHtml(si?.siNo || "-")}</span></div>
+            <div><span class="muted">顧客納期</span> <span class="mono">${escapeHtml(si?.requestedDeliveryDate || "-")}</span></div>
+            <div><span class="muted">営業担当</span> <span class="case-cover__meta">${ownersHtml}</span></div>
+          </div>
+        </div>
+
+        <div class="workspace-section">
+          <div class="workspace-section__title">売約 / 営業回答</div>
+          <details class="accordion">
+            <summary class="accordion__summary">売約</summary>
+            <div class="accordion__body">${commitmentsHtml}</div>
+          </details>
+        </div>
+
+        <div class="workspace-section">
+          <div class="workspace-section__title">分納状況</div>
+          <div class="muted">（mock）INV 分納や次便紐付けの判断履歴をここに集約する</div>
+        </div>
+
+        <div class="workspace-section">
+          <div class="workspace-section__title">Related</div>
+          <details class="accordion">
+            <summary class="accordion__summary">Related shipments / invoices</summary>
+            <div class="accordion__body">
+              <div class="muted" style="margin-bottom:6px;">Shipments</div>
+              ${relatedShipments.length ? `<div class="case-cover__meta">${relatedShipments.map((x) => `<span class="pill pill--mini">${escapeHtml(x)}</span>`).join("")}</div>` : `<div class="muted">-</div>`}
+              <div class="muted" style="margin:10px 0 6px;">Invoices</div>
+              ${relatedInvoices.length ? `<div class="case-cover__meta">${relatedInvoices.map((x) => `<span class="pill pill--mini">${escapeHtml(x)}</span>`).join("")}</div>` : `<div class="muted">-</div>`}
             </div>
-          </div>
+          </details>
+        </div>
+      </aside>
 
-          <div class="workspace-section">
-            <div class="workspace-section__title">売約 / 営業回答</div>
-            <details class="accordion">
-              <summary class="accordion__summary">売約</summary>
-              <div class="accordion__body">${commitmentsHtml}</div>
-            </details>
-          </div>
+      <main class="workspace-pane workspace-pane--center" aria-label="SI documents">
+        ${viewerHtml}
+      </main>
 
-          <div class="workspace-section">
-            <div class="workspace-section__title">分納状況</div>
-            <div class="muted">（mock）INV 分納や次便紐付けの判断履歴をここに集約する</div>
-          </div>
-
-          <div class="workspace-section">
-            <div class="workspace-section__title">Related</div>
-            <details class="accordion">
-              <summary class="accordion__summary">Related shipments / invoices</summary>
-              <div class="accordion__body">
-                <div class="muted" style="margin-bottom:6px;">Shipments</div>
-                ${relatedShipments.length ? `<div class="case-cover__meta">${relatedShipments.map((x) => `<span class="pill pill--mini">${escapeHtml(x)}</span>`).join("")}</div>` : `<div class="muted">-</div>`}
-                <div class="muted" style="margin:10px 0 6px;">Invoices</div>
-                ${relatedInvoices.length ? `<div class="case-cover__meta">${relatedInvoices.map((x) => `<span class="pill pill--mini">${escapeHtml(x)}</span>`).join("")}</div>` : `<div class="muted">-</div>`}
-              </div>
-            </details>
-          </div>
-        </aside>
-
-        <main class="workspace-pane workspace-pane--center" aria-label="SI documents">
-          ${viewerHtml}
-        </main>
-
-        <aside class="workspace-pane workspace-pane--right" aria-label="Decision helper">
-          <div class="workspace-section">
-            <div class="workspace-section__title">AIの気づき</div>
-            ${aiNotes.length ? `<ul class="list">${aiNotes.map((x) => `<li>${escapeHtml(x)}</li>`).join("")}</ul>` : `<div class="muted">-</div>`}
-          </div>
-          <div class="workspace-section">
-            <div class="workspace-section__title">人間メモ</div>
-            <div class="muted">（mock）営業コメントは短く。長文は Case detail に集約。</div>
-          </div>
-          <div class="workspace-section">
-            <div class="workspace-section__title">納期・物流リスク</div>
-            ${riskNotes.length ? `<ul class="list">${riskNotes.map((x) => `<li>${escapeHtml(x)}</li>`).join("")}</ul>` : `<div class="muted">-</div>`}
-          </div>
-        </aside>
-      </div>
-      <div class="workspace-role-note">
-        <span class="muted">UI note:</span> SI Workspace は「販売約束と顧客納期を見る」。問題と判断は Case detail に集約する。
-      </div>
+      <aside class="workspace-pane workspace-pane--right" aria-label="Decision helper">
+        <div class="workspace-section">
+          <div class="workspace-section__title">AIの気づき</div>
+          ${aiNotes.length ? `<ul class="list">${aiNotes.map((x) => `<li>${escapeHtml(x)}</li>`).join("")}</ul>` : `<div class="muted">-</div>`}
+        </div>
+        <div class="workspace-section">
+          <div class="workspace-section__title">人間メモ</div>
+          <div class="muted">（mock）営業コメントは短く。長文は Case detail に集約。</div>
+        </div>
+        <div class="workspace-section">
+          <div class="workspace-section__title">納期・物流リスク</div>
+          ${riskNotes.length ? `<ul class="list">${riskNotes.map((x) => `<li>${escapeHtml(x)}</li>`).join("")}</ul>` : `<div class="muted">-</div>`}
+        </div>
+      </aside>
+    </div>
+    <div class="workspace-role-note">
+      <span class="muted">UI note:</span> SI Workspace は「販売約束と顧客納期を見る」。問題と判断は Case detail に集約する。
     </div>
   `;
 }

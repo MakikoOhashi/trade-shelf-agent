@@ -2541,8 +2541,8 @@ body {
   background: transparent;
   border: 0;
   color: var(--text);
-  padding: 16px;
-  margin: 12px 16px 16px;
+  padding: 12px 16px 16px;
+  margin: 0;
 }
 
 .workspace-topbar {
@@ -2553,13 +2553,6 @@ body {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
-}
-
-.workspace-desk {
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 16px;
-  padding: 14px;
 }
 
 .workspace-layout {
