@@ -2473,6 +2473,74 @@ body {
   margin-bottom: 8px;
 }
 
+.doc-check-list {
+  display: grid;
+  gap: 10px;
+}
+
+.doc-check {
+  border-top: 1px dashed color-mix(in srgb, var(--border) 70%, transparent);
+  padding-top: 10px;
+  display: grid;
+  gap: 6px;
+}
+
+.doc-check__header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.doc-check:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.doc-check__label {
+  font-weight: 900;
+  font-size: 12px;
+  color: var(--text);
+  letter-spacing: 0.16px;
+}
+
+.doc-check__status {
+  font-weight: 900;
+  font-size: 11px;
+  letter-spacing: 0.12px;
+  white-space: nowrap;
+}
+
+.doc-check__status--ok {
+  color: color-mix(in srgb, var(--accent-2) 70%, var(--text));
+}
+
+.doc-check__status--warning {
+  color: color-mix(in srgb, var(--warning) 75%, var(--text));
+}
+
+.doc-check__status--error {
+  color: color-mix(in srgb, var(--danger) 75%, var(--text));
+}
+
+.doc-check__summary {
+  display: grid;
+  gap: 4px;
+  font-size: 12px;
+  line-height: 1.35;
+  color: var(--text);
+}
+
+.doc-check__line {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.doc-check__issue {
+  font-size: 12px;
+  color: var(--muted);
+}
+
 .workspace-kv {
   display: grid;
   gap: 6px;

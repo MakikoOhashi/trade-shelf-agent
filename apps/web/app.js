@@ -591,6 +591,181 @@ function openDocumentWorkspace(tradeCaseId, focusType, focusId, initialDocId) {
   });
 }
 
+function buildDocumentCheckResults(tc, focusType, focusId) {
+  const type = normalizeFocusType(focusType);
+  const id = String(focusId || "").trim();
+  const documents = buildDocumentWorkspaceDocuments(tc, type, id);
+
+  const sh = tc?.shipmentEntity || null;
+  const si = tc?.siEntity || null;
+
+  const invoiceRefs = Array.isArray(tc?.invoiceNumbers) ? tc.invoiceNumbers.filter(Boolean) : [];
+  const invByNo = new Map();
+  for (const inv of invoiceRefs) {
+    const no = normalizeInvoiceNo(inv?.invoiceNo);
+    if (!no) continue;
+    invByNo.set(no, inv);
+  }
+
+  const incidents = detectIncidents(tc);
+  const mismatch = incidents.find((i) => i && i.type === "invoiceQuantityMismatch") || null;
+  const details = mismatch && mismatch.details && typeof mismatch.details === "object" ? mismatch.details : null;
+  const siQty =
+    typeof details?.siQuantity === "number"
+      ? details.siQuantity
+      : typeof tc?.products?.[0]?.quantityInstructed === "number"
+        ? tc.products[0].quantityInstructed
+        : null;
+
+  const statusRank = (s) => {
+    if (s === "error") return 3;
+    if (s === "warning") return 2;
+    return 1;
+  };
+
+  const anyDocMissing = (pred) => documents.some((d) => pred(d) && String(d?.status || "") === "missing");
+  const anyDocPresent = (pred) => documents.some((d) => pred(d) && String(d?.status || "") !== "missing");
+
+  const buildQuantityCheck = () => {
+    const invDocs = documents.filter((d) => String(d?.id || "").startsWith("inv-"));
+    const invLines = [];
+    let total = 0;
+    let totalKnown = true;
+    let anySplit = false;
+
+    for (const d of invDocs) {
+      const invNo = String(d?.label || "").trim();
+      const ref = invByNo.get(invNo) || null;
+      const qty = typeof ref?.qty === "number" ? ref.qty : null;
+      if (qty == null) {
+        totalKnown = false;
+        invLines.push(`⚠ ${invNo || "INV"}: qty unknown`);
+        continue;
+      }
+      total += qty;
+      if (siQty != null && qty !== siQty) anySplit = true;
+      invLines.push(`${siQty != null && qty !== siQty ? "⚠" : "✓"} ${invNo}: ${qty}pcs`);
+    }
+
+    if (!invLines.length) invLines.push("⚠ INV missing");
+
+    if (siQty != null && totalKnown && invDocs.length) {
+      invLines.push(`${total === siQty ? "✓" : "⚠"} 合計数量 = ${total}pcs / SI数量 = ${siQty}pcs`);
+    }
+
+    const status =
+      siQty == null || !totalKnown || !invDocs.length ? "warning" : total === siQty ? (anySplit ? "warning" : "ok") : "warning";
+
+    return {
+      key: "quantity",
+      label: "数量チェック",
+      status,
+      summary: invLines.join("\n"),
+    };
+  };
+
+  const buildPlCheck = () => {
+    const isMissing = anyDocMissing((d) => String(d?.id || "") === "pl-missing" || String(d?.type || "").toLowerCase().includes("packing"));
+    const isPresent = anyDocPresent((d) => String(d?.id || "") !== "pl-missing" && String(d?.type || "").toLowerCase().includes("packing"));
+    if (isPresent) {
+      return { key: "pl", label: "PLチェック", status: "ok", summary: "OK" };
+    }
+    return { key: "pl", label: "PLチェック", status: isMissing ? "warning" : "warning", summary: "未着" };
+  };
+
+  const buildBlCheck = () => {
+    const hasBl = Boolean(String(sh?.blNo || "").trim());
+    return { key: "bl", label: "BLチェック", status: hasBl ? "ok" : "warning", summary: hasBl ? "Booking情報と一致" : "未着" };
+  };
+
+  const buildShipmentCheck = () => {
+    const hasShipment = Boolean(String(sh?.id || tc?.shipmentState || "").trim());
+    return { key: "shipment", label: "Shipmentチェック", status: hasShipment ? "ok" : "warning", summary: hasShipment ? "linked" : "missing" };
+  };
+
+  const checksBase = [
+    { key: "product", label: "品番チェック", status: "ok", summary: "OK" },
+    { key: "color", label: "色番チェック", status: "ok", summary: "OK" },
+  ];
+
+  const checksByFocus = (() => {
+    if (type === "shipment") return [buildQuantityCheck(), buildPlCheck(), buildBlCheck(), buildShipmentCheck()];
+    if (type === "invoice") return [buildQuantityCheck(), buildBlCheck(), buildPlCheck(), buildShipmentCheck()];
+    return [buildQuantityCheck(), buildPlCheck(), buildBlCheck(), buildShipmentCheck()];
+  })();
+
+  const checks = [...checksBase, ...checksByFocus]
+    .filter(Boolean)
+    .map((c) => ({
+      key: String(c.key || ""),
+      label: String(c.label || ""),
+      status: c.status === "error" || c.status === "warning" || c.status === "ok" ? c.status : "ok",
+      summary: String(c.summary || ""),
+      issueId: c.issueId ? String(c.issueId) : undefined,
+    }))
+    .filter((c) => c.key && c.label);
+
+  // Ensure deterministic order while allowing focusType-specific inserts.
+  const order = ["product", "color", "quantity", "pl", "bl", "shipment"];
+  const rank = new Map(order.map((k, i) => [k, i]));
+  checks.sort((a, b) => {
+    const ar = rank.has(a.key) ? rank.get(a.key) : 999;
+    const br = rank.has(b.key) ? rank.get(b.key) : 999;
+    if (ar !== br) return ar - br;
+    const sr = statusRank(b.status) - statusRank(a.status);
+    if (sr) return sr;
+    return String(a.label).localeCompare(String(b.label));
+  });
+
+  return { title: "AIの書類チェック", focusType: type, focusId: id || "-", checks };
+}
+
+function renderDocumentCheckResults(checkResults) {
+  const r = checkResults && typeof checkResults === "object" ? checkResults : null;
+  const checks = Array.isArray(r?.checks) ? r.checks.filter(Boolean) : [];
+  const icon = (status) => {
+    if (status === "warning") return "⚠";
+    if (status === "error") return "!";
+    return "✔";
+  };
+  const statusText = (status) => {
+    if (status === "warning") return "要確認";
+    if (status === "error") return "ERROR";
+    return "OK";
+  };
+
+  const linesHtml = (summary) => {
+    const s = String(summary || "").trim();
+    if (!s) return `<div class="muted">-</div>`;
+    const parts = s.split(/\r?\n/).map((x) => String(x).trim()).filter(Boolean);
+    return parts.map((p) => `<div class="doc-check__line">${escapeHtml(p)}</div>`).join("");
+  };
+
+  return `
+    <div class="doc-check-list" data-focus-type="${escapeHtml(String(r?.focusType || ""))}" data-focus-id="${escapeHtml(String(r?.focusId || ""))}">
+      ${checks
+        .map((c) => {
+          const st = String(c?.status || "ok");
+          const issueId = c?.issueId ? String(c.issueId) : "";
+          const summaryRaw = String(c?.summary || "").trim();
+          const hideSummary = st === "ok";
+          const hideIssue = st === "ok";
+          return `
+            <div class="doc-check" data-check-key="${escapeHtml(String(c?.key || ""))}" ${issueId ? `data-issue-id="${escapeHtml(issueId)}"` : ""}>
+              <div class="doc-check__header">
+                <div class="doc-check__label">${escapeHtml(String(c?.label || ""))}</div>
+                <div class="doc-check__status doc-check__status--${escapeHtml(st)}">${escapeHtml(`${icon(st)} ${statusText(st)}`)}</div>
+              </div>
+              ${hideSummary ? "" : `<div class="doc-check__summary">${linesHtml(c?.summary)}</div>`}
+              ${!hideIssue && issueId ? `<div class="doc-check__issue mono">Issue: ${escapeHtml(issueId)}</div>` : ""}
+            </div>
+          `;
+        })
+        .join("")}
+    </div>
+  `;
+}
+
 function renderDocumentWorkspace(tradeCase, { focusType, focusId, initialDocId } = {}) {
   const tc = tradeCase || null;
   if (!tc) return "";
@@ -631,11 +806,8 @@ function renderDocumentWorkspace(tradeCase, { focusType, focusId, initialDocId }
         .join("")}</ul>`
     : `<div class="muted">(no active risks)</div>`;
 
-  const aiNotes = [
-    incidents.some((i) => i.type === "invoiceQuantityMismatch") ? "INV数量がSIと一致していません" : null,
-    documents.some((d) => String(d?.id || "") === "pl-missing" || String(d?.status || "") === "missing") ? "PLが未着です" : null,
-    sh?.blNo ? "BLはBooking情報と紐づいています" : null,
-  ].filter(Boolean);
+  const docCheckResults = buildDocumentCheckResults(tc, type, id);
+  const docCheckHtml = renderDocumentCheckResults(docCheckResults);
 
   const latestFollowUpHtml = (() => {
     const run = tc.resolutionAgentRun || null;
@@ -696,8 +868,8 @@ function renderDocumentWorkspace(tradeCase, { focusType, focusId, initialDocId }
 
         <aside class="workspace-pane workspace-pane--right" aria-label="Decision helper">
           <div class="workspace-section">
-            <div class="workspace-section__title">AIの気づき</div>
-            ${aiNotes.length ? `<ul class="list">${aiNotes.map((x) => `<li>${escapeHtml(x)}</li>`).join("")}</ul>` : `<div class="muted">-</div>`}
+            <div class="workspace-section__title">${escapeHtml(docCheckResults?.title || "AIの書類チェック")}</div>
+            ${docCheckHtml}
           </div>
           <div class="workspace-section">
             <div class="workspace-section__title">人間メモ</div>
