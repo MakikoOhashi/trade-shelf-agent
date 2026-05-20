@@ -216,6 +216,11 @@ const state = {
    * @type {string}
    */
   shelfSearchQuery: "",
+  /**
+   * Execution Timeline Scenario modal (Document Workspace)
+   * @type {null | { tradeCaseId: string, focusType: string, focusId: string }}
+   */
+  activeTimelineScenarioModal: null,
 };
 
 const newTopTabs = [
@@ -855,12 +860,14 @@ function renderDocumentWorkspace(tradeCase, { focusType, focusId, initialDocId }
 
   const viewerHtml = renderDocumentViewer(documents, { modalId: "document-workspace-modal", viewerKey: "document" });
 
-  const incidents = detectIncidents(tc).filter((i) => i && i.status !== "resolved");
-  const riskHtml = incidents.length
-    ? `<ul class="list">${incidents
-        .map((i) => `<li>${escapeHtml(incidentTitleJa(i))} <span class="muted">(${escapeHtml(i.severity || "low")})</span></li>`)
-        .join("")}</ul>`
-    : `<div class="muted">(no active risks)</div>`;
+  const executionTimelineRisk = buildExecutionTimelineRisk(tc, type, id);
+  const riskHtml = renderExecutionTimelineRiskHtml(executionTimelineRisk);
+  const scenarioModalHtml = (() => {
+    const active = state.activeTimelineScenarioModal;
+    if (!active) return "";
+    if (String(active.tradeCaseId || "") !== String(tc.id || "")) return "";
+    return renderExecutionTimelineScenarioModalHtml(executionTimelineRisk);
+  })();
 
   const docCheckResults = buildDocumentCheckResults(tc, type, id);
   const docCheckHtml = renderDocumentCheckResults(docCheckResults);
@@ -1004,7 +1011,10 @@ function renderDocumentWorkspace(tradeCase, { focusType, focusId, initialDocId }
             </div>
           </div>
           <div class="workspace-section">
-            <div class="workspace-section__title">納期・物流リスク</div>
+            <div class="workspace-section__title workspace-section__header">
+              <span>納期・物流リスク</span>
+              <button class="btn btn--ghost btn--tiny" type="button" data-open-timeline-scenario>理想シナリオ</button>
+            </div>
             ${riskHtml}
           </div>
           <div class="workspace-section">
@@ -1012,6 +1022,142 @@ function renderDocumentWorkspace(tradeCase, { focusType, focusId, initialDocId }
             ${latestFollowUpHtml}
           </div>
         </aside>
+      </div>
+    </div>
+    ${scenarioModalHtml}
+  `;
+}
+
+function buildExecutionTimelineRisk(tc, focusType, focusId) {
+  // NOTE: mock output for now; structure is designed to be swapped with real shipment/document state later.
+  const tradeCaseId = String(tc?.id || "");
+  const ft = normalizeFocusType(focusType);
+  const fid = String(focusId || "").trim() || "-";
+  return {
+    tradeCaseId,
+    focusType: ft,
+    focusId: fid,
+    riskTitle: "ETD遅延リスク",
+    ideal: ["5/01までにBooking確定", "5/08までに工場出荷"],
+    current: ["Booking未確定", "工場未出荷"],
+    impact: ["顧客納期 5/25 に遅延リスク"],
+    scenario: [
+      {
+        date: "2026-05-01",
+        milestone: "Booking確定",
+        status: "late",
+        note: "現在未確定。遅延リスクあり。",
+      },
+      {
+        date: "2026-05-08",
+        milestone: "工場出荷",
+        status: "late",
+        note: "現在未出荷。ETD遅延につながる可能性。",
+      },
+      {
+        date: "2026-05-15",
+        milestone: "ETD",
+        status: "at_risk",
+        note: "この日までに出港しないと顧客納期に影響。",
+      },
+      {
+        date: "2026-05-20",
+        milestone: "ETA",
+        status: "planned",
+        note: "通関・国内配送の余裕が少ない。",
+      },
+      {
+        date: "2026-05-25",
+        milestone: "顧客納品",
+        status: "deadline",
+        note: "最終納期。",
+      },
+    ],
+  };
+}
+
+function renderExecutionTimelineRiskHtml(risk) {
+  const r = risk && typeof risk === "object" ? risk : null;
+  const title = String(r?.riskTitle || "").trim();
+  const ideal = Array.isArray(r?.ideal) ? r.ideal.filter(Boolean) : [];
+  const current = Array.isArray(r?.current) ? r.current.filter(Boolean) : [];
+  const impact = Array.isArray(r?.impact) ? r.impact.filter(Boolean) : [];
+
+  const list = (items) => (items.length ? `<ul class="list">${items.map((x) => `<li>${escapeHtml(String(x))}</li>`).join("")}</ul>` : `<div class="muted">-</div>`);
+
+  return `
+    <div class="timeline-risk">
+      <div class="timeline-risk__headline">⚠ ${escapeHtml(title || "リスク")}</div>
+      <div class="timeline-risk__grid">
+        <div class="timeline-risk__block">
+          <div class="timeline-risk__label">理想:</div>
+          ${list(ideal)}
+        </div>
+        <div class="timeline-risk__block">
+          <div class="timeline-risk__label">現在:</div>
+          ${list(current)}
+        </div>
+        <div class="timeline-risk__block timeline-risk__block--impact">
+          <div class="timeline-risk__label">影響:</div>
+          ${list(impact)}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderExecutionTimelineScenarioModalHtml(risk) {
+  const r = risk && typeof risk === "object" ? risk : null;
+  const scenario = Array.isArray(r?.scenario) ? r.scenario.filter(Boolean) : [];
+  const customerDeliveryDate = "2026-05-25";
+
+  const statusPill = (status) => {
+    const st = String(status || "");
+    if (st === "late") return `<span class="pill pill--mini pill--warn">遅延</span>`;
+    if (st === "at_risk") return `<span class="pill pill--mini pill--high">要注意</span>`;
+    if (st === "deadline") return `<span class="pill pill--mini pill--incident">納期</span>`;
+    return `<span class="pill pill--mini pill--muted">予定</span>`;
+  };
+
+  const itemsHtml = scenario.length
+    ? `<ul class="timeline-scenario__list">
+      ${scenario
+        .map((s) => {
+          const date = String(s?.date || "").trim();
+          const milestone = String(s?.milestone || "").trim();
+          const note = String(s?.note || "").trim();
+          const status = String(s?.status || "").trim();
+          return `<li class="timeline-scenario__item">
+            <div class="timeline-scenario__top">
+              <div class="timeline-scenario__when mono">${escapeHtml(date || "-")}</div>
+              <div class="timeline-scenario__pill">${statusPill(status)}</div>
+            </div>
+            <div class="timeline-scenario__milestone">${escapeHtml(milestone || "-")}</div>
+            <div class="timeline-scenario__note muted">${escapeHtml(note || "-")}</div>
+          </li>`;
+        })
+        .join("")}
+    </ul>`
+    : `<div class="muted">-</div>`;
+
+  return `
+    <div class="timeline-scenario-overlay" role="dialog" aria-modal="true" aria-label="理想実行シナリオ">
+      <div class="timeline-scenario-overlay__backdrop" data-close-timeline-scenario></div>
+      <div class="timeline-scenario-modal">
+        <div class="timeline-scenario-modal__top">
+          <div class="timeline-scenario-modal__title">理想実行シナリオ</div>
+          <button class="btn btn--ghost btn--tiny" type="button" data-close-timeline-scenario aria-label="Close">×</button>
+        </div>
+        <div class="timeline-scenario-modal__body">
+          <div class="timeline-scenario__desc muted">顧客納期 ${escapeHtml(customerDeliveryDate)} から逆算した理想タイムラインを表示。</div>
+          <div class="timeline-scenario__meta">
+            <span class="pill pill--mini pill--muted">顧客納期: <span class="mono">${escapeHtml(customerDeliveryDate)}</span></span>
+          </div>
+          ${itemsHtml}
+          <div class="timeline-scenario-modal__actions">
+            <button class="btn btn--ghost" type="button" data-close-timeline-scenario>閉じる</button>
+          </div>
+        </div>
       </div>
     </div>
   `;
@@ -9620,6 +9766,11 @@ function setupModal() {
       renderApp();
       return;
     }
+    if (state.activeTimelineScenarioModal) {
+      state.activeTimelineScenarioModal = null;
+      rerenderOpenDocumentWorkspaceBody();
+      return;
+    }
     if (isAnyWorkspaceModalOpen()) {
       closeWorkspaceModal("shipment-workspace-modal");
       closeWorkspaceModal("si-workspace-modal");
@@ -9668,6 +9819,31 @@ function setupWorkspaceModals() {
         const body = modalEl.querySelector(".modal__body");
         if (body) body.innerHTML = renderWorkspaceBody(modalId, tc);
       };
+
+      const openTimelineScenarioEl = target.closest && target.closest("[data-open-timeline-scenario]");
+      if (openTimelineScenarioEl && modalId === "document-workspace-modal") {
+        e.preventDefault();
+        e.stopPropagation();
+        const tradeCaseId = modalEl.getAttribute("data-tradecase-id") || "";
+        if (!tradeCaseId) return;
+        const ui = getWorkspaceUi(modalId);
+        state.activeTimelineScenarioModal = {
+          tradeCaseId,
+          focusType: normalizeFocusType(ui.focusType),
+          focusId: String(ui.focusId || "-"),
+        };
+        rerenderWorkspaceBody();
+        return;
+      }
+
+      const closeTimelineScenarioEl = target.closest && target.closest("[data-close-timeline-scenario]");
+      if (closeTimelineScenarioEl && modalId === "document-workspace-modal") {
+        e.preventDefault();
+        e.stopPropagation();
+        state.activeTimelineScenarioModal = null;
+        rerenderWorkspaceBody();
+        return;
+      }
 
       const humanMemoAddEl = target.closest && target.closest("[data-human-memo-add]");
       if (humanMemoAddEl && modalId === "document-workspace-modal") {
