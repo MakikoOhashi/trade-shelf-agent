@@ -164,6 +164,11 @@ const state = {
    */
   issueMutationItems: [],
   /**
+   * Execution Timeline Agent 由来の internal issue candidates（mock）
+   * @type {Array<any>}
+   */
+  timelineIssueCandidates: [],
+  /**
    * Activity Feed filter key
    * @type {"all" | "teams" | "email" | "aiProcessed" | "awaitingApproval" | "failed" | "supplierReply"}
    */
@@ -861,6 +866,7 @@ function renderDocumentWorkspace(tradeCase, { focusType, focusId, initialDocId }
   const viewerHtml = renderDocumentViewer(documents, { modalId: "document-workspace-modal", viewerKey: "document" });
 
   const executionTimelineRisk = buildExecutionTimelineRisk(tc, type, id);
+  ensureExecutionTimelineIssueCandidateSynced(executionTimelineRisk);
   const riskHtml = renderExecutionTimelineRiskHtml(executionTimelineRisk);
   const scenarioModalHtml = (() => {
     const active = state.activeTimelineScenarioModal;
@@ -1033,6 +1039,31 @@ function buildExecutionTimelineRisk(tc, focusType, focusId) {
   const tradeCaseId = String(tc?.id || "");
   const ft = normalizeFocusType(focusType);
   const fid = String(focusId || "").trim() || "-";
+  const observation = {
+    type: "timeline_deviation",
+    source: "execution_timeline_agent",
+    severity: "high",
+    entityLinks: [
+      { entityType: "SI", entityId: "SI-2026-001" },
+      { entityType: "Shipment", entityId: "SHP-2026-009" },
+    ],
+    summary: "Booking未確定・工場未出荷のため、5/15 ETDに遅延リスクがあります。",
+    issue_candidate_required: true,
+  };
+
+  const issueCandidate = {
+    id: "ISS-CAND-TIMELINE-001",
+    title: "ETD遅延リスク確認",
+    severity: "high",
+    status: "issue_candidate",
+    source: "Execution Timeline Agent",
+    issueType: "timeline_deviation",
+    relatedSi: "SI-2026-001",
+    relatedShipment: "SHP-2026-009",
+    reason: "顧客納期 2026-05-25 から逆算すると、5/15 ETDが必要だが、Booking未確定・工場未出荷のため。",
+    suggestedAction: "仕入先またはフォワーダーへBooking/工場出荷予定を確認する。",
+  };
+
   return {
     tradeCaseId,
     focusType: ft,
@@ -1041,6 +1072,8 @@ function buildExecutionTimelineRisk(tc, focusType, focusId) {
     ideal: ["5/01までにBooking確定", "5/08までに工場出荷"],
     current: ["Booking未確定", "工場未出荷"],
     impact: ["顧客納期 5/25 に遅延リスク"],
+    observation,
+    issueCandidate,
     scenario: [
       {
         date: "2026-05-01",
@@ -1076,18 +1109,164 @@ function buildExecutionTimelineRisk(tc, focusType, focusId) {
   };
 }
 
+function ensureExecutionTimelineIssueCandidateSynced(risk) {
+  const r = risk && typeof risk === "object" ? risk : null;
+  const cand = r && r.issueCandidate && typeof r.issueCandidate === "object" ? r.issueCandidate : null;
+  const obs = r && r.observation && typeof r.observation === "object" ? r.observation : null;
+  if (!cand || !obs) return;
+
+  const id = String(cand.id || "").trim();
+  if (!id) return;
+
+  if (!Array.isArray(state.timelineIssueCandidates)) state.timelineIssueCandidates = [];
+  const existing = state.timelineIssueCandidates.find((x) => x && String(x.id || "") === id) || null;
+
+  const linkedEntities = Array.isArray(obs.entityLinks)
+    ? obs.entityLinks
+        .filter(Boolean)
+        .map((l) => ({ entityType: String(l?.entityType || ""), entityId: String(l?.entityId || "") }))
+        .filter((l) => l.entityType && l.entityId)
+    : [];
+
+  const actionPlan = {
+    channel: "email",
+    to: "supplier@example.invalid",
+    subject: "Booking and factory shipment confirmation for SI-2026-001",
+    body: "SI-2026-001 のBooking状況および工場出荷予定をご確認ください。",
+  };
+
+  const timelineCandidate = {
+    id,
+    title: String(cand.title || "").trim() || id,
+    severity: String(cand.severity || "").trim() || "high",
+    status: "pending_approval",
+    source: String(cand.source || "").trim() || "Execution Timeline Agent",
+    issueType: String(cand.issueType || "").trim() || "timeline_deviation",
+    relatedSi: String(cand.relatedSi || "").trim() || "",
+    relatedShipment: String(cand.relatedShipment || "").trim() || "",
+    suggestedAction: String(cand.suggestedAction || "").trim() || "",
+    linkedEntities,
+    actionPlan,
+  };
+
+  if (!existing) state.timelineIssueCandidates = prependUniqueById(state.timelineIssueCandidates, [timelineCandidate]);
+
+  // Make it visible in the existing Approvals pipeline (Issue list / detail / draft edit / approval transitions).
+  if (!state.latestIngestResult) state.latestIngestResult = {};
+  if (!Array.isArray(state.latestIngestResult.actionPlans)) state.latestIngestResult.actionPlans = [];
+  if (!Array.isArray(state.latestIngestResult.drafts)) state.latestIngestResult.drafts = [];
+  if (!state.approvalsByActionPlanId || typeof state.approvalsByActionPlanId !== "object") state.approvalsByActionPlanId = {};
+
+  const now = nowIso();
+  if (!state.approvalsByActionPlanId[id]) state.approvalsByActionPlanId[id] = { status: "pending_approval", updatedAt: now };
+
+  const apExists = state.latestIngestResult.actionPlans.find((p) => p && String(p.id || "") === id) || null;
+  if (!apExists) {
+    state.latestIngestResult.actionPlans = prependUniqueById(state.latestIngestResult.actionPlans, [
+      {
+        id,
+        issueId: id,
+        title: timelineCandidate.title,
+        status: "pending_approval",
+        updatedAt: now,
+        sourceLabel: timelineCandidate.source,
+        linkedEntities,
+      },
+    ]);
+  }
+
+  const draftExists = state.latestIngestResult.drafts.find((d) => d && String(d.actionPlanId || "") === id) || null;
+  if (!draftExists) {
+    state.latestIngestResult.drafts = prependUniqueById(state.latestIngestResult.drafts, [
+      {
+        id: `draft:${id}`,
+        actionPlanId: id,
+        channel: actionPlan.channel,
+        to: actionPlan.to,
+        subject: actionPlan.subject,
+        body: actionPlan.body,
+        status: "pending_approval",
+        updatedAt: now,
+      },
+    ]);
+  }
+
+  // Provide a "mutation" so that existing detail renderer can show it via state.activeMutationId.
+  const mutExists =
+    (Array.isArray(state.issueMutationItems) ? state.issueMutationItems : []).find((m) => m && matchesMutationId(m, id)) ||
+    null;
+  if (!mutExists) {
+    const summary = String(obs.summary || "").trim() || timelineCandidate.title;
+    const raw = String(cand.reason || "").trim();
+    const entitiesLines = linkedEntities
+      .map((l) => `Entities(${String(l.entityType)}): ${String(l.entityId)}`)
+      .join("\n");
+    const body = [
+      `Summary: ${summary}`,
+      "Intent: delivery_schedule_risk",
+      "Confidence: 0.80",
+      `Raw: ${raw || "-"}`,
+      entitiesLines,
+    ]
+      .filter(Boolean)
+      .join("\n");
+
+    state.issueMutationItems = prependUniqueById(state.issueMutationItems, [
+      {
+        id,
+        issueId: id,
+        title: timelineCandidate.title,
+        source: "Execution Timeline Agent",
+        body,
+        linkedEntities,
+        createdAt: now,
+        updatedAt: now,
+      },
+    ]);
+  }
+
+  // Activity: Timeline deviation detected (once per candidate id).
+  const evId = `timeline:${id}`;
+  const existingEv =
+    (Array.isArray(state.latestIngestResult.activityEvents) ? state.latestIngestResult.activityEvents : []).find(
+      (e) => e && String(e.id || "") === evId,
+    ) || null;
+  if (!existingEv) {
+    const ev = {
+      id: evId,
+      type: "timeline_deviation_detected",
+      actor: "execution_timeline_agent",
+      title: "ETD遅延リスクを検出",
+      occurredAt: nowIso(),
+      description: "理想シナリオとの差分から Issue candidate を作成",
+      relatedIssueId: id,
+      linkedEntities,
+    };
+    state.latestIngestResult.activityEvents = prependUniqueById(state.latestIngestResult.activityEvents, [ev]);
+    state.activityFeedItems = prependUniqueById(state.activityFeedItems, [activityEventToFeedItem(ev)]);
+  }
+}
+
 function renderExecutionTimelineRiskHtml(risk) {
   const r = risk && typeof risk === "object" ? risk : null;
   const title = String(r?.riskTitle || "").trim();
   const ideal = Array.isArray(r?.ideal) ? r.ideal.filter(Boolean) : [];
   const current = Array.isArray(r?.current) ? r.current.filter(Boolean) : [];
   const impact = Array.isArray(r?.impact) ? r.impact.filter(Boolean) : [];
+  const issueId = String(r?.issueCandidate?.id || "").trim();
 
   const list = (items) => (items.length ? `<ul class="list">${items.map((x) => `<li>${escapeHtml(String(x))}</li>`).join("")}</ul>` : `<div class="muted">-</div>`);
 
   return `
     <div class="timeline-risk">
-      <div class="timeline-risk__headline">⚠ ${escapeHtml(title || "リスク")}</div>
+      <div class="timeline-risk__headline">
+        <span>⚠ ${escapeHtml(title || "リスク")}</span>
+        ${
+          issueId
+            ? `<button class="pill pill--mini pill--muted mono" type="button" data-open-timeline-issue-candidate="${escapeHtml(issueId)}">Issue: ${escapeHtml(issueId)}</button>`
+            : ""
+        }
+      </div>
       <div class="timeline-risk__grid">
         <div class="timeline-risk__block">
           <div class="timeline-risk__label">理想:</div>
@@ -9836,6 +10015,19 @@ function setupWorkspaceModals() {
           focusId: String(ui.focusId || "-"),
         };
         rerenderWorkspaceBody();
+        return;
+      }
+
+      const openTimelineIssueEl = target.closest && target.closest("[data-open-timeline-issue-candidate]");
+      if (openTimelineIssueEl && modalId === "document-workspace-modal") {
+        e.preventDefault();
+        e.stopPropagation();
+        const candidateId = openTimelineIssueEl.getAttribute("data-open-timeline-issue-candidate") || "";
+        if (!candidateId) return;
+        state.topActiveTab = "issues";
+        state.activeMutationId = candidateId;
+        state.activeIssueId = null;
+        renderApp();
         return;
       }
 

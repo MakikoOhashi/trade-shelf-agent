@@ -156,6 +156,9 @@ Processor 同士は直接呼び出さない。
 - Execution Timeline Agent は Issue を直接作らない
 - `timeline_deviation` を Agent Observation として出力する
 - その後は既存の `Tagger → Intake Resolver → Issue Planner → Action Planner → Draft Writer → Approval Handler` に乗せる
+- 遅延・逸脱が業務対応を必要とする閾値を超えた場合、`timeline_deviation` に `issue_candidate_required` の signal を付与できる
+- Issue Planner は internal Issue Candidate を自動作成してよい（外部送信はしない）
+- 仕入先・顧客・フォワーダーなど外部関係者への送信は Approval Handler による人間承認を必須とする
 
 ## Processor I/O shape（最小）
 
@@ -748,20 +751,3 @@ Azure Hackathon - Shelf の「入力→整理→Issue→承認→ログ」を壊
 - Processor は「文章をうまくする」より「構造を揃える」を優先
 - Orchestrator は “勝手に確定” しない（Human approval を通す）
 - 迷ったら Processor を増やすより、入出力スキーマを締める
-
-
-
----
-追記
-
-Execution Timeline Agent は Issue を直接作成しない。
-ただし、遅延・逸脱が業務対応を必要とする閾値を超えた場合、
-`timeline_deviation` に `issue_candidate_required` 相当の signal を付与する。
-
-その observation は通常の Human Input と同じように
-Tagger → Intake Resolver → Issue Planner へ流れ、
-Issue Planner が Issue 候補を作成する。
-
-内部Issue化は Agent が自動で行ってよい。
-ただし、仕入先・顧客・フォワーダーなど外部関係者への送信は
-Approval Handler による人間承認を必須とする。
