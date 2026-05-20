@@ -32,6 +32,11 @@ const state = {
   tradeCases: [],
   shelfItems: [],
   /**
+   * Document Workspace の「人間メモ」（mock; 永続化なし）
+   * @type {Array<{ id: string, body: string, linkedEntities: Array<{ type: string, id: string }>, aiShared: boolean, createdAt: string, updatedAt: string }>}
+   */
+  humanMemos: [],
+  /**
    * 「変更・確認依頼」: raw request inbox (mock)
    * @type {Array<any>}
    */
@@ -887,6 +892,69 @@ function renderDocumentWorkspace(tradeCase, { focusType, focusId, initialDocId }
   const operationalSummary = buildWorkspaceOperationalSummary(tc, type, id);
   const operationalSummaryHtml = renderWorkspaceOperationalSummaryHtml(operationalSummary);
 
+  const resolveFocusMemoEntity = (focusType, focusId) => {
+    const ft = normalizeFocusType(focusType);
+    const raw = String(focusId || "").trim();
+    const fid = ft === "invoice" ? normalizeInvoiceNo(raw) : raw;
+    return fid && fid !== "-" ? { type: ft, id: fid } : null;
+  };
+
+  const focusMemoEntity = resolveFocusMemoEntity(type, id);
+  const humanMemos = Array.isArray(state.humanMemos) ? state.humanMemos.filter(Boolean) : [];
+  const focusMemos = focusMemoEntity
+    ? humanMemos.filter((m) => {
+        const linked = Array.isArray(m?.linkedEntities) ? m.linkedEntities.filter(Boolean) : [];
+        return linked.some((e) => String(e?.type || "") === focusMemoEntity.type && String(e?.id || "") === focusMemoEntity.id);
+      })
+    : [];
+
+  const memoLinkedChipsHtml = (memo) => {
+    const linked = Array.isArray(memo?.linkedEntities) ? memo.linkedEntities.filter(Boolean) : [];
+    if (!linked.length) return "";
+    const chips = linked
+      .map((e) => {
+        const et = normalizeFocusType(e?.type);
+        const eid = String(e?.id || "").trim();
+        if (!et || !eid) return "";
+        const label = formatFocusLabel(et, eid);
+        return `<span class="pill pill--mini">${escapeHtml(String(label || eid))}</span>`;
+      })
+      .filter(Boolean)
+      .join("");
+    if (!chips) return "";
+    return `<div class="human-memo__chips" aria-label="linked entities">${chips}</div>`;
+  };
+
+  const memoListHtml = (() => {
+    if (!focusMemoEntity) {
+      return `<div class="muted">このFocusに紐づくメモはありません。</div>`;
+    }
+    if (!focusMemos.length) {
+      return `<div class="muted">このFocusに紐づくメモはありません。</div>`;
+    }
+    return focusMemos
+      .slice()
+      .sort((a, b) => String(b?.updatedAt || "").localeCompare(String(a?.updatedAt || "")))
+      .map((m) => {
+        const body = String(m?.body || "").trim();
+        const aiShared = !!m?.aiShared;
+        const id = String(m?.id || "");
+        const statusText = aiShared ? "AI共有済み" : "AI未共有";
+        const shareBtn = aiShared
+          ? ""
+          : `<button class="btn btn--ghost btn--small" type="button" data-human-memo-share="${escapeHtml(id)}">AIへ共有</button>`;
+        return `<div class="nt-card human-memo-card">
+          <div class="human-memo__body">${escapeHtml(body || "-")}</div>
+          ${memoLinkedChipsHtml(m)}
+          <div class="human-memo__meta">
+            <span class="muted">${escapeHtml(statusText)}</span>
+            ${shareBtn}
+          </div>
+        </div>`;
+      })
+      .join("");
+  })();
+
   return `
     <div class="workspace-topbar">
       <div class="workspace-topbar__chips">
@@ -918,8 +986,13 @@ function renderDocumentWorkspace(tradeCase, { focusType, focusId, initialDocId }
             ${docCheckHtml}
           </div>
           <div class="workspace-section">
-            <div class="workspace-section__title">人間メモ</div>
-            <div class="muted">（mock）短文メモだけ。長文は Case detail に集約。</div>
+            <div class="workspace-section__title human-memo__header">
+              <span>人間メモ</span>
+              <button class="btn btn--ghost btn--small" type="button" data-human-memo-add>+ メモ追加</button>
+            </div>
+            <div class="human-memo__list">
+              ${memoListHtml}
+            </div>
           </div>
           <div class="workspace-section">
             <div class="workspace-section__title">納期・物流リスク</div>
@@ -9463,16 +9536,87 @@ function setupWorkspaceModals() {
       const closeEl = target.closest && target.closest("[data-close-workspace]");
       if (closeEl) closeWorkspaceModal(modalId);
 
+      const rerenderWorkspaceBody = () => {
+        const tradeCaseId = modalEl.getAttribute("data-tradecase-id");
+        const tc = tradeCaseId ? getTradeCaseById(tradeCaseId) : null;
+        if (!tc) return;
+        const body = modalEl.querySelector(".modal__body");
+        if (body) body.innerHTML = renderWorkspaceBody(modalId, tc);
+      };
+
+      const humanMemoAddEl = target.closest && target.closest("[data-human-memo-add]");
+      if (humanMemoAddEl && modalId === "document-workspace-modal") {
+        e.preventDefault();
+        e.stopPropagation();
+        const ui = getWorkspaceUi(modalId);
+        const focusType = normalizeFocusType(ui.focusType);
+        const focusIdRaw = String(ui.focusId || "").trim();
+        const focusId = focusType === "invoice" ? normalizeInvoiceNo(focusIdRaw) : focusIdRaw;
+        if (!focusId || focusId === "-") {
+          window.alert("Focus が選択されていません。");
+          return;
+        }
+        const body = window.prompt("メモ（人間用）");
+        const text = String(body || "").trim();
+        if (!text) return;
+
+        const now = nowIso();
+        const memo = {
+          id: `memo-${shortId()}`,
+          body: text,
+          linkedEntities: [{ type: focusType, id: focusId }],
+          aiShared: false,
+          createdAt: now,
+          updatedAt: now,
+        };
+        if (!Array.isArray(state.humanMemos)) state.humanMemos = [];
+        state.humanMemos = [memo, ...state.humanMemos.filter(Boolean)];
+        rerenderWorkspaceBody();
+        return;
+      }
+
+      const humanMemoShareEl = target.closest && target.closest("[data-human-memo-share]");
+      if (humanMemoShareEl && modalId === "document-workspace-modal") {
+        e.preventDefault();
+        e.stopPropagation();
+        const memoId = humanMemoShareEl.getAttribute("data-human-memo-share") || "";
+        if (!memoId) return;
+        const memos = Array.isArray(state.humanMemos) ? state.humanMemos.filter(Boolean) : [];
+        const idx = memos.findIndex((m) => m && String(m.id || "") === String(memoId));
+        if (idx < 0) return;
+        const now = nowIso();
+        const updated = { ...memos[idx], aiShared: true, updatedAt: now };
+        const next = memos.slice();
+        next[idx] = updated;
+        state.humanMemos = next;
+
+        const linked = Array.isArray(updated.linkedEntities) ? updated.linkedEntities.filter(Boolean) : [];
+        const feedItem = {
+          id: `act:${shortId()}`,
+          type: "humanMemoShared",
+          title: "人間メモをAI contextへ共有",
+          occurredAt: now,
+          at: formatLocalTime(now),
+          actor: "human",
+          source: "human",
+          statusKey: "success",
+          details: [String(updated.body || "").slice(0, 160)],
+          linked: linked.map((e) => ({
+            kind: String(e?.type || "").toLowerCase(),
+            label: formatFocusLabel(e?.type, e?.id) || String(e?.id || ""),
+          })),
+        };
+        state.activityFeedItems = prependUniqueById(state.activityFeedItems, [feedItem]);
+
+        rerenderWorkspaceBody();
+        return;
+      }
+
       const markerToggleEl = target.closest && target.closest("[data-doc-marker-toggle]");
       if (markerToggleEl) {
         const ui = getWorkspaceUi(modalId);
         ui.showMarkers = ui.showMarkers === false;
-        const tradeCaseId = modalEl.getAttribute("data-tradecase-id");
-        const tc = tradeCaseId ? getTradeCaseById(tradeCaseId) : null;
-        if (tc) {
-          const body = modalEl.querySelector(".modal__body");
-          if (body) body.innerHTML = renderWorkspaceBody(modalId, tc);
-        }
+        rerenderWorkspaceBody();
         return;
       }
 
@@ -9485,12 +9629,7 @@ function setupWorkspaceModals() {
         if (!Number.isFinite(delta)) return;
         const current = typeof ui.zoomByDocId[ui.activeDocId] === "number" ? ui.zoomByDocId[ui.activeDocId] : 100;
         ui.zoomByDocId[ui.activeDocId] = clamp(current + delta, 80, 160);
-        const tradeCaseId = modalEl.getAttribute("data-tradecase-id");
-        const tc = tradeCaseId ? getTradeCaseById(tradeCaseId) : null;
-        if (tc) {
-          const body = modalEl.querySelector(".modal__body");
-          if (body) body.innerHTML = renderWorkspaceBody(modalId, tc);
-        }
+        rerenderWorkspaceBody();
         return;
       }
 
@@ -9502,12 +9641,7 @@ function setupWorkspaceModals() {
         const idx = Number(idxRaw);
         if (!Number.isFinite(idx)) return;
         ui.activePageByDocId[ui.activeDocId] = Math.max(0, idx);
-        const tradeCaseId = modalEl.getAttribute("data-tradecase-id");
-        const tc = tradeCaseId ? getTradeCaseById(tradeCaseId) : null;
-        if (tc) {
-          const body = modalEl.querySelector(".modal__body");
-          if (body) body.innerHTML = renderWorkspaceBody(modalId, tc);
-        }
+        rerenderWorkspaceBody();
         return;
       }
 
@@ -9643,6 +9777,7 @@ function seed() {
   for (let i = 0; i < sortedIds.length; i++) state.issueSeqByTradeCaseId[sortedIds[i]] = i + 1;
   seedRequestsMock();
   seedActivityFeedMock();
+  seedHumanMemosMock();
   renderApp();
 }
 
@@ -9746,6 +9881,24 @@ function seedRequestsMock() {
   ];
   state.activeRawRequestId = raw1Id;
   state.activeOperationalThreadId = t11;
+}
+
+function seedHumanMemosMock() {
+  // Keep deterministic-ish demo entries. No persistence.
+  const now = nowIso();
+  state.humanMemos = [
+    {
+      id: "memo-001",
+      body: "営業Aかなり急ぎ。分納の可能性あり。仕入先回答待ち。",
+      linkedEntities: [
+        { type: "invoice", id: "INV-1122" },
+        { type: "si", id: "SI-2026-001" },
+      ],
+      aiShared: false,
+      createdAt: now,
+      updatedAt: now,
+    },
+  ];
 }
 
 function seedActivityFeedMock() {
