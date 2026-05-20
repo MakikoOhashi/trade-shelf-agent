@@ -951,53 +951,55 @@ function renderDocumentWorkspace(tradeCase, { focusType, focusId, initialDocId }
   })();
 
   return `
-    <div class="workspace-topbar">
-      <div class="workspace-topbar__chips">
-        <span class="pill pill--muted">Focus: ${escapeHtml(formatFocusLabel(type, id))}</span>
-        <span class="pill pill--muted">Case ${escapeHtml(tc.id || "-")}</span>
+    <div class="workspace-modal">
+      <div class="workspace-topbar">
+        <div class="workspace-topbar__chips">
+          <span class="pill pill--muted">Focus: ${escapeHtml(formatFocusLabel(type, id))}</span>
+          <span class="pill pill--muted">Case ${escapeHtml(tc.id || "-")}</span>
+        </div>
       </div>
+      <div class="workspace-layout">
+        <aside class="workspace-pane workspace-pane--left" aria-label="Case context">
+          <div class="workspace-section">
+            <div class="workspace-section__title">現在の状況</div>
+            ${operationalSummaryHtml}
+          </div>
+
+          <div class="workspace-section">
+            <div class="workspace-section__title">紐付き</div>
+            ${relationshipTreeHtml}
+          </div>
+        </aside>
+
+        <main class="workspace-pane workspace-pane--center" aria-label="Document viewer">
+          ${viewerHtml}
+        </main>
+
+        <aside class="workspace-pane workspace-pane--right" aria-label="Decision helper">
+          <div class="workspace-section">
+            <div class="workspace-section__title">${escapeHtml(docCheckResults?.title || "AIの書類チェック")}</div>
+            ${docCheckHtml}
+          </div>
+          <div class="workspace-section">
+            <div class="workspace-section__title human-memo__header">
+              <span>人間メモ</span>
+              <button class="btn btn--ghost btn--tiny memo-action-btn" type="button" data-human-memo-add>+ メモ追加</button>
+            </div>
+            <div class="human-memo__list">
+              ${memoListHtml}
+            </div>
+          </div>
+          <div class="workspace-section">
+            <div class="workspace-section__title workspace-section__header">
+              <span>納期・物流リスク</span>
+              <button class="btn btn--ghost btn--tiny" type="button" data-open-timeline-scenario>理想シナリオ</button>
+            </div>
+            ${riskHtml}
+          </div>
+        </aside>
+      </div>
+      ${scenarioModalHtml}
     </div>
-    <div class="workspace-layout">
-      <aside class="workspace-pane workspace-pane--left" aria-label="Case context">
-        <div class="workspace-section">
-          <div class="workspace-section__title">現在の状況</div>
-          ${operationalSummaryHtml}
-        </div>
-
-        <div class="workspace-section">
-          <div class="workspace-section__title">紐付き</div>
-          ${relationshipTreeHtml}
-        </div>
-      </aside>
-
-      <main class="workspace-pane workspace-pane--center" aria-label="Document viewer">
-        ${viewerHtml}
-      </main>
-
-      <aside class="workspace-pane workspace-pane--right" aria-label="Decision helper">
-        <div class="workspace-section">
-          <div class="workspace-section__title">${escapeHtml(docCheckResults?.title || "AIの書類チェック")}</div>
-          ${docCheckHtml}
-        </div>
-        <div class="workspace-section">
-          <div class="workspace-section__title human-memo__header">
-            <span>人間メモ</span>
-            <button class="btn btn--ghost btn--tiny memo-action-btn" type="button" data-human-memo-add>+ メモ追加</button>
-          </div>
-          <div class="human-memo__list">
-            ${memoListHtml}
-          </div>
-        </div>
-        <div class="workspace-section">
-          <div class="workspace-section__title workspace-section__header">
-            <span>納期・物流リスク</span>
-            <button class="btn btn--ghost btn--tiny" type="button" data-open-timeline-scenario>理想シナリオ</button>
-          </div>
-          ${riskHtml}
-        </div>
-      </aside>
-    </div>
-    ${scenarioModalHtml}
   `;
 }
 
@@ -9954,8 +9956,17 @@ function setupWorkspaceModals() {
     modalEl.addEventListener("click", (e) => {
       const target = e.target;
       if (!target) return;
-      const closeEl = target.closest && target.closest("[data-close-workspace]");
-      if (closeEl) closeWorkspaceModal(modalId);
+      const closeBtnEl = target.closest && target.closest("[data-close-workspace]");
+      if (closeBtnEl) {
+        closeWorkspaceModal(modalId);
+        return;
+      }
+
+      const backdropEl = target.closest && target.closest("[data-close-workspace-backdrop]");
+      if (backdropEl && target === backdropEl) {
+        closeWorkspaceModal(modalId);
+        return;
+      }
 
       const rerenderWorkspaceBody = () => {
         const tradeCaseId = modalEl.getAttribute("data-tradecase-id");

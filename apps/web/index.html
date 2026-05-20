@@ -46,52 +46,37 @@
       </div>
     </div>
 
-    <div id="shipment-workspace-modal" class="modal modal--tradecase modal--workspace" aria-hidden="true">
-      <div class="modal__backdrop" data-close-workspace></div>
-      <div class="modal__dialog" role="dialog" aria-modal="true" aria-label="Shipment workspace">
+    <div id="shipment-workspace-modal" class="modal modal--workspace" aria-hidden="true">
+      <div class="modal__backdrop" data-close-workspace-backdrop></div>
+      <section class="modal__dialog" role="dialog" aria-modal="true" aria-label="Shipment workspace">
+        <button class="workspace-modal__close" type="button" aria-label="閉じる" data-close-workspace>×</button>
         <div class="modal__top">
-          <button class="btn btn--ghost btn--back" type="button" data-close-workspace aria-label="Back to Case detail">
-            <span class="btn--back__arrow">←</span>
-            <span class="btn--back__ja">案件詳細へ戻る</span>
-            <span class="btn--back__en">Back to Case</span>
-          </button>
           <div class="modal__title">Shipment Workspace</div>
-          <button class="btn btn--ghost" type="button" data-close-workspace aria-label="Close">閉じる</button>
         </div>
-        <div id="shipment-workspace-body" class="modal__body"></div>
-      </div>
+        <div class="modal__body"></div>
+      </section>
     </div>
 
-    <div id="si-workspace-modal" class="modal modal--tradecase modal--workspace" aria-hidden="true">
-      <div class="modal__backdrop" data-close-workspace></div>
-      <div class="modal__dialog" role="dialog" aria-modal="true" aria-label="SI workspace">
+    <div id="si-workspace-modal" class="modal modal--workspace" aria-hidden="true">
+      <div class="modal__backdrop" data-close-workspace-backdrop></div>
+      <section class="modal__dialog" role="dialog" aria-modal="true" aria-label="SI workspace">
+        <button class="workspace-modal__close" type="button" aria-label="閉じる" data-close-workspace>×</button>
         <div class="modal__top">
-          <button class="btn btn--ghost btn--back" type="button" data-close-workspace aria-label="Back to Case detail">
-            <span class="btn--back__arrow">←</span>
-            <span class="btn--back__ja">案件詳細へ戻る</span>
-            <span class="btn--back__en">Back to Case</span>
-          </button>
           <div class="modal__title">SI Workspace</div>
-          <button class="btn btn--ghost" type="button" data-close-workspace aria-label="Close">閉じる</button>
         </div>
-        <div id="si-workspace-body" class="modal__body"></div>
-      </div>
+        <div class="modal__body"></div>
+      </section>
     </div>
 
-    <div id="document-workspace-modal" class="modal modal--tradecase modal--workspace" aria-hidden="true">
-      <div class="modal__backdrop" data-close-workspace></div>
-      <div class="modal__dialog" role="dialog" aria-modal="true" aria-label="Document workspace">
+    <div id="document-workspace-modal" class="modal modal--workspace" aria-hidden="true">
+      <div class="modal__backdrop" data-close-workspace-backdrop></div>
+      <section class="modal__dialog modal__dialog--workspace" role="dialog" aria-modal="true" aria-label="Document workspace">
+        <button class="workspace-modal__close" type="button" aria-label="閉じる" data-close-workspace>×</button>
         <div class="modal__top">
-          <button class="btn btn--ghost btn--back" type="button" data-close-workspace aria-label="Back to Case detail">
-            <span class="btn--back__arrow">←</span>
-            <span class="btn--back__ja">案件詳細へ戻る</span>
-            <span class="btn--back__en">Back to Case</span>
-          </button>
           <div class="modal__title">Document Workspace</div>
-          <button class="btn btn--ghost" type="button" data-close-workspace aria-label="Close">閉じる</button>
         </div>
-        <div id="document-workspace-body" class="modal__body"></div>
-      </div>
+        <div class="modal__body"></div>
+      </section>
     </div>
 
     <div id="operational-thread-modal" class="modal modal--op-thread" aria-hidden="true">
