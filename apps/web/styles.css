@@ -1730,6 +1730,14 @@ body {
   font-size: 12px;
 }
 
+.btn.btn--tiny {
+  height: auto;
+  font-size: 12px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  line-height: 1.2;
+}
+
 .label {
   display: block;
   font-size: 12px;
@@ -2163,6 +2171,120 @@ body {
   gap: 10px;
 }
 
+.human-memo-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1500;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(15, 23, 42, 0.45);
+}
+
+.human-memo-modal {
+  width: min(520px, calc(100vw - 32px));
+  background: #ffffff;
+  border-radius: 16px;
+  box-shadow: 0 24px 60px rgba(2, 6, 23, 0.28);
+  padding: 18px;
+  color: #0f172a;
+  border: 1px solid rgba(148, 163, 184, 0.45);
+}
+
+.human-memo-modal__top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.human-memo-modal__title {
+  font-size: 14px;
+  font-weight: 900;
+  letter-spacing: 0.2px;
+}
+
+.human-memo-modal__form {
+  margin-top: 12px;
+  display: grid;
+  gap: 12px;
+}
+
+.human-memo-modal__field {
+  display: grid;
+  gap: 6px;
+}
+
+.human-memo-modal__label {
+  font-size: 12px;
+  font-weight: 800;
+  color: rgba(15, 23, 42, 0.75);
+}
+
+.human-memo-modal__textarea {
+  width: 100%;
+  border-radius: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.55);
+  background: #ffffff;
+  color: #0f172a;
+  padding: 10px 12px;
+  outline: none;
+  font-size: 13px;
+  min-height: 120px;
+  resize: vertical;
+  line-height: 1.5;
+}
+
+.human-memo-modal__textarea:focus {
+  border-color: rgba(14, 165, 233, 0.7);
+  box-shadow: 0 0 0 4px rgba(14, 165, 233, 0.18);
+}
+
+.human-memo-modal__actions {
+  margin-top: 14px;
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.memo-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.memo-chip {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  border: 1px solid rgba(148, 163, 184, 0.6);
+  background: rgba(241, 245, 249, 0.9);
+  color: rgba(15, 23, 42, 0.9);
+  font-size: 12px;
+  padding: 4px 8px;
+  line-height: 1.1;
+}
+
+.memo-chip--fixed {
+  font-weight: 800;
+}
+
+.memo-chip--pick {
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+
+.memo-chip--pick:hover {
+  background: rgba(226, 232, 240, 0.95);
+}
+
+.memo-chip--pick.is-selected {
+  border-color: rgba(14, 165, 233, 0.8);
+  background: rgba(14, 165, 233, 0.12);
+}
+
 /* Operational Thread modal (Requests page) */
 .modal--op-thread {
   z-index: 1300;
@@ -2485,10 +2607,48 @@ body {
   gap: 8px;
 }
 
+.human-memo-card {
+  position: relative;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--surface) 92%, var(--bg));
+  padding: 10px;
+  cursor: pointer;
+}
+
+.human-memo-card:hover {
+  background: color-mix(in srgb, var(--surface) 86%, var(--bg));
+}
+
 .human-memo__body {
   white-space: pre-wrap;
   font-size: 13px;
   line-height: 1.45;
+}
+
+.human-memo-delete {
+  appearance: none;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 22px;
+  height: 22px;
+  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.human-memo-delete:hover {
+  background: rgba(208, 215, 222, 0.35);
+  border-color: var(--border);
+  color: var(--text);
 }
 
 .human-memo__chips {
@@ -2502,8 +2662,18 @@ body {
   margin-top: 8px;
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: 8px;
+}
+
+.memo-action-status {
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 999px;
+}
+
+.memo-action-btn {
+  font-size: 12px;
 }
 
 .doc-check-list {

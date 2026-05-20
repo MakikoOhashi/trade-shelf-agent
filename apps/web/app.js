@@ -37,6 +37,11 @@ const state = {
    */
   humanMemos: [],
   /**
+   * Human memo add/edit modal state (Document Workspace)
+   * @type {{ mode: "create" | "edit", memoId?: string, focusType: string, focusId: string, tradeCaseId: string, bodyDraft: string, selectedEntities: Array<{ type: string, id: string }> } | null}
+   */
+  activeHumanMemoEdit: null,
+  /**
    * 「変更・確認依頼」: raw request inbox (mock)
    * @type {Array<any>}
    */
@@ -939,15 +944,19 @@ function renderDocumentWorkspace(tradeCase, { focusType, focusId, initialDocId }
         const body = String(m?.body || "").trim();
         const aiShared = !!m?.aiShared;
         const id = String(m?.id || "");
-        const statusText = aiShared ? "AI共有済み" : "AI未共有";
+        const statusChip = aiShared
+          ? `<span class="pill pill--mini pill--muted memo-action-status">AI共有済み</span>`
+          : `<span class="pill pill--mini pill--muted memo-action-status">AI未共有</span>`;
         const shareBtn = aiShared
           ? ""
-          : `<button class="btn btn--ghost btn--small" type="button" data-human-memo-share="${escapeHtml(id)}">AIへ共有</button>`;
-        return `<div class="nt-card human-memo-card">
+          : `<button class="btn btn--ghost btn--tiny memo-action-btn" type="button" data-human-memo-share="${escapeHtml(id)}">AIへ共有</button>`;
+        const deleteBtn = `<button class="human-memo-delete" type="button" aria-label="メモを削除" data-human-memo-delete="${escapeHtml(id)}">×</button>`;
+        return `<div class="human-memo-card" role="button" tabindex="0" data-human-memo-card="${escapeHtml(id)}">
+          ${deleteBtn}
           <div class="human-memo__body">${escapeHtml(body || "-")}</div>
           ${memoLinkedChipsHtml(m)}
           <div class="human-memo__meta">
-            <span class="muted">${escapeHtml(statusText)}</span>
+            ${statusChip}
             ${shareBtn}
           </div>
         </div>`;
@@ -988,7 +997,7 @@ function renderDocumentWorkspace(tradeCase, { focusType, focusId, initialDocId }
           <div class="workspace-section">
             <div class="workspace-section__title human-memo__header">
               <span>人間メモ</span>
-              <button class="btn btn--ghost btn--small" type="button" data-human-memo-add>+ メモ追加</button>
+              <button class="btn btn--ghost btn--tiny memo-action-btn" type="button" data-human-memo-add>+ メモ追加</button>
             </div>
             <div class="human-memo__list">
               ${memoListHtml}
@@ -3071,6 +3080,70 @@ function renderNewTop() {
           <div class="draft-edit-modal__actions" aria-label="Draft edit actions">
             <button class="btn btn--ghost" type="button" data-draft-edit-cancel="1">Cancel</button>
             <button class="btn btn--primary" type="button" data-draft-edit-save="1">Save draft</button>
+          </div>
+        </div>
+      </div>
+    `;
+  };
+
+  const renderHumanMemoModal = () => {
+    const ctx = state.activeHumanMemoEdit || null;
+    if (!ctx) return "";
+    const mode = ctx.mode === "edit" ? "edit" : "create";
+    const title = mode === "edit" ? "人間メモを編集" : "人間メモを追加";
+    const focusType = normalizeFocusType(ctx.focusType);
+    const focusIdRaw = String(ctx.focusId || "").trim();
+    const focusId = focusType === "invoice" ? normalizeInvoiceNo(focusIdRaw) : focusIdRaw;
+    const tradeCaseId = String(ctx.tradeCaseId || "").trim();
+    if (!focusType || !focusId || !tradeCaseId) return "";
+
+    const tc = getTradeCaseById(tradeCaseId);
+    if (!tc) return "";
+
+    const focusEntity = { type: focusType, id: focusId };
+    const candidates = buildHumanMemoCandidateEntities(tc, focusEntity);
+    const selected = uniqLinkedEntities(Array.isArray(ctx.selectedEntities) ? ctx.selectedEntities : [focusEntity]);
+    const selectedKeys = new Set(selected.map((e) => `${e.type}::${e.id}`));
+    const draft = String(ctx.bodyDraft || "");
+
+    const renderPickChip = (e) => {
+      const key = `${e.type}::${e.id}`;
+      const label = formatFocusLabel(e.type, e.id) || String(e.id || "");
+      const isOn = selectedKeys.has(key);
+      const cls = isOn ? "memo-chip memo-chip--pick is-selected" : "memo-chip memo-chip--pick";
+      return `<button class="${cls}" type="button" data-human-memo-entity-toggle="${escapeHtml(key)}">${escapeHtml(label)}</button>`;
+    };
+
+    const focusLabel = formatFocusLabel(focusEntity.type, focusEntity.id) || String(focusEntity.id || "");
+    const relatedCandidates = candidates.filter((e) => `${e.type}::${e.id}` !== `${focusEntity.type}::${focusEntity.id}`);
+
+    return `
+      <div class="human-memo-overlay" data-human-memo-overlay="1" role="dialog" aria-modal="true" aria-label="${escapeHtml(title)}">
+        <div class="human-memo-modal" data-human-memo-modal="1">
+          <div class="human-memo-modal__top">
+            <div class="human-memo-modal__title">${escapeHtml(title)}</div>
+          </div>
+          <div class="human-memo-modal__form">
+            <label class="human-memo-modal__field">
+              <div class="human-memo-modal__label">本文</div>
+              <textarea class="human-memo-modal__textarea" data-human-memo-body placeholder="この書類・案件についての補足を入力">${escapeHtml(draft)}</textarea>
+            </label>
+            <div class="human-memo-modal__field">
+              <div class="human-memo-modal__label">紐付き</div>
+              <div class="memo-chip-row"><span class="memo-chip memo-chip--fixed">${escapeHtml(focusLabel)}</span></div>
+            </div>
+            ${
+              relatedCandidates.length
+                ? `<div class="human-memo-modal__field">
+                    <div class="human-memo-modal__label">関連にも付ける</div>
+                    <div class="memo-chip-row">${relatedCandidates.map((e) => renderPickChip(e)).join("")}</div>
+                  </div>`
+                : ""
+            }
+          </div>
+          <div class="human-memo-modal__actions">
+            <button class="btn btn--ghost btn--tiny" type="button" data-human-memo-cancel="1">Cancel</button>
+            <button class="btn btn--primary btn--tiny" type="button" data-human-memo-save="1">Save</button>
           </div>
         </div>
       </div>
@@ -5717,11 +5790,12 @@ function renderNewTop() {
 	      <header class="top-header">
 	        <div class="top-header__brand">Trade Shelf Agent</div>
 	      </header>
-	      ${navHtml}
-	      <main class="nt-main" aria-label="Main">${mainHtml}</main>
-        ${renderDraftEditModal()}
-	    </div>
-	  `;
+		      ${navHtml}
+		      <main class="nt-main" aria-label="Main">${mainHtml}</main>
+	        ${renderDraftEditModal()}
+          ${renderHumanMemoModal()}
+		    </div>
+		  `;
 }
 
 function renderApp() {
@@ -6716,6 +6790,57 @@ function closeWorkspaceModal(modalId) {
   modal.classList.remove("is-open");
   modal.setAttribute("aria-hidden", "true");
   modal.removeAttribute("data-tradecase-id");
+}
+
+function rerenderOpenDocumentWorkspaceBody() {
+  const modalId = "document-workspace-modal";
+  const modalEl = document.getElementById(modalId);
+  if (!modalEl) return;
+  if (!modalEl.classList.contains("is-open")) return;
+  const tradeCaseId = modalEl.getAttribute("data-tradecase-id");
+  const tc = tradeCaseId ? getTradeCaseById(tradeCaseId) : null;
+  if (!tc) return;
+  const ui = getWorkspaceUi(modalId);
+  const body = modalEl.querySelector(".modal__body");
+  if (body) body.innerHTML = renderDocumentWorkspace(tc, { focusType: ui.focusType, focusId: ui.focusId });
+}
+
+function uniqLinkedEntities(entities) {
+  const list = Array.isArray(entities) ? entities.filter(Boolean) : [];
+  const seen = new Set();
+  const out = [];
+  for (const e of list) {
+    const type = normalizeFocusType(e?.type);
+    const id = String(e?.id || "").trim();
+    if (!type || !id || id === "-") continue;
+    const key = `${type}::${id}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ type, id });
+  }
+  return out;
+}
+
+function buildHumanMemoCandidateEntities(tradeCase, focusEntity) {
+  const tc = tradeCase || null;
+  const focus = focusEntity || null;
+  const candidates = [];
+  if (focus) candidates.push(focus);
+
+  const siNo = tc?.siEntity?.siNo ? String(tc.siEntity.siNo).trim() : "";
+  if (siNo) candidates.push({ type: "si", id: siNo });
+
+  const shipmentId = tc?.shipmentEntity?.id ? String(tc.shipmentEntity.id).trim() : "";
+  if (shipmentId) candidates.push({ type: "shipment", id: shipmentId });
+
+  const invoiceNo = (() => {
+    const inv = Array.isArray(tc?.invoiceNumbers) ? tc.invoiceNumbers.filter(Boolean)[0] : null;
+    const raw = inv?.invoiceNo ? String(inv.invoiceNo).trim() : "";
+    return raw ? normalizeInvoiceNo(raw) : "";
+  })();
+  if (invoiceNo) candidates.push({ type: "invoice", id: invoiceNo });
+
+  return uniqLinkedEntities(candidates).slice(0, 6);
 }
 
 function isAnyWorkspaceModalOpen() {
@@ -9556,22 +9681,32 @@ function setupWorkspaceModals() {
           window.alert("Focus が選択されていません。");
           return;
         }
-        const body = window.prompt("メモ（人間用）");
-        const text = String(body || "").trim();
-        if (!text) return;
-
-        const now = nowIso();
-        const memo = {
-          id: `memo-${shortId()}`,
-          body: text,
-          linkedEntities: [{ type: focusType, id: focusId }],
-          aiShared: false,
-          createdAt: now,
-          updatedAt: now,
+        const tradeCaseId = modalEl.getAttribute("data-tradecase-id") || "";
+        if (!tradeCaseId) return;
+        state.activeHumanMemoEdit = {
+          mode: "create",
+          focusType,
+          focusId,
+          tradeCaseId,
+          bodyDraft: "",
+          selectedEntities: [{ type: focusType, id: focusId }],
         };
-        if (!Array.isArray(state.humanMemos)) state.humanMemos = [];
-        state.humanMemos = [memo, ...state.humanMemos.filter(Boolean)];
-        rerenderWorkspaceBody();
+        renderApp();
+        return;
+      }
+
+      const humanMemoDeleteEl = target.closest && target.closest("[data-human-memo-delete]");
+      if (humanMemoDeleteEl && modalId === "document-workspace-modal") {
+        e.preventDefault();
+        e.stopPropagation();
+        const memoId = humanMemoDeleteEl.getAttribute("data-human-memo-delete") || "";
+        if (!memoId) return;
+        const ok = window.confirm("このメモを削除しますか？");
+        if (!ok) return;
+        const memos = Array.isArray(state.humanMemos) ? state.humanMemos.filter(Boolean) : [];
+        state.humanMemos = memos.filter((m) => m && String(m.id || "") !== String(memoId));
+        renderApp();
+        rerenderOpenDocumentWorkspaceBody();
         return;
       }
 
@@ -9609,6 +9744,38 @@ function setupWorkspaceModals() {
         state.activityFeedItems = prependUniqueById(state.activityFeedItems, [feedItem]);
 
         rerenderWorkspaceBody();
+        return;
+      }
+
+      const humanMemoCardEl = target.closest && target.closest("[data-human-memo-card]");
+      if (humanMemoCardEl && modalId === "document-workspace-modal") {
+        e.preventDefault();
+        e.stopPropagation();
+        const memoId = humanMemoCardEl.getAttribute("data-human-memo-card") || "";
+        if (!memoId) return;
+        const memos = Array.isArray(state.humanMemos) ? state.humanMemos.filter(Boolean) : [];
+        const memo = memos.find((m) => m && String(m.id || "") === String(memoId)) || null;
+        if (!memo) return;
+
+        const ui = getWorkspaceUi(modalId);
+        const focusType = normalizeFocusType(ui.focusType);
+        const focusIdRaw = String(ui.focusId || "").trim();
+        const focusId = focusType === "invoice" ? normalizeInvoiceNo(focusIdRaw) : focusIdRaw;
+        if (!focusId || focusId === "-") return;
+
+        const tradeCaseId = modalEl.getAttribute("data-tradecase-id") || "";
+        if (!tradeCaseId) return;
+
+        state.activeHumanMemoEdit = {
+          mode: "edit",
+          memoId,
+          focusType,
+          focusId,
+          tradeCaseId,
+          bodyDraft: String(memo.body || ""),
+          selectedEntities: uniqLinkedEntities(Array.isArray(memo.linkedEntities) ? memo.linkedEntities : []),
+        };
+        renderApp();
         return;
       }
 
@@ -10184,6 +10351,118 @@ function setupNewTop() {
 
       state.activeDraftEditActionPlanId = null;
       renderApp();
+      return;
+    }
+
+    const humanMemoCancelEl = target.closest && target.closest("[data-human-memo-cancel]");
+    if (humanMemoCancelEl) {
+      e.preventDefault();
+      e.stopPropagation();
+      state.activeHumanMemoEdit = null;
+      renderApp();
+      return;
+    }
+
+    const humanMemoOverlayEl = target.closest && target.closest("[data-human-memo-overlay]");
+    if (humanMemoOverlayEl && target === humanMemoOverlayEl) {
+      e.preventDefault();
+      e.stopPropagation();
+      state.activeHumanMemoEdit = null;
+      renderApp();
+      return;
+    }
+
+    const humanMemoToggleEl = target.closest && target.closest("[data-human-memo-entity-toggle]");
+    if (humanMemoToggleEl) {
+      e.preventDefault();
+      e.stopPropagation();
+
+      const ctx = state.activeHumanMemoEdit || null;
+      if (!ctx) return;
+
+      const modal = document.querySelector("[data-human-memo-modal]");
+      if (modal && modal.querySelector) {
+        const bodyEl = modal.querySelector("[data-human-memo-body]");
+        if (bodyEl && typeof bodyEl.value === "string") ctx.bodyDraft = bodyEl.value;
+      }
+
+      const key = humanMemoToggleEl.getAttribute("data-human-memo-entity-toggle") || "";
+      const [typeRaw, idRaw] = key.split("::");
+      const type = normalizeFocusType(typeRaw);
+      const id = String(idRaw || "").trim();
+      if (!type || !id) return;
+
+      const focusType = normalizeFocusType(ctx.focusType);
+      const focusIdRaw = String(ctx.focusId || "").trim();
+      const focusId = focusType === "invoice" ? normalizeInvoiceNo(focusIdRaw) : focusIdRaw;
+      const focusKey = `${focusType}::${focusId}`;
+
+      const current = uniqLinkedEntities(ctx.selectedEntities || []);
+      const set = new Set(current.map((e) => `${e.type}::${e.id}`));
+      if (set.has(key)) set.delete(key);
+      else set.add(key);
+      set.add(focusKey);
+
+      ctx.selectedEntities = Array.from(set).map((k) => {
+        const [t, i] = k.split("::");
+        return { type: t, id: i };
+      });
+      state.activeHumanMemoEdit = ctx;
+      renderApp();
+      return;
+    }
+
+    const humanMemoSaveEl = target.closest && target.closest("[data-human-memo-save]");
+    if (humanMemoSaveEl) {
+      e.preventDefault();
+      e.stopPropagation();
+
+      const ctx = state.activeHumanMemoEdit || null;
+      if (!ctx) return;
+      const modal = humanMemoSaveEl.closest && humanMemoSaveEl.closest("[data-human-memo-modal]");
+      if (!modal || !modal.querySelector) return;
+      const bodyEl = modal.querySelector("[data-human-memo-body]");
+      const text = bodyEl && typeof bodyEl.value === "string" ? String(bodyEl.value).trim() : "";
+      if (!text) return;
+
+      const mode = ctx.mode === "edit" ? "edit" : "create";
+      const focusType = normalizeFocusType(ctx.focusType);
+      const focusIdRaw = String(ctx.focusId || "").trim();
+      const focusId = focusType === "invoice" ? normalizeInvoiceNo(focusIdRaw) : focusIdRaw;
+      const focusEntity = focusType && focusId ? { type: focusType, id: focusId } : null;
+
+      const linkedEntities = uniqLinkedEntities([...(ctx.selectedEntities || []), ...(focusEntity ? [focusEntity] : [])]);
+      if (!linkedEntities.length) return;
+
+      const now = nowIso();
+      if (mode === "edit") {
+        const memoId = String(ctx.memoId || "").trim();
+        if (!memoId) return;
+        const memos = Array.isArray(state.humanMemos) ? state.humanMemos.filter(Boolean) : [];
+        const idx = memos.findIndex((m) => m && String(m.id || "") === String(memoId));
+        if (idx < 0) return;
+        const updated = { ...memos[idx], body: text, linkedEntities, updatedAt: now };
+        const next = memos.slice();
+        next[idx] = updated;
+        state.humanMemos = next;
+        state.activeHumanMemoEdit = null;
+        renderApp();
+        rerenderOpenDocumentWorkspaceBody();
+        return;
+      }
+      const memo = {
+        id: `memo-${shortId()}`,
+        body: text,
+        linkedEntities,
+        aiShared: false,
+        createdAt: now,
+        updatedAt: now,
+      };
+      if (!Array.isArray(state.humanMemos)) state.humanMemos = [];
+      state.humanMemos = [memo, ...state.humanMemos.filter(Boolean)];
+      state.activeHumanMemoEdit = null;
+      renderApp();
+      rerenderOpenDocumentWorkspaceBody();
       return;
     }
 
@@ -11106,6 +11385,13 @@ function setupNewTop() {
   root.addEventListener("input", (e) => {
     const target = e.target;
     if (!target) return;
+    const humanMemoBodyEl = target.closest && target.closest("[data-human-memo-body]");
+    if (humanMemoBodyEl) {
+      if (state.activeHumanMemoEdit) {
+        state.activeHumanMemoEdit.bodyDraft = typeof humanMemoBodyEl.value === "string" ? humanMemoBodyEl.value : "";
+      }
+      return;
+    }
     const ingestEl = target.closest && target.closest("[data-ingest-input]");
     if (ingestEl) {
       state.ingestInputText = typeof ingestEl.value === "string" ? ingestEl.value : "";
