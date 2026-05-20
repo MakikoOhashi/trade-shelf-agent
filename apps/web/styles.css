@@ -2610,9 +2610,27 @@ body {
 }
 
 .timeline-risk__headline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
   font-weight: 900;
   color: var(--text);
   margin-bottom: 8px;
+}
+
+.issue-link-chip {
+  cursor: pointer;
+  border: 1px solid var(--border);
+}
+
+.issue-link-chip:hover {
+  opacity: 1;
+  filter: brightness(1.08);
+}
+
+.issue-link-chip:active {
+  transform: translateY(0.5px);
 }
 
 .timeline-risk__grid {

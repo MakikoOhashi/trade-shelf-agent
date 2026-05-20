@@ -1263,7 +1263,7 @@ function renderExecutionTimelineRiskHtml(risk) {
         <span>⚠ ${escapeHtml(title || "リスク")}</span>
         ${
           issueId
-            ? `<button class="pill pill--mini pill--muted mono" type="button" data-open-timeline-issue-candidate="${escapeHtml(issueId)}">Issue: ${escapeHtml(issueId)}</button>`
+            ? `<button class="pill pill--mini pill--muted mono issue-link-chip" type="button" data-open-timeline-issue="${escapeHtml(issueId)}" data-open-timeline-issue-candidate="${escapeHtml(issueId)}">Issue: ${escapeHtml(issueId)}</button>`
             : ""
         }
       </div>
@@ -10018,15 +10018,30 @@ function setupWorkspaceModals() {
         return;
       }
 
-      const openTimelineIssueEl = target.closest && target.closest("[data-open-timeline-issue-candidate]");
+      const openTimelineIssueEl = target.closest && target.closest("[data-open-timeline-issue],[data-open-timeline-issue-candidate]");
       if (openTimelineIssueEl && modalId === "document-workspace-modal") {
         e.preventDefault();
         e.stopPropagation();
-        const candidateId = openTimelineIssueEl.getAttribute("data-open-timeline-issue-candidate") || "";
-        if (!candidateId) return;
+        const issueId =
+          (openTimelineIssueEl.getAttribute && openTimelineIssueEl.getAttribute("data-open-timeline-issue")) ||
+          (openTimelineIssueEl.getAttribute && openTimelineIssueEl.getAttribute("data-open-timeline-issue-candidate")) ||
+          "";
+        if (!issueId) return;
+
+        const mutation =
+          (Array.isArray(state.issueMutationItems) ? state.issueMutationItems : []).find((m) => m && (String(m.issueId || "") === String(issueId) || matchesMutationId(m, issueId))) ||
+          null;
+        const openId = getMutationOpenId(mutation) || findActionPlanIdFromAnyId(issueId) || String(issueId);
+
+        closeWorkspaceModal(modalId);
         state.topActiveTab = "issues";
-        state.activeMutationId = candidateId;
+        state.activeMutationId = openId;
         state.activeIssueId = null;
+        try {
+          location.hash = "#issues";
+        } catch {
+          // ignore
+        }
         renderApp();
         return;
       }
