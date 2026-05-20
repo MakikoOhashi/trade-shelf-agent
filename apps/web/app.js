@@ -290,7 +290,7 @@ function formatFocusLabel(focusType, focusId) {
   return `Case ${id}`;
 }
 
-function buildLinkedDocumentsForFocus(tradeCase, focusType, focusId) {
+function buildWorkspaceRelationshipTree(tradeCase, focusType, focusId) {
   const tc = tradeCase || null;
   const sh = tc?.shipmentEntity || null;
   const si = tc?.siEntity || null;
@@ -309,65 +309,57 @@ function buildLinkedDocumentsForFocus(tradeCase, focusType, focusId) {
   const shipmentId = String(sh?.id || "-");
   const siNo = String(si?.siNo || "-");
 
-  if (type === "si") {
-    return {
-      title: `Linked to this SI:`,
-      items: uniqStrings([
-        ...invNos,
-        plLabel,
-        blNo !== "-" ? blNo : null,
-        shipmentId !== "-" ? shipmentId : null,
-      ]).filter(Boolean),
-    };
-  }
+  const root = (() => {
+    if (type === "si") return String(si?.siNo || id || "-");
+    if (type === "invoice") return normalizeInvoiceNo(id || "-") || "-";
+    if (type === "shipment") return String(sh?.id || id || "-");
+    if (type === "packing_list") {
+      const normalized = String(id || "").trim();
+      if (!normalized || normalized === "-" || normalized === "pl-missing") return plLabel;
+      return normalized;
+    }
+    if (type === "bl") return String(id || blNo || "-") || "-";
+    return String(id || "-") || "-";
+  })();
 
-  if (type === "invoice") {
-    return {
-      title: `Linked to this INV:`,
-      items: uniqStrings([
-        siNo !== "-" ? siNo : null,
-        shipmentId !== "-" ? shipmentId : null,
-        blNo !== "-" ? blNo : null,
-        plLabel,
-      ]).filter(Boolean),
-    };
-  }
+  const children = (() => {
+    if (type === "si") {
+      return uniqStrings([...invNos, plLabel, blNo !== "-" ? blNo : null, shipmentId !== "-" ? shipmentId : null]).filter(Boolean);
+    }
+    if (type === "invoice") {
+      return uniqStrings([siNo !== "-" ? siNo : null, shipmentId !== "-" ? shipmentId : null, plLabel, blNo !== "-" ? blNo : null]).filter(Boolean);
+    }
+    if (type === "shipment") {
+      return uniqStrings([siNo !== "-" ? siNo : null, ...invNos, plLabel, blNo !== "-" ? blNo : null]).filter(Boolean);
+    }
+    if (type === "packing_list") {
+      return uniqStrings([siNo !== "-" ? siNo : null, shipmentId !== "-" ? shipmentId : null, ...invNos, blNo !== "-" ? blNo : null]).filter(Boolean);
+    }
+    if (type === "bl") {
+      return uniqStrings([siNo !== "-" ? siNo : null, shipmentId !== "-" ? shipmentId : null, ...invNos, plLabel]).filter(Boolean);
+    }
+    return uniqStrings([siNo !== "-" ? siNo : null, ...invNos, plLabel, blNo !== "-" ? blNo : null, shipmentId !== "-" ? shipmentId : null]).filter(Boolean);
+  })()
+    .filter((x) => x && x !== root)
+    .filter(Boolean);
 
-  if (type === "shipment") {
-    return {
-      title: `Linked to this Shipment:`,
-      items: uniqStrings([
-        siNo !== "-" ? siNo : null,
-        ...invNos,
-        blNo !== "-" ? blNo : null,
-        plLabel,
-      ]).filter(Boolean),
-    };
-  }
+  return { root, children };
+}
 
-  if (type === "document") {
-    return {
-      title: `Linked documents`,
-      items: uniqStrings([
-        siNo !== "-" ? siNo : null,
-        ...invNos,
-        plLabel,
-        blNo !== "-" ? blNo : null,
-        shipmentId !== "-" ? shipmentId : null,
-      ]).filter(Boolean),
-    };
+function renderWorkspaceRelationshipTree(tree) {
+  const root = tree?.root ? String(tree.root) : "-";
+  const children = Array.isArray(tree?.children) ? tree.children.filter(Boolean) : [];
+  const lines = [];
+  lines.push(`<div class="workspace-tree__line">${escapeHtml(root)}</div>`);
+  if (!children.length) {
+    lines.push(`<div class="workspace-tree__line muted">-</div>`);
+  } else {
+    for (let i = 0; i < children.length; i += 1) {
+      const prefix = i === children.length - 1 ? "└ " : "├ ";
+      lines.push(`<div class="workspace-tree__line">${escapeHtml(prefix + String(children[i]))}</div>`);
+    }
   }
-
-  return {
-    title: `Linked documents`,
-    items: uniqStrings([
-      siNo !== "-" ? siNo : null,
-      ...invNos,
-      plLabel,
-      blNo !== "-" ? blNo : null,
-      shipmentId !== "-" ? shipmentId : null,
-    ]).filter(Boolean),
-  };
+  return `<div class="workspace-tree mono">${lines.join("")}</div>`;
 }
 
 function buildWorkspaceOperationalSummary(tradeCase, focusType, focusId) {
@@ -683,11 +675,8 @@ function renderDocumentWorkspace(tradeCase, { focusType, focusId, initialDocId }
     return `<div class="muted">（placeholder）</div>`;
   })();
 
-  const linkedInfo = buildLinkedDocumentsForFocus(tc, type, id);
-
-  const linkedDocsHtml = linkedInfo.items.length
-    ? `<ul class="list">${linkedInfo.items.map((x) => `<li>${escapeHtml(x)}</li>`).join("")}</ul>`
-    : `<div class="muted">-</div>`;
+  const relationshipTree = buildWorkspaceRelationshipTree(tc, type, id);
+  const relationshipTreeHtml = renderWorkspaceRelationshipTree(relationshipTree);
   const operationalSummary = buildWorkspaceOperationalSummary(tc, type, id);
   const operationalSummaryHtml = renderWorkspaceOperationalSummaryHtml(operationalSummary);
 
@@ -707,8 +696,8 @@ function renderDocumentWorkspace(tradeCase, { focusType, focusId, initialDocId }
           </div>
 
           <div class="workspace-section">
-            <div class="workspace-section__title">${escapeHtml(linkedInfo.title)}</div>
-            ${linkedDocsHtml}
+            <div class="workspace-section__title">紐付き</div>
+            ${relationshipTreeHtml}
           </div>
 
           <div class="workspace-section">

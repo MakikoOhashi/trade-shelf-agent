@@ -2481,6 +2481,18 @@ body {
   color: var(--text);
 }
 
+.workspace-tree {
+  display: grid;
+  gap: 4px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text);
+}
+
+.workspace-tree__line {
+  white-space: pre;
+}
+
 .workspace-role-note {
   margin-top: 12px;
   font-size: 12px;
