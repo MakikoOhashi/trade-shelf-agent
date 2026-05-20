@@ -637,17 +637,6 @@ function renderDocumentWorkspace(tradeCase, { focusType, focusId, initialDocId }
     sh?.blNo ? "BLはBooking情報と紐づいています" : null,
   ].filter(Boolean);
 
-  const followUpStatusHtml = (() => {
-    const run = tc.resolutionAgentRun || null;
-    const steps = Array.isArray(run?.steps) ? run.steps : [];
-    const sent = steps
-      .filter((s) => s && s.status === "sent" && s.proposedMessage)
-      .slice()
-      .sort((a, b) => String(b.approvedAt || "").localeCompare(String(a.approvedAt || "")))[0];
-    if (sent && sent.proposedMessage) return `<div>PL確認メール送信済み / 返答待ち</div>`;
-    return `<div class="muted">未対応</div>`;
-  })();
-
   const latestFollowUpHtml = (() => {
     const run = tc.resolutionAgentRun || null;
     const steps = Array.isArray(run?.steps) ? run.steps : [];
@@ -698,11 +687,6 @@ function renderDocumentWorkspace(tradeCase, { focusType, focusId, initialDocId }
           <div class="workspace-section">
             <div class="workspace-section__title">紐付き</div>
             ${relationshipTreeHtml}
-          </div>
-
-          <div class="workspace-section">
-            <div class="workspace-section__title">Follow-up status</div>
-            ${followUpStatusHtml}
           </div>
         </aside>
 
