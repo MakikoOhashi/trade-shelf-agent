@@ -616,6 +616,7 @@ function buildDocumentCheckResults(tc, focusType, focusId) {
       : typeof tc?.products?.[0]?.quantityInstructed === "number"
         ? tc.products[0].quantityInstructed
         : null;
+  const siNo = String(si?.siNo || tc?.siNumbers?.[0] || "").trim();
 
   const statusRank = (s) => {
     if (s === "error") return 3;
@@ -626,41 +627,79 @@ function buildDocumentCheckResults(tc, focusType, focusId) {
   const anyDocMissing = (pred) => documents.some((d) => pred(d) && String(d?.status || "") === "missing");
   const anyDocPresent = (pred) => documents.some((d) => pred(d) && String(d?.status || "") !== "missing");
 
+  const formatQty = (qty) => (typeof qty === "number" ? `${qty}pcs` : "-");
+  const invoiceQtyByNo = (invoiceNo) => {
+    const invNo = normalizeInvoiceNo(invoiceNo);
+    if (!invNo) return null;
+    const ref = invByNo.get(invNo) || null;
+    return typeof ref?.qty === "number" ? ref.qty : null;
+  };
+
   const buildQuantityCheck = () => {
     const invDocs = documents.filter((d) => String(d?.id || "").startsWith("inv-"));
-    const invLines = [];
-    let total = 0;
-    let totalKnown = true;
-    let anySplit = false;
+    const invDocNos = invDocs.map((d) => String(d?.label || "").trim()).filter(Boolean);
 
-    for (const d of invDocs) {
-      const invNo = String(d?.label || "").trim();
-      const ref = invByNo.get(invNo) || null;
-      const qty = typeof ref?.qty === "number" ? ref.qty : null;
-      if (qty == null) {
-        totalKnown = false;
-        invLines.push(`⚠ ${invNo || "INV"}: qty unknown`);
-        continue;
+    const invNosForSi = uniqStrings([...(si?.relatedInvoiceNos || []), ...invDocNos]).map(normalizeInvoiceNo).filter(Boolean);
+    const invNosForShipment = uniqStrings([...(sh?.supplierInvoices || []), ...(sh?.switchInvoices || []), ...invDocNos])
+      .map(normalizeInvoiceNo)
+      .filter(Boolean);
+
+    const focusInvNo = type === "invoice" ? normalizeInvoiceNo(id) : null;
+
+    const lines = [];
+    let status = "warning";
+
+    if (type === "invoice") {
+      const invNo = focusInvNo || invNosForSi[0] || invNosForShipment[0] || invDocNos[0] || "INV-";
+      const invQty = invoiceQtyByNo(invNo);
+      const isMismatch = siQty != null && invQty != null && invQty !== siQty;
+      lines.push(`${invNo}: ${formatQty(invQty)} / ${siNo || "SI"}: ${formatQty(siQty)}`);
+      if (isMismatch) {
+        lines.push("このINV単体ではSI数量と一致しません。分納確認が必要です。");
+        status = "warning";
+      } else if (invQty == null || siQty == null) {
+        status = "warning";
+      } else {
+        status = "ok";
       }
-      total += qty;
-      if (siQty != null && qty !== siQty) anySplit = true;
-      invLines.push(`${siQty != null && qty !== siQty ? "⚠" : "✓"} ${invNo}: ${qty}pcs`);
+    } else if (type === "shipment") {
+      const invNos = invNosForShipment.length ? invNosForShipment : invNosForSi;
+      let total = 0;
+      let known = true;
+      for (const invNo of invNos) {
+        const q = invoiceQtyByNo(invNo);
+        if (q == null) known = false;
+        if (q != null) total += q;
+      }
+      lines.push(`shipmentに紐づくINV合計 = ${known ? `${total}pcs` : "-"}`);
+      lines.push(`SI数量 = ${formatQty(siQty)}`);
+      status = known && siQty != null && total === siQty ? "ok" : "warning";
+    } else {
+      const invNos = invNosForSi.length ? invNosForSi : invDocNos.map(normalizeInvoiceNo).filter(Boolean);
+      let total = 0;
+      let known = true;
+      for (const invNo of invNos) {
+        const q = invoiceQtyByNo(invNo);
+        if (q == null) {
+          known = false;
+          lines.push(`${invNo}: -`);
+          continue;
+        }
+        total += q;
+        lines.push(`${invNo}: ${q}pcs`);
+      }
+      if (siQty != null) {
+        lines.push(`合計数量 = ${known ? `${total}pcs` : "-"} / SI数量 = ${siQty}pcs`);
+      }
+      const anySplit = invNos.length >= 2;
+      status = known && siQty != null && total === siQty ? (anySplit ? "warning" : "ok") : "warning";
     }
-
-    if (!invLines.length) invLines.push("⚠ INV missing");
-
-    if (siQty != null && totalKnown && invDocs.length) {
-      invLines.push(`${total === siQty ? "✓" : "⚠"} 合計数量 = ${total}pcs / SI数量 = ${siQty}pcs`);
-    }
-
-    const status =
-      siQty == null || !totalKnown || !invDocs.length ? "warning" : total === siQty ? (anySplit ? "warning" : "ok") : "warning";
 
     return {
       key: "quantity",
       label: "数量チェック",
       status,
-      summary: invLines.join("\n"),
+      summary: lines.join("\n"),
     };
   };
 
@@ -670,17 +709,24 @@ function buildDocumentCheckResults(tc, focusType, focusId) {
     if (isPresent) {
       return { key: "pl", label: "PLチェック", status: "ok", summary: "OK" };
     }
-    return { key: "pl", label: "PLチェック", status: isMissing ? "warning" : "warning", summary: "未着" };
+    const summary = type === "invoice" ? "このINVに対応するPL未着" : "PL未着";
+    return { key: "pl", label: "PLチェック", status: "warning", summary };
   };
 
   const buildBlCheck = () => {
     const hasBl = Boolean(String(sh?.blNo || "").trim());
-    return { key: "bl", label: "BLチェック", status: hasBl ? "ok" : "warning", summary: hasBl ? "Booking情報と一致" : "未着" };
+    const blNo = String(sh?.blNo || tc?.blNumbers?.[0] || "").trim();
+    const summary = hasBl ? `${blNo || "BL"} linked` : "未着";
+    return { key: "bl", label: "BLチェック", status: hasBl ? "ok" : "warning", summary };
   };
 
   const buildShipmentCheck = () => {
     const hasShipment = Boolean(String(sh?.id || tc?.shipmentState || "").trim());
-    return { key: "shipment", label: "Shipmentチェック", status: hasShipment ? "ok" : "warning", summary: hasShipment ? "linked" : "missing" };
+    const shipmentId = String(sh?.id || tc?.shipmentRefs?.[0] || "").trim();
+    if (type === "shipment") {
+      return { key: "shipment", label: "Shipmentチェック", status: "warning", summary: "ETA/Booking確認中" };
+    }
+    return { key: "shipment", label: "Shipmentチェック", status: hasShipment ? "ok" : "warning", summary: hasShipment ? `${shipmentId || "Shipment"} linked` : "missing" };
   };
 
   const checksBase = [
@@ -726,7 +772,7 @@ function renderDocumentCheckResults(checkResults) {
   const icon = (status) => {
     if (status === "warning") return "⚠";
     if (status === "error") return "!";
-    return "✔";
+    return "✓";
   };
   const statusText = (status) => {
     if (status === "warning") return "要確認";
@@ -751,7 +797,7 @@ function renderDocumentCheckResults(checkResults) {
           const hideSummary = st === "ok";
           const hideIssue = st === "ok";
           return `
-            <div class="doc-check" data-check-key="${escapeHtml(String(c?.key || ""))}" ${issueId ? `data-issue-id="${escapeHtml(issueId)}"` : ""}>
+            <div class="doc-check doc-check--${escapeHtml(st)}" data-check-key="${escapeHtml(String(c?.key || ""))}" data-status="${escapeHtml(st)}" ${issueId ? `data-issue-id="${escapeHtml(issueId)}"` : ""}>
               <div class="doc-check__header">
                 <div class="doc-check__label">${escapeHtml(String(c?.label || ""))}</div>
                 <div class="doc-check__status doc-check__status--${escapeHtml(st)}">${escapeHtml(`${icon(st)} ${statusText(st)}`)}</div>

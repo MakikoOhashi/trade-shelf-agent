@@ -2475,14 +2475,14 @@ body {
 
 .doc-check-list {
   display: grid;
-  gap: 10px;
+  gap: 4px;
 }
 
 .doc-check {
-  border-top: 1px dashed color-mix(in srgb, var(--border) 70%, transparent);
-  padding-top: 10px;
+  border-top: 0;
+  padding: 6px 0;
   display: grid;
-  gap: 6px;
+  gap: 4px;
 }
 
 .doc-check__header {
@@ -2493,26 +2493,25 @@ body {
 }
 
 .doc-check:first-child {
-  border-top: 0;
   padding-top: 0;
 }
 
 .doc-check__label {
-  font-weight: 900;
-  font-size: 12px;
+  font-weight: 700;
+  font-size: 13px;
   color: var(--text);
   letter-spacing: 0.16px;
 }
 
 .doc-check__status {
-  font-weight: 900;
-  font-size: 11px;
+  font-weight: 700;
+  font-size: 12px;
   letter-spacing: 0.12px;
   white-space: nowrap;
 }
 
 .doc-check__status--ok {
-  color: color-mix(in srgb, var(--accent-2) 70%, var(--text));
+  color: var(--muted);
 }
 
 .doc-check__status--warning {
@@ -2525,9 +2524,10 @@ body {
 
 .doc-check__summary {
   display: grid;
-  gap: 4px;
+  margin-top: 4px;
+  gap: 2px;
   font-size: 12px;
-  line-height: 1.35;
+  line-height: 1.45;
   color: var(--text);
 }
 
@@ -2539,6 +2539,11 @@ body {
 .doc-check__issue {
   font-size: 12px;
   color: var(--muted);
+}
+
+.doc-check--ok .doc-check__label {
+  font-weight: 600;
+  color: color-mix(in srgb, var(--muted) 88%, var(--text));
 }
 
 .workspace-kv {
