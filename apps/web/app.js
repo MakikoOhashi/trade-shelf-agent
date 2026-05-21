@@ -12092,6 +12092,13 @@ function setupNewTop() {
     el.setAttribute("data-shelf-floating-preview", "");
     el.setAttribute("aria-hidden", "true");
     el.hidden = true;
+    // NOTE: This element is appended to document.body (outside #app), so we
+    // must ensure it behaves as a fixed, viewport-positioned tooltip even if
+    // CSS scoping changes.
+    el.style.position = "fixed";
+    el.style.pointerEvents = "none";
+    el.style.zIndex = "9999";
+    el.style.maxWidth = "320px";
     document.body.appendChild(el);
     return el;
   };
@@ -12112,32 +12119,35 @@ function setupNewTop() {
     `.trim();
   };
 
-  const computeShelfPreviewBasePosition = (bookEl) => {
-    if (!bookEl || typeof bookEl.getBoundingClientRect !== "function") return null;
+  const positionShelfFloatingPreview = (previewEl, bookEl) => {
+    if (!previewEl || !bookEl || typeof bookEl.getBoundingClientRect !== "function") return;
     const rect = bookEl.getBoundingClientRect();
-    const gap = 12;
-    const padding = 8;
+    const margin = 12;
 
-    let left = rect.right + gap;
-    let top = rect.top + 6;
+    previewEl.style.position = "fixed";
+    previewEl.hidden = false;
 
-    left = Math.max(padding, Math.min(window.innerWidth - padding, left));
-    top = Math.max(padding, Math.min(window.innerHeight - padding, top));
-    return { left, top, rect };
-  };
+    const previewRect = previewEl.getBoundingClientRect();
 
-  const clampShelfPreviewPosition = ({ left, top, width, height }) => {
-    const padding = 8;
-    let nextLeft = left;
-    let nextTop = top;
+    let left = rect.right + margin;
+    let top = rect.top;
 
-    if (nextLeft + width > window.innerWidth - padding) nextLeft = window.innerWidth - width - padding;
-    nextLeft = Math.max(padding, Math.min(window.innerWidth - width - padding, nextLeft));
+    if (left + previewRect.width > window.innerWidth - margin) {
+      left = rect.left - previewRect.width - margin;
+    }
 
-    if (nextTop + height > window.innerHeight - padding) nextTop = window.innerHeight - height - padding;
-    nextTop = Math.max(padding, Math.min(window.innerHeight - height - padding, nextTop));
+    if (top + previewRect.height > window.innerHeight - margin) {
+      top = window.innerHeight - previewRect.height - margin;
+    }
+    if (top < margin) top = margin;
 
-    return { left: nextLeft, top: nextTop };
+    if (left < margin) left = margin;
+    if (left + previewRect.width > window.innerWidth - margin) {
+      left = Math.max(margin, window.innerWidth - previewRect.width - margin);
+    }
+
+    previewEl.style.left = `${Math.round(left)}px`;
+    previewEl.style.top = `${Math.round(top)}px`;
   };
 
   const showShelfPreviewForBook = (bookEl) => {
@@ -12148,9 +12158,6 @@ function setupNewTop() {
     const payload = state.shelfPreviewPayloadById?.[itemId] || null;
     if (!payload) return;
 
-    const pos = computeShelfPreviewBasePosition(bookEl);
-    if (!pos) return;
-
     const el = ensureShelfFloatingPreviewEl();
     if (!el) return;
 
@@ -12160,19 +12167,13 @@ function setupNewTop() {
     if (el.dataset.itemId !== itemId) el.dataset.itemId = itemId;
     if (el.innerHTML !== html) el.innerHTML = html;
 
-    el.style.left = `${Math.round(pos.left)}px`;
-    el.style.top = `${Math.round(pos.top)}px`;
     el.hidden = false;
+    positionShelfFloatingPreview(el, bookEl);
 
     requestAnimationFrame(() => {
       if (el.hidden) return;
       if (el.dataset.itemId !== itemId) return;
-      const rect = el.getBoundingClientRect();
-      const width = Math.max(200, Math.min(360, rect.width || 260));
-      const height = Math.max(120, Math.min(420, rect.height || 200));
-      const clamped = clampShelfPreviewPosition({ left: pos.left, top: pos.top, width, height });
-      el.style.left = `${Math.round(clamped.left)}px`;
-      el.style.top = `${Math.round(clamped.top)}px`;
+      positionShelfFloatingPreview(el, bookEl);
     });
   };
 

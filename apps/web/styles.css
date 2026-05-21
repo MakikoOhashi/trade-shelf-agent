@@ -5422,9 +5422,10 @@ body {
   color: #0b1220;
 }
 
-#app .shelf-floating-preview {
+.shelf-floating-preview {
   position: fixed;
-  z-index: 3000;
+  z-index: 9999;
+  max-width: 320px;
   width: 260px;
   background: #ffffff;
   border: 1px solid #cbd5e1;
