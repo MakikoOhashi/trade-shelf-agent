@@ -235,15 +235,18 @@ const newTopTabs = [
   { key: "settings", label: "Settings", subLabel: "" },
 ];
 
-const shipmentStageLabels = [
-  "出荷指図",
-  "仕入先出発〜仕入先港着",
-  "輸出通関手続き",
-  "船積輸送中（洋上）",
-  "港着〜輸入通関手続き",
-  "営業倉庫へ輸送中",
-  "営業倉庫着（在庫化）",
+const SHELF_STAGES = [
+  { id: "instruction", label: "出荷指図" },
+  { id: "supplier_to_port", label: "仕入れ先出発〜仕入先港着" },
+  { id: "export_customs", label: "輸出通関手続き" },
+  { id: "on_board", label: "船積輸送中（洋上）" },
+  { id: "import_customs", label: "港着〜輸入通関手続き" },
+  { id: "to_warehouse", label: "営業倉庫へ輸送中" },
+  { id: "stocked", label: "営業倉庫着（在庫化）" },
 ];
+
+const shelfStageRank = Object.fromEntries(SHELF_STAGES.map((s, idx) => [s.id, idx]));
+const shelfStageLabelById = Object.fromEntries(SHELF_STAGES.map((s) => [s.id, s.label]));
 
 function shipmentStageIndexFromState(shipmentState) {
   const s = String(shipmentState || "");
@@ -254,6 +257,17 @@ function shipmentStageIndexFromState(shipmentState) {
   if (s === "exportCustoms") return 2;
   if (s === "shipped") return 1;
   return 0;
+}
+
+function shelfStageIdFromShipmentState(shipmentState) {
+  const s = String(shipmentState || "");
+  if (s === "warehouseReceived" || s === "completed") return "stocked";
+  if (s === "waitingWarehouseReceipt") return "to_warehouse";
+  if (s === "customsCleared" || s === "arrived" || s === "importCustoms") return "import_customs";
+  if (s === "inTransit") return "on_board";
+  if (s === "exportCustoms") return "export_customs";
+  if (s === "shipped") return "supplier_to_port";
+  return "instruction";
 }
 
 function openShipmentWorkspace(tradeCaseId) {
@@ -3578,6 +3592,115 @@ function renderNewTop() {
     </article>`;
   };
 
+  const resolveIssueLabelForTradeCase = (tc) => {
+    const id = String(tc?.id || "");
+    if (!id) return "";
+    if (id === "TC-2026-0001") return "ISS-CAND-TIMELINE-001";
+    return "";
+  };
+
+  const renderShelfBook = (viewType, tc) => {
+    const isShipment = viewType === "shipments";
+    const sh = tc && tc.shipmentEntity ? tc.shipmentEntity : null;
+    const si = tc && tc.siEntity ? tc.siEntity : null;
+
+    const idText = isShipment ? String(sh?.id || "-") : String(si?.siNo || "-");
+
+    const salesCommitments = Array.isArray(tc?.decisionContext?.salesCommitments) ? tc.decisionContext.salesCommitments : [];
+    const partyName = isShipment
+      ? String(tc?.supplier?.name || "Supplier")
+      : String(salesCommitments[0]?.customerName || tc?.customer?.name || tc?.supplier?.name || "Customer");
+
+    const dueYmd = isShipment ? String(sh?.eta || "") : String(si?.requestedDeliveryDate || "");
+    const dueLabel = isShipment ? (dueYmd ? `ETA ${dueYmd}` : "ETA未定") : dueYmd ? `delivery ${dueYmd}` : "delivery未定";
+
+    const blockers = deriveBlockerLabels(tc);
+    const blockerCount = blockers.length;
+    const overdue = isOverdueYmd(dueYmd);
+
+    const stageId = (() => {
+      if (isShipment) return shelfStageIdFromShipmentState(sh?.shipmentState);
+      const relIds = Array.isArray(si?.relatedShipmentIds) ? si.relatedShipmentIds.filter(Boolean) : [];
+      if (!relIds.length) return "instruction";
+      let best = "instruction";
+      for (const id of relIds) {
+        const shTc = shipments.find((x) => x?.shipmentEntity?.id === id);
+        const sid = shelfStageIdFromShipmentState(shTc?.shipmentEntity?.shipmentState);
+        if ((shelfStageRank[sid] ?? 0) < (shelfStageRank[best] ?? 0)) best = sid;
+      }
+      return best;
+    })();
+
+    const riskClass = overdue ? "is-overdue" : blockerCount > 0 ? "is-blocker" : stageId === "stocked" ? "is-completed" : "is-normal";
+
+    const issueLabel = resolveIssueLabelForTradeCase(tc);
+
+    const openAttr = isShipment ? `data-open-shipment="${escapeHtml(tc.id)}"` : `data-open-si="${escapeHtml(tc.id)}"`;
+
+    const tagsHtml = blockers.length
+      ? `<ul class="shelf-book-info__tags">${blockers.map((t) => `<li>${escapeHtml(t)}</li>`).join("")}</ul>`
+      : `<div class="shelf-book-info__tags-empty muted">-</div>`;
+
+    return {
+      stageId,
+      blocker: blockerCount > 0,
+      overdue,
+      html: `<button class="shelf-book ${riskClass}" type="button" ${openAttr} aria-label="${escapeHtml(idText)}">
+        <span class="shelf-book__title">${escapeHtml(idText)}</span>
+        <span class="shelf-book__sub">${escapeHtml(partyName)}</span>
+        <div class="shelf-book-info" aria-hidden="true">
+          <div class="shelf-book-info__title">${escapeHtml(idText)}</div>
+          <div class="shelf-book-info__line">${escapeHtml(partyName)}</div>
+          <div class="shelf-book-info__line">${escapeHtml(dueLabel)}</div>
+          <div class="shelf-book-info__line">状態: ${escapeHtml(shelfStageLabelById[stageId] || "-")}</div>
+          <div class="shelf-book-info__section">
+            <div class="shelf-book-info__section-title">Tags</div>
+            ${tagsHtml}
+          </div>
+          <div class="shelf-book-info__line">Issue: ${escapeHtml(issueLabel || "-")}</div>
+          <div class="shelf-book-info__hint">クリックでWorkspace</div>
+        </div>
+      </button>`,
+    };
+  };
+
+  const renderTradeBookshelf = (viewType) => {
+    const isShipment = viewType === "shipments";
+    const items = shipments
+      .filter((tc) => (isShipment ? !!tc?.shipmentEntity : !!tc?.siEntity))
+      .map((tc) => renderShelfBook(viewType, tc));
+
+    const stageSections = SHELF_STAGES.map((stage) => {
+      const stageItems = items
+        .filter((x) => x && x.stageId === stage.id)
+        .sort((a, b) => {
+          const aKey = String(a?.overdue ? "0" : "1") + String(a?.blocker ? "0" : "1");
+          const bKey = String(b?.overdue ? "0" : "1") + String(b?.blocker ? "0" : "1");
+          return aKey.localeCompare(bKey);
+        });
+
+      const count = stageItems.length;
+      const blockerCount = stageItems.filter((x) => x && x.blocker).length;
+      const overdueCount = stageItems.filter((x) => x && x.overdue).length;
+
+      return `<section class="shelf-genre" aria-label="${escapeHtml(stage.label)}">
+        <div class="shelf-genre__header">
+          <h2 class="shelf-genre__title">${escapeHtml(stage.label)}</h2>
+          <div class="shelf-genre__meta">
+            <span class="shelf-count">${count}</span>
+            <span class="shelf-badge ${blockerCount ? "is-blocker" : ""}">blocker ${blockerCount}</span>
+            <span class="shelf-badge ${overdueCount ? "is-overdue" : ""}">overdue ${overdueCount}</span>
+          </div>
+        </div>
+        <div class="shelf-books" role="list">
+          ${stageItems.length ? stageItems.map((x) => x.html).join("") : `<div class="shelf-empty nt-muted">No records</div>`}
+        </div>
+      </section>`;
+    }).join("");
+
+    return `<div class="trade-bookshelf" aria-label="${isShipment ? "Shipments Bookshelf" : "SI Bookshelf"}">${stageSections}</div>`;
+  };
+
   const renderShelfRow = (row) => {
     const { stageLabel, cardsHtml, count, overdueCount, blockerCount } = row;
     const metaBits = [
@@ -3602,7 +3725,7 @@ function renderNewTop() {
 
   const renderShelfBoard = (viewType) => {
     const isShipment = viewType === "shipments";
-    const stages = shipmentStageLabels.map((label, idx) => ({ label, idx }));
+    const stages = SHELF_STAGES.map((s, idx) => ({ label: s.label, idx }));
 
     const rowsHtml = stages
       .map(({ label, idx }) => {
@@ -3651,11 +3774,11 @@ function renderNewTop() {
   };
 
   const renderShipments = () => {
-    return renderShelfBoard("shipments");
+    return renderTradeBookshelf("shipments");
   };
 
   const renderSi = () => {
-    return renderShelfBoard("si");
+    return renderTradeBookshelf("si");
   };
 
   const renderShelf = () => {
