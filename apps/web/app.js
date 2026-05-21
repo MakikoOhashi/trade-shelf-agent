@@ -3660,16 +3660,14 @@ function renderNewTop() {
 
   const renderShelf = () => {
     const mode = state.shelfViewMode === "shipments" ? "shipments" : "si";
-    const toggleHtml = `<div class="nt-seg" role="tablist" aria-label="Shelf view mode">
+    const toggleHtml = `<div class="nt-seg shelf-view-switch" role="tablist" aria-label="Shelf view mode">
       <button class="nt-seg__btn ${mode === "si" ? "is-active" : ""}" type="button" data-shelf-view="si" role="tab" aria-selected="${
         mode === "si" ? "true" : "false"
-      }">SI View（出荷指図）</button>
+      }">SI（出荷指図）でみる</button>
       <button class="nt-seg__btn ${mode === "shipments" ? "is-active" : ""}" type="button" data-shelf-view="shipments" role="tab" aria-selected="${
         mode === "shipments" ? "true" : "false"
-      }">Shipment View（船積）</button>
+      }">船積（INV）でみる</button>
     </div>`;
-
-    const descriptionHtml = `<div class="nt-shelf-desc nt-muted">同じオペレーション棚を、出荷指図単位または船積単位で切り替えて確認します。</div>`;
 
     const query = String(state.shelfSearchQuery || "").trim();
 
@@ -3871,9 +3869,10 @@ function renderNewTop() {
     const boardHtml = mode === "si" ? renderSi() : renderShipments();
     return `<section class="nt-shelf" aria-label="Shelf">
       <div class="nt-shelf-top">
-        ${toggleHtml}
-        ${searchHtml}
-        ${descriptionHtml}
+        <div class="shelf-toolbar">
+          ${toggleHtml}
+          ${searchHtml}
+        </div>
       </div>
       ${resultsHtml}
       ${boardHtml}
