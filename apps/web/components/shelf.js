@@ -1,36 +1,11 @@
-const SHELF_STAGES = [
-  { id: "instruction", label: "出荷指図" },
-  { id: "supplier_to_port", label: "仕入れ先出発〜仕入先港着" },
-  { id: "export_customs", label: "輸出通関手続き" },
-  { id: "on_board", label: "船積輸送中（洋上）" },
-  { id: "import_customs", label: "港着〜輸入通関手続き" },
-  { id: "warehouse_stocking", label: "営業倉庫へ輸送・在庫化" },
-];
-
-const shelfStageRank = Object.fromEntries(SHELF_STAGES.map((s, idx) => [s.id, idx]));
-const shelfStageLabelById = Object.fromEntries(SHELF_STAGES.map((s) => [s.id, s.label]));
-
-function shipmentStageIndexFromState(shipmentState) {
-  const s = String(shipmentState || "");
-  if (s === "warehouseReceived" || s === "completed") return 5;
-  if (s === "waitingWarehouseReceipt") return 5;
-  if (s === "customsCleared" || s === "arrived" || s === "importCustoms") return 4;
-  if (s === "inTransit") return 3;
-  if (s === "exportCustoms") return 2;
-  if (s === "shipped") return 1;
-  return 0;
-}
-
-function shelfStageIdFromShipmentState(shipmentState) {
-  const s = String(shipmentState || "");
-  if (s === "warehouseReceived" || s === "completed") return "warehouse_stocking";
-  if (s === "waitingWarehouseReceipt") return "warehouse_stocking";
-  if (s === "customsCleared" || s === "arrived" || s === "importCustoms") return "import_customs";
-  if (s === "inTransit") return "on_board";
-  if (s === "exportCustoms") return "export_customs";
-  if (s === "shipped") return "supplier_to_port";
-  return "instruction";
-}
+import {
+  SHELF_STAGE_IDS,
+  SHELF_STAGES,
+  getShelfStageById,
+  getShelfStageOrder,
+  shelfStageIdFromShipmentState,
+  shipmentStageIndexFromState,
+} from "../lib/shelfMapping.js";
 
 function renderShelfPreviewHtml(payload, escapeHtml) {
   if (!payload) return "";
@@ -179,12 +154,12 @@ function createShelfRenderer({
     const stageId = (() => {
       if (isShipment) return shelfStageIdFromShipmentState(sh?.shipmentState);
       const relIds = Array.isArray(si?.relatedShipmentIds) ? si.relatedShipmentIds.filter(Boolean) : [];
-      if (!relIds.length) return "instruction";
-      let best = "instruction";
+      if (!relIds.length) return SHELF_STAGE_IDS.INSTRUCTION;
+      let best = SHELF_STAGE_IDS.INSTRUCTION;
       for (const id of relIds) {
         const shTc = shipments.find((x) => x?.shipmentEntity?.id === id);
         const sid = shelfStageIdFromShipmentState(shTc?.shipmentEntity?.shipmentState);
-        if ((shelfStageRank[sid] ?? 0) < (shelfStageRank[best] ?? 0)) best = sid;
+        if (getShelfStageOrder(sid) < getShelfStageOrder(best)) best = sid;
       }
       return best;
     })();
@@ -224,7 +199,7 @@ function createShelfRenderer({
         idText,
         partyName,
         dueLabel,
-        stageLabel: shelfStageLabelById[stageId] || "-",
+        stageLabel: getShelfStageById(stageId).label || "-",
         tagsHtml,
         issueLabel,
       },
@@ -613,5 +588,4 @@ function createShelfRenderer({
   };
 }
 
-export { SHELF_STAGES, shelfStageIdFromShipmentState, createShelfRenderer, renderShelfPreviewHtml };
-
+export { createShelfRenderer, renderShelfPreviewHtml };
