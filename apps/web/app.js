@@ -222,6 +222,16 @@ const state = {
    */
   shelfSearchQuery: "",
   /**
+   * Shelf hover preview state
+   * @type {null | { itemId: string, left: number, top: number }}
+   */
+  activeShelfPreview: null,
+  /**
+   * Shelf preview payload lookup (itemId -> payload)
+   * @type {Record<string, any>}
+   */
+  shelfPreviewPayloadById: {},
+  /**
    * Execution Timeline Scenario modal (Document Workspace)
    * @type {null | { tradeCaseId: string, focusType: string, focusId: string }}
    */
@@ -241,8 +251,7 @@ const SHELF_STAGES = [
   { id: "export_customs", label: "輸出通関手続き" },
   { id: "on_board", label: "船積輸送中（洋上）" },
   { id: "import_customs", label: "港着〜輸入通関手続き" },
-  { id: "to_warehouse", label: "営業倉庫へ輸送中" },
-  { id: "stocked", label: "営業倉庫着（在庫化）" },
+  { id: "warehouse_stocking", label: "営業倉庫へ輸送・在庫化" },
 ];
 
 const shelfStageRank = Object.fromEntries(SHELF_STAGES.map((s, idx) => [s.id, idx]));
@@ -250,7 +259,7 @@ const shelfStageLabelById = Object.fromEntries(SHELF_STAGES.map((s) => [s.id, s.
 
 function shipmentStageIndexFromState(shipmentState) {
   const s = String(shipmentState || "");
-  if (s === "warehouseReceived" || s === "completed") return 6;
+  if (s === "warehouseReceived" || s === "completed") return 5;
   if (s === "waitingWarehouseReceipt") return 5;
   if (s === "customsCleared" || s === "arrived" || s === "importCustoms") return 4;
   if (s === "inTransit") return 3;
@@ -261,8 +270,8 @@ function shipmentStageIndexFromState(shipmentState) {
 
 function shelfStageIdFromShipmentState(shipmentState) {
   const s = String(shipmentState || "");
-  if (s === "warehouseReceived" || s === "completed") return "stocked";
-  if (s === "waitingWarehouseReceipt") return "to_warehouse";
+  if (s === "warehouseReceived" || s === "completed") return "warehouse_stocking";
+  if (s === "waitingWarehouseReceipt") return "warehouse_stocking";
   if (s === "customsCleared" || s === "arrived" || s === "importCustoms") return "import_customs";
   if (s === "inTransit") return "on_board";
   if (s === "exportCustoms") return "export_customs";
@@ -3604,6 +3613,7 @@ function renderNewTop() {
     const sh = tc && tc.shipmentEntity ? tc.shipmentEntity : null;
     const si = tc && tc.siEntity ? tc.siEntity : null;
 
+    const previewId = String(tc?.id || "").trim();
     const idText = isShipment ? String(sh?.id || "-") : String(si?.siNo || "-");
 
     const salesCommitments = Array.isArray(tc?.decisionContext?.salesCommitments) ? tc.decisionContext.salesCommitments : [];
@@ -3618,6 +3628,11 @@ function renderNewTop() {
     const blockerCount = blockers.length;
     const overdue = isOverdueYmd(dueYmd);
 
+    const isCompletedShipmentState = (shipmentState) => {
+      const s = String(shipmentState || "");
+      return s === "warehouseReceived" || s === "completed";
+    };
+
     const stageId = (() => {
       if (isShipment) return shelfStageIdFromShipmentState(sh?.shipmentState);
       const relIds = Array.isArray(si?.relatedShipmentIds) ? si.relatedShipmentIds.filter(Boolean) : [];
@@ -3631,7 +3646,17 @@ function renderNewTop() {
       return best;
     })();
 
-    const riskClass = overdue ? "is-overdue" : blockerCount > 0 ? "is-blocker" : stageId === "stocked" ? "is-completed" : "is-normal";
+    const completed =
+      (isShipment && isCompletedShipmentState(sh?.shipmentState)) ||
+      (!isShipment &&
+        Array.isArray(si?.relatedShipmentIds) &&
+        si.relatedShipmentIds.length > 0 &&
+        si.relatedShipmentIds.every((id) => {
+          const shTc = shipments.find((x) => x?.shipmentEntity?.id === id);
+          return isCompletedShipmentState(shTc?.shipmentEntity?.shipmentState);
+        }));
+
+    const riskClass = overdue ? "is-overdue" : blockerCount > 0 ? "is-blocker" : completed ? "is-completed" : "is-normal";
 
     const issueLabel = resolveIssueLabelForTradeCase(tc);
 
@@ -3645,21 +3670,20 @@ function renderNewTop() {
       stageId,
       blocker: blockerCount > 0,
       overdue,
-      html: `<button class="shelf-book ${riskClass}" type="button" ${openAttr} aria-label="${escapeHtml(idText)}">
+      completed,
+      __tc: tc,
+      previewId,
+      previewPayload: {
+        idText,
+        partyName,
+        dueLabel,
+        stageLabel: shelfStageLabelById[stageId] || "-",
+        tagsHtml,
+        issueLabel,
+      },
+      html: `<button class="shelf-book ${riskClass}" type="button" ${openAttr} data-shelf-preview-id="${escapeHtml(previewId)}" aria-label="${escapeHtml(idText)}">
         <span class="shelf-book__title">${escapeHtml(idText)}</span>
         <span class="shelf-book__sub">${escapeHtml(partyName)}</span>
-        <div class="shelf-book-info" aria-hidden="true">
-          <div class="shelf-book-info__title">${escapeHtml(idText)}</div>
-          <div class="shelf-book-info__line">${escapeHtml(partyName)}</div>
-          <div class="shelf-book-info__line">${escapeHtml(dueLabel)}</div>
-          <div class="shelf-book-info__line">状態: ${escapeHtml(shelfStageLabelById[stageId] || "-")}</div>
-          <div class="shelf-book-info__section">
-            <div class="shelf-book-info__section-title">Tags</div>
-            ${tagsHtml}
-          </div>
-          <div class="shelf-book-info__line">Issue: ${escapeHtml(issueLabel || "-")}</div>
-          <div class="shelf-book-info__hint">クリックでWorkspace</div>
-        </div>
       </button>`,
     };
   };
@@ -3670,10 +3694,54 @@ function renderNewTop() {
       .filter((tc) => (isShipment ? !!tc?.shipmentEntity : !!tc?.siEntity))
       .map((tc) => renderShelfBook(viewType, tc));
 
+    const nextPreviewPayloadById = {};
+    for (const it of items) {
+      const key = String(it?.previewId || "").trim();
+      if (!key) continue;
+      nextPreviewPayloadById[key] = it?.previewPayload || null;
+    }
+    state.shelfPreviewPayloadById = nextPreviewPayloadById;
+
+    const renderShelfFloatingPreview = () => {
+      const active = state.activeShelfPreview || null;
+      if (!active) return "";
+      const payload = state.shelfPreviewPayloadById?.[String(active.itemId || "")] || null;
+      if (!payload) return "";
+
+      const left = Number.isFinite(active.left) ? active.left : 0;
+      const top = Number.isFinite(active.top) ? active.top : 0;
+
+      return `<div class="shelf-floating-preview" data-shelf-floating-preview style="left:${Math.round(left)}px; top:${Math.round(top)}px;" aria-hidden="true">
+        <div class="shelf-book-info__title">${escapeHtml(String(payload.idText || "-"))}</div>
+        <div class="shelf-book-info__line">${escapeHtml(String(payload.partyName || "-"))}</div>
+        <div class="shelf-book-info__line">${escapeHtml(String(payload.dueLabel || "-"))}</div>
+        <div class="shelf-book-info__line">状態: ${escapeHtml(String(payload.stageLabel || "-"))}</div>
+        <div class="shelf-book-info__section">
+          <div class="shelf-book-info__section-title">Tags</div>
+          ${String(payload.tagsHtml || `<div class="shelf-book-info__tags-empty muted">-</div>`)}
+        </div>
+        <div class="shelf-book-info__line">Issue: ${escapeHtml(String(payload.issueLabel || "-"))}</div>
+        <div class="shelf-book-info__hint">クリックでWorkspace</div>
+      </div>`;
+    };
+
+    const timestampMs = (tc) => {
+      const sh = tc && tc.shipmentEntity ? tc.shipmentEntity : null;
+      const si = tc && tc.siEntity ? tc.siEntity : null;
+      const updatedAt = isShipment ? sh?.updatedAt : si?.updatedAt;
+      const createdAt = isShipment ? sh?.createdAt : si?.createdAt;
+      const best = String(updatedAt || createdAt || "");
+      const t = Date.parse(best);
+      return Number.isFinite(t) ? t : 0;
+    };
+
     const stageSections = SHELF_STAGES.map((stage) => {
       const stageItems = items
         .filter((x) => x && x.stageId === stage.id)
         .sort((a, b) => {
+          const ta = timestampMs(a?.__tc || null);
+          const tb = timestampMs(b?.__tc || null);
+          if (tb !== ta) return tb - ta;
           const aKey = String(a?.overdue ? "0" : "1") + String(a?.blocker ? "0" : "1");
           const bKey = String(b?.overdue ? "0" : "1") + String(b?.blocker ? "0" : "1");
           return aKey.localeCompare(bKey);
@@ -3698,7 +3766,10 @@ function renderNewTop() {
       </section>`;
     }).join("");
 
-    return `<div class="trade-bookshelf" aria-label="${isShipment ? "Shipments Bookshelf" : "SI Bookshelf"}">${stageSections}</div>`;
+    return `<div class="trade-bookshelf" aria-label="${isShipment ? "Shipments Bookshelf" : "SI Bookshelf"}">
+      ${stageSections}
+      ${renderShelfFloatingPreview()}
+    </div>`;
   };
 
   const renderShelfRow = (row) => {
@@ -11959,6 +12030,115 @@ function setupNewTop() {
       renderApp();
       return;
     }
+  });
+
+  const computeShelfPreviewBasePosition = (bookEl) => {
+    if (!bookEl || typeof bookEl.getBoundingClientRect !== "function") return null;
+    const rect = bookEl.getBoundingClientRect();
+    const gap = 12;
+    const padding = 8;
+
+    let left = rect.right + gap;
+    let top = rect.top + 6;
+
+    left = Math.max(padding, Math.min(window.innerWidth - padding, left));
+    top = Math.max(padding, Math.min(window.innerHeight - padding, top));
+    return { left, top, rect };
+  };
+
+  const updateShelfFloatingPreviewPosition = ({ itemId, left, top }) => {
+    const el = root.querySelector && root.querySelector("[data-shelf-floating-preview]");
+    if (!el) return null;
+
+    const padding = 8;
+    const rect = el.getBoundingClientRect();
+    const width = Math.max(200, Math.min(360, rect.width || 260));
+    const height = Math.max(120, Math.min(420, rect.height || 200));
+
+    let nextLeft = left;
+    let nextTop = top;
+
+    if (nextLeft + width > window.innerWidth - padding) nextLeft = window.innerWidth - width - padding;
+    nextLeft = Math.max(padding, Math.min(window.innerWidth - width - padding, nextLeft));
+
+    if (nextTop + height > window.innerHeight - padding) nextTop = window.innerHeight - height - padding;
+    nextTop = Math.max(padding, Math.min(window.innerHeight - height - padding, nextTop));
+
+    if (!state.activeShelfPreview || state.activeShelfPreview.itemId !== itemId) return null;
+    if (Math.round(state.activeShelfPreview.left) === Math.round(nextLeft) && Math.round(state.activeShelfPreview.top) === Math.round(nextTop)) return null;
+
+    state.activeShelfPreview = { itemId, left: nextLeft, top: nextTop };
+    renderApp();
+    return null;
+  };
+
+  const showShelfPreviewForBook = (bookEl) => {
+    if (!bookEl || !bookEl.getAttribute) return;
+    const itemId = String(bookEl.getAttribute("data-shelf-preview-id") || "").trim();
+    if (!itemId) return;
+
+    const pos = computeShelfPreviewBasePosition(bookEl);
+    if (!pos) return;
+
+    const prev = state.activeShelfPreview || null;
+    state.activeShelfPreview = { itemId, left: pos.left, top: pos.top };
+    if (!prev || prev.itemId !== itemId || prev.left !== pos.left || prev.top !== pos.top) {
+      renderApp();
+    }
+
+    requestAnimationFrame(() => updateShelfFloatingPreviewPosition({ itemId, left: pos.left, top: pos.top }));
+  };
+
+  const hideShelfPreview = () => {
+    if (!state.activeShelfPreview) return;
+    state.activeShelfPreview = null;
+    renderApp();
+  };
+
+  root.addEventListener(
+    "mouseover",
+    (e) => {
+      const t = e.target;
+      if (!t || !t.closest) return;
+      const book = t.closest(".shelf-book");
+      if (!book) return;
+      showShelfPreviewForBook(book);
+    },
+    { passive: true }
+  );
+
+  root.addEventListener(
+    "mouseout",
+    (e) => {
+      const from = e.target;
+      if (!from || !from.closest) return;
+      const fromBook = from.closest(".shelf-book");
+      if (!fromBook) return;
+      const to = e.relatedTarget;
+      const toBook = to && to.closest ? to.closest(".shelf-book") : null;
+      if (toBook) return;
+      hideShelfPreview();
+    },
+    { passive: true }
+  );
+
+  root.addEventListener("focusin", (e) => {
+    const t = e.target;
+    if (!t || !t.closest) return;
+    const book = t.closest(".shelf-book");
+    if (!book) return;
+    showShelfPreviewForBook(book);
+  });
+
+  root.addEventListener("focusout", (e) => {
+    const t = e.target;
+    if (!t || !t.closest) return;
+    const fromBook = t.closest(".shelf-book");
+    if (!fromBook) return;
+    const to = e.relatedTarget;
+    const toBook = to && to.closest ? to.closest(".shelf-book") : null;
+    if (toBook) return;
+    hideShelfPreview();
   });
 
 }
