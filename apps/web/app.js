@@ -609,6 +609,13 @@ function resolveInitialDocId(initialDocId, documents) {
 }
 
 function openDocumentWorkspace(tradeCaseId, focusType, focusId, initialDocId) {
+  console.log("[openDocumentWorkspace entered]", {
+    tradeCaseId,
+    focusType,
+    focusId,
+    initialDocId,
+  });
+
   const tc = tradeCaseId ? getTradeCaseById(tradeCaseId) : null;
   if (!tc) return;
   state.modalTradeCaseId = tc.id;
@@ -635,6 +642,10 @@ function openDocumentWorkspace(tradeCaseId, focusType, focusId, initialDocId) {
     ]),
     bodyHtml: renderDocumentWorkspace(tc, { focusType: type, focusId: id, initialDocId }),
     tradeCaseId: tc.id,
+  });
+
+  console.log("[openDocumentWorkspace state]", {
+    modalOpen: document.getElementById("document-workspace-modal")?.classList.contains("is-open"),
   });
 }
 
@@ -3586,8 +3597,13 @@ function renderNewTop() {
       .join(" ");
 
     const openAttr = isShipment ? `data-open-shipment="${escapeHtml(tc.id)}"` : `data-open-si="${escapeHtml(tc.id)}"`;
+    const focusType = isShipment ? "shipment" : "si";
+    const focusId = isShipment ? String(sh?.id || "").trim() : String(si?.siNo || "").trim();
+    const workspaceAttrs = `data-open-document-workspace="${escapeHtml(tc.id)}" data-focus-type="${escapeHtml(
+      focusType,
+    )}" data-focus-id="${escapeHtml(focusId || "-")}" data-initial-doc-id="${escapeHtml(focusType)}"`;
 
-    return `<article class="${cardClass}" role="button" tabindex="0" ${openAttr}>
+    return `<article class="${cardClass}" role="button" tabindex="0" ${openAttr} ${workspaceAttrs}>
       <div class="shelf-card__top">
         <div class="shelf-card__id">${escapeHtml(idText)}</div>
       </div>
@@ -3660,7 +3676,11 @@ function renderNewTop() {
 
     const issueLabel = resolveIssueLabelForTradeCase(tc);
 
-    const openAttr = isShipment ? `data-open-shipment="${escapeHtml(tc.id)}"` : `data-open-si="${escapeHtml(tc.id)}"`;
+    const focusType = isShipment ? "shipment" : "si";
+    const focusId = isShipment ? String(sh?.id || "").trim() : String(si?.siNo || "").trim();
+    const workspaceAttrs = `data-open-document-workspace="${escapeHtml(tc.id)}" data-focus-type="${escapeHtml(
+      focusType,
+    )}" data-focus-id="${escapeHtml(focusId || "-")}" data-initial-doc-id="${escapeHtml(focusType)}"`;
 
     const tagsHtml = blockers.length
       ? `<ul class="shelf-book-info__tags">${blockers.map((t) => `<li>${escapeHtml(t)}</li>`).join("")}</ul>`
@@ -3681,7 +3701,9 @@ function renderNewTop() {
         tagsHtml,
         issueLabel,
       },
-      html: `<button class="shelf-book ${riskClass}" type="button" ${openAttr} data-shelf-preview-id="${escapeHtml(previewId)}" aria-label="${escapeHtml(idText)}">
+      html: `<button class="shelf-book ${riskClass}" type="button" ${workspaceAttrs} data-shelf-preview-id="${escapeHtml(
+        previewId,
+      )}" aria-label="${escapeHtml(idText)}">
         <span class="shelf-book__title">${escapeHtml(idText)}</span>
         <span class="shelf-book__sub">${escapeHtml(partyName)}</span>
       </button>`,
@@ -3701,29 +3723,6 @@ function renderNewTop() {
       nextPreviewPayloadById[key] = it?.previewPayload || null;
     }
     state.shelfPreviewPayloadById = nextPreviewPayloadById;
-
-    const renderShelfFloatingPreview = () => {
-      const active = state.activeShelfPreview || null;
-      if (!active) return "";
-      const payload = state.shelfPreviewPayloadById?.[String(active.itemId || "")] || null;
-      if (!payload) return "";
-
-      const left = Number.isFinite(active.left) ? active.left : 0;
-      const top = Number.isFinite(active.top) ? active.top : 0;
-
-      return `<div class="shelf-floating-preview" data-shelf-floating-preview style="left:${Math.round(left)}px; top:${Math.round(top)}px;" aria-hidden="true">
-        <div class="shelf-book-info__title">${escapeHtml(String(payload.idText || "-"))}</div>
-        <div class="shelf-book-info__line">${escapeHtml(String(payload.partyName || "-"))}</div>
-        <div class="shelf-book-info__line">${escapeHtml(String(payload.dueLabel || "-"))}</div>
-        <div class="shelf-book-info__line">状態: ${escapeHtml(String(payload.stageLabel || "-"))}</div>
-        <div class="shelf-book-info__section">
-          <div class="shelf-book-info__section-title">Tags</div>
-          ${String(payload.tagsHtml || `<div class="shelf-book-info__tags-empty muted">-</div>`)}
-        </div>
-        <div class="shelf-book-info__line">Issue: ${escapeHtml(String(payload.issueLabel || "-"))}</div>
-        <div class="shelf-book-info__hint">クリックでWorkspace</div>
-      </div>`;
-    };
 
     const timestampMs = (tc) => {
       const sh = tc && tc.shipmentEntity ? tc.shipmentEntity : null;
@@ -3768,7 +3767,6 @@ function renderNewTop() {
 
     return `<div class="trade-bookshelf" aria-label="${isShipment ? "Shipments Bookshelf" : "SI Bookshelf"}">
       ${stageSections}
-      ${renderShelfFloatingPreview()}
     </div>`;
   };
 
@@ -6294,10 +6292,23 @@ function renderNewTop() {
 }
 
 function renderApp() {
+  window.__renderAppCount = (window.__renderAppCount || 0) + 1;
+  console.log("[renderApp]", {
+    count: window.__renderAppCount,
+    newTopCountBefore: document.querySelectorAll("#app > .new-top").length,
+    workspaceModalExists: !!document.getElementById("document-workspace-modal"),
+  });
+
   const root = document.getElementById("app");
   if (!root) return;
   root.innerHTML = renderNewTop();
   syncOperationalThreadModal();
+
+  console.log("[renderApp done]", {
+    count: window.__renderAppCount,
+    newTopCountAfter: document.querySelectorAll("#app > .new-top").length,
+    workspaceModalExists: !!document.getElementById("document-workspace-modal"),
+  });
 }
 
 function handleOperationalThreadAction({ action, threadId, messageId }) {
@@ -10133,6 +10144,7 @@ function setupModal() {
       return;
     }
     if (isAnyWorkspaceModalOpen()) {
+      console.log("[workspace modal close]", { reason: "escape" });
       closeWorkspaceModal("shipment-workspace-modal");
       closeWorkspaceModal("si-workspace-modal");
       closeWorkspaceModal("document-workspace-modal");
@@ -10172,12 +10184,14 @@ function setupWorkspaceModals() {
       if (!target) return;
       const closeBtnEl = target.closest && target.closest("[data-close-workspace]");
       if (closeBtnEl) {
+        console.log("[workspace modal close]", { reason: "close_button", modalId });
         closeWorkspaceModal(modalId);
         return;
       }
 
       const backdropEl = target.closest && target.closest("[data-close-workspace-backdrop]");
       if (backdropEl && target === backdropEl) {
+        console.log("[workspace modal close]", { reason: "backdrop_click", modalId });
         closeWorkspaceModal(modalId);
         return;
       }
@@ -10824,11 +10838,21 @@ function decomposeRawRequestMock(text) {
 }
 
 function setupNewTop() {
+  window.__setupNewTopCount = (window.__setupNewTopCount || 0) + 1;
+  console.log("[setupNewTop]", {
+    count: window.__setupNewTopCount,
+  });
+
   const root = document.getElementById("app");
   if (!root) return;
 
-  root.addEventListener("click", (e) => {
+  function handleNewTopClick(e) {
+    window.__newTopClickCount = (window.__newTopClickCount || 0) + 1;
     const target = e.target;
+    console.log("[handleNewTopClick]", {
+      count: window.__newTopClickCount,
+      target,
+    });
     if (!target) return;
 
     const guardApprovalClick = (idLike, action, { description } = {}) => {
@@ -11461,6 +11485,30 @@ function setupNewTop() {
       return;
     }
 
+    const openDocumentWorkspaceEl = target.closest && target.closest("[data-open-document-workspace]");
+    if (openDocumentWorkspaceEl) {
+      const tradeCaseId = String(openDocumentWorkspaceEl.getAttribute("data-open-document-workspace") || "").trim();
+      const focusType = String(openDocumentWorkspaceEl.getAttribute("data-focus-type") || "").trim();
+      const focusId = String(openDocumentWorkspaceEl.getAttribute("data-focus-id") || "").trim();
+      const initialDocId = String(openDocumentWorkspaceEl.getAttribute("data-initial-doc-id") || "").trim();
+
+      const book = target.closest ? target.closest(".shelf-book") : null;
+      console.log("[shelf-book click]", {
+        exists: !!book,
+        dataset: book?.dataset,
+      });
+
+      console.log("[OPEN DOCUMENT WORKSPACE call]", {
+        tradeCaseId,
+        focusType,
+        focusId,
+        initialDocId,
+      });
+
+      if (tradeCaseId) openDocumentWorkspace(tradeCaseId, focusType, focusId, initialDocId);
+      return;
+    }
+
     const openShipmentEl = target.closest && target.closest("[data-open-shipment]");
     if (openShipmentEl) {
       openShipmentWorkspace(openShipmentEl.getAttribute("data-open-shipment") || "");
@@ -11963,7 +12011,7 @@ function setupNewTop() {
       return;
     }
 
-  });
+  }
 
   root.addEventListener("input", (e) => {
     const target = e.target;
@@ -12032,6 +12080,38 @@ function setupNewTop() {
     }
   });
 
+  root.addEventListener("click", handleNewTopClick);
+
+  const ensureShelfFloatingPreviewEl = () => {
+    const existing = document.getElementById("shelf-floating-preview");
+    if (existing) return existing;
+
+    const el = document.createElement("div");
+    el.id = "shelf-floating-preview";
+    el.className = "shelf-floating-preview";
+    el.setAttribute("data-shelf-floating-preview", "");
+    el.setAttribute("aria-hidden", "true");
+    el.hidden = true;
+    document.body.appendChild(el);
+    return el;
+  };
+
+  const renderShelfPreviewHtml = (payload) => {
+    if (!payload) return "";
+    return `
+      <div class="shelf-book-info__title">${escapeHtml(String(payload.idText || "-"))}</div>
+      <div class="shelf-book-info__line">${escapeHtml(String(payload.partyName || "-"))}</div>
+      <div class="shelf-book-info__line">${escapeHtml(String(payload.dueLabel || "-"))}</div>
+      <div class="shelf-book-info__line">状態: ${escapeHtml(String(payload.stageLabel || "-"))}</div>
+      <div class="shelf-book-info__section">
+        <div class="shelf-book-info__section-title">Tags</div>
+        ${String(payload.tagsHtml || `<div class="shelf-book-info__tags-empty muted">-</div>`)}
+      </div>
+      <div class="shelf-book-info__line">Issue: ${escapeHtml(String(payload.issueLabel || "-"))}</div>
+      <div class="shelf-book-info__hint">クリックでWorkspace</div>
+    `.trim();
+  };
+
   const computeShelfPreviewBasePosition = (bookEl) => {
     if (!bookEl || typeof bookEl.getBoundingClientRect !== "function") return null;
     const rect = bookEl.getBoundingClientRect();
@@ -12046,15 +12126,8 @@ function setupNewTop() {
     return { left, top, rect };
   };
 
-  const updateShelfFloatingPreviewPosition = ({ itemId, left, top }) => {
-    const el = root.querySelector && root.querySelector("[data-shelf-floating-preview]");
-    if (!el) return null;
-
+  const clampShelfPreviewPosition = ({ left, top, width, height }) => {
     const padding = 8;
-    const rect = el.getBoundingClientRect();
-    const width = Math.max(200, Math.min(360, rect.width || 260));
-    const height = Math.max(120, Math.min(420, rect.height || 200));
-
     let nextLeft = left;
     let nextTop = top;
 
@@ -12064,12 +12137,7 @@ function setupNewTop() {
     if (nextTop + height > window.innerHeight - padding) nextTop = window.innerHeight - height - padding;
     nextTop = Math.max(padding, Math.min(window.innerHeight - height - padding, nextTop));
 
-    if (!state.activeShelfPreview || state.activeShelfPreview.itemId !== itemId) return null;
-    if (Math.round(state.activeShelfPreview.left) === Math.round(nextLeft) && Math.round(state.activeShelfPreview.top) === Math.round(nextTop)) return null;
-
-    state.activeShelfPreview = { itemId, left: nextLeft, top: nextTop };
-    renderApp();
-    return null;
+    return { left: nextLeft, top: nextTop };
   };
 
   const showShelfPreviewForBook = (bookEl) => {
@@ -12077,22 +12145,43 @@ function setupNewTop() {
     const itemId = String(bookEl.getAttribute("data-shelf-preview-id") || "").trim();
     if (!itemId) return;
 
+    const payload = state.shelfPreviewPayloadById?.[itemId] || null;
+    if (!payload) return;
+
     const pos = computeShelfPreviewBasePosition(bookEl);
     if (!pos) return;
 
-    const prev = state.activeShelfPreview || null;
-    state.activeShelfPreview = { itemId, left: pos.left, top: pos.top };
-    if (!prev || prev.itemId !== itemId || prev.left !== pos.left || prev.top !== pos.top) {
-      renderApp();
-    }
+    const el = ensureShelfFloatingPreviewEl();
+    if (!el) return;
 
-    requestAnimationFrame(() => updateShelfFloatingPreviewPosition({ itemId, left: pos.left, top: pos.top }));
+    const html = renderShelfPreviewHtml(payload);
+    if (!html) return;
+
+    if (el.dataset.itemId !== itemId) el.dataset.itemId = itemId;
+    if (el.innerHTML !== html) el.innerHTML = html;
+
+    el.style.left = `${Math.round(pos.left)}px`;
+    el.style.top = `${Math.round(pos.top)}px`;
+    el.hidden = false;
+
+    requestAnimationFrame(() => {
+      if (el.hidden) return;
+      if (el.dataset.itemId !== itemId) return;
+      const rect = el.getBoundingClientRect();
+      const width = Math.max(200, Math.min(360, rect.width || 260));
+      const height = Math.max(120, Math.min(420, rect.height || 200));
+      const clamped = clampShelfPreviewPosition({ left: pos.left, top: pos.top, width, height });
+      el.style.left = `${Math.round(clamped.left)}px`;
+      el.style.top = `${Math.round(clamped.top)}px`;
+    });
   };
 
   const hideShelfPreview = () => {
-    if (!state.activeShelfPreview) return;
-    state.activeShelfPreview = null;
-    renderApp();
+    const el = document.getElementById("shelf-floating-preview");
+    if (!el) return;
+    if (el.hidden) return;
+    el.hidden = true;
+    el.dataset.itemId = "";
   };
 
   root.addEventListener(
