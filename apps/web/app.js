@@ -606,6 +606,10 @@ function openDocumentWorkspace(tradeCaseId, focusType, focusId, initialDocId) {
   }
   openWorkspaceModal("document-workspace-modal", {
     title: "Document Workspace",
+    titleHtml: renderWorkspaceTitleHtml("Document Workspace", [
+      { text: `Focus: ${formatFocusLabel(type, id)}` },
+      { text: `Case ${tc.id || "-"}` },
+    ]),
     bodyHtml: renderDocumentWorkspace(tc, { focusType: type, focusId: id, initialDocId }),
     tradeCaseId: tc.id,
   });
@@ -863,6 +867,8 @@ function renderDocumentWorkspace(tradeCase, { focusType, focusId, initialDocId }
     }
   }
 
+  const uiForTabs = ensureWorkspaceUiDefaults("document-workspace-modal", documents);
+  const tabsHtml = renderDocumentTabs(documents, { activeDocId: uiForTabs.activeDocId, viewerKey: "document" });
   const viewerHtml = renderDocumentViewer(documents, { modalId: "document-workspace-modal", viewerKey: "document" });
 
   const executionTimelineRisk = buildExecutionTimelineRisk(tc, type, id);
@@ -953,9 +959,8 @@ function renderDocumentWorkspace(tradeCase, { focusType, focusId, initialDocId }
   return `
     <div class="workspace-modal">
       <div class="workspace-topbar">
-        <div class="workspace-topbar__chips">
-          <span class="pill pill--muted">Focus: ${escapeHtml(formatFocusLabel(type, id))}</span>
-          <span class="pill pill--muted">Case ${escapeHtml(tc.id || "-")}</span>
+        <div class="workspace-topbar__tabs">
+          ${tabsHtml}
         </div>
       </div>
       <div class="workspace-layout">
@@ -7060,12 +7065,18 @@ function closeModal() {
   state.activeContextDrawer = null;
 }
 
-function openWorkspaceModal(modalId, { title, bodyHtml, tradeCaseId }) {
+function openWorkspaceModal(modalId, { title, titleHtml, bodyHtml, tradeCaseId }) {
   const modal = document.getElementById(modalId);
   if (!modal) return;
   const modalTitle = modal.querySelector(".modal__title");
   const body = modal.querySelector(".modal__body");
-  if (modalTitle) modalTitle.textContent = title || "";
+  if (modalTitle) {
+    if (typeof titleHtml === "string" && titleHtml) {
+      modalTitle.innerHTML = titleHtml;
+    } else {
+      modalTitle.textContent = title || "";
+    }
+  }
   if (body) body.innerHTML = typeof bodyHtml === "string" ? bodyHtml : "";
   // Workspace modal body is interactive; keep the currently opened tradeCase id on the modal.
   const idToSet = tradeCaseId || state.modalTradeCaseId;
@@ -7098,8 +7109,29 @@ function rerenderOpenDocumentWorkspaceBody() {
   const tc = tradeCaseId ? getTradeCaseById(tradeCaseId) : null;
   if (!tc) return;
   const ui = getWorkspaceUi(modalId);
+  const titleEl = modalEl.querySelector(".modal__title");
+  if (titleEl) {
+    titleEl.innerHTML = renderWorkspaceTitleHtml("Document Workspace", [
+      { text: `Focus: ${formatFocusLabel(ui.focusType, ui.focusId)}` },
+      { text: `Case ${tc.id || "-"}` },
+    ]);
+  }
   const body = modalEl.querySelector(".modal__body");
   if (body) body.innerHTML = renderDocumentWorkspace(tc, { focusType: ui.focusType, focusId: ui.focusId });
+}
+
+function renderWorkspaceTitleHtml(title, pills) {
+  const t = String(title || "").trim();
+  const list = Array.isArray(pills) ? pills.filter(Boolean) : [];
+  const pillHtml = list
+    .map((p) => {
+      const text = p && p.text != null ? String(p.text) : "";
+      if (!text) return "";
+      return `<span class="pill pill--muted workspace-title__pill">${escapeHtml(text)}</span>`;
+    })
+    .filter(Boolean)
+    .join("");
+  return `<div class="workspace-title"><span class="workspace-title__text">${escapeHtml(t)}</span>${pillHtml}</div>`;
 }
 
 function uniqLinkedEntities(entities) {
@@ -7183,24 +7215,6 @@ function renderDocumentViewer(documents, { modalId, viewerKey }) {
   const activeDoc = docs.find((d) => d && d.id === ui.activeDocId) || docs[0] || null;
   const activeDocId = activeDoc ? activeDoc.id : null;
 
-  const tabsHtml = `
-    <div class="document-tabs" role="tablist" aria-label="Documents">
-      ${docs
-        .map((d) => {
-          const isActive = Boolean(activeDocId && d.id === activeDocId);
-          const label = d.label || d.id;
-          const isMissing = d.status === "missing";
-          const isMismatch = d.status === "mismatch";
-          return `<button class="document-tab ${isActive ? "is-active" : ""} ${isMissing ? "is-missing" : ""} ${isMismatch ? "is-danger" : ""}" type="button" role="tab"
-            aria-selected="${isActive ? "true" : "false"}"
-            data-doc-tab="${escapeHtml(d.id)}"
-            data-workspace-viewer="${escapeHtml(viewerKey)}"
-          >${escapeHtml(label)}${isMissing ? ` <span class="pill pill--mini pill--warn">missing</span>` : ""}${isMismatch ? ` <span class="pill pill--mini pill--danger">mismatch</span>` : ""}</button>`;
-        })
-        .join("")}
-    </div>
-  `;
-
   const pageCount = activeDoc && Array.isArray(activeDoc.mockPages) ? activeDoc.mockPages.length : 1;
   const activePageIdxRaw = activeDocId ? ui.activePageByDocId[activeDocId] : 0;
   const activePageIdx = clamp(typeof activePageIdxRaw === "number" ? activePageIdxRaw : 0, 0, Math.max(0, pageCount - 1));
@@ -7212,12 +7226,33 @@ function renderDocumentViewer(documents, { modalId, viewerKey }) {
 
   const showMarkers = ui.showMarkers !== false;
 
-  let pageHtml = `<div class="paper-page"><div class="muted">No document</div></div>`;
-  let markersHtml = "";
+  const renderMarkersHtml = (markers) => {
+    const list = Array.isArray(markers) ? markers.filter(Boolean) : [];
+    if (!showMarkers || !list.length) return "";
+    return list
+      .map((m) => {
+        const kind = m && m.kind ? String(m.kind) : "note";
+        const x = typeof m?.x === "number" ? m.x : 12;
+        const y = typeof m?.y === "number" ? m.y : 12;
+        const text = m && m.text ? String(m.text) : "";
+        if (!text) return "";
+        return `<div class="paper-marker paper-marker--${escapeHtml(kind)}" style="left:${escapeHtml(String(x))}%;top:${escapeHtml(String(y))}%">${escapeHtml(text)}</div>`;
+      })
+      .filter(Boolean)
+      .join("");
+  };
+
+  let pagesHtml = `<div class="paper-page"><div class="muted">No document</div></div>`;
   if (activeDoc) {
     if (activeDoc.status === "missing") {
-      pageHtml = `
+      const missingMarkers = [
+        { kind: "warn", x: 72, y: 18, text: "⚠ PL missing" },
+        { kind: "note", x: 14, y: 66, text: "Supplier follow-up" },
+      ];
+      const overlay = renderMarkersHtml(missingMarkers);
+      pagesHtml = `
         <div class="paper-page">
+          <div class="paper-page__page-no">1 / 1</div>
           <div class="paper-page__title">PACKING LIST</div>
           <div class="paper-page__sub">Status: <span class="pill pill--mini pill--warn">Missing</span></div>
           <div class="paper-page__block">
@@ -7226,113 +7261,99 @@ function renderDocumentViewer(documents, { modalId, viewerKey }) {
               <div class="paper-annotation__body">Packing List has not been received. Customs preparation may be blocked.</div>
             </div>
           </div>
+          ${overlay ? `<div class="paper-overlay" aria-hidden="true">${overlay}</div>` : ""}
         </div>
       `;
-      const missingMarkers = [
-        { kind: "warn", x: 72, y: 18, text: "⚠ PL missing" },
-        { kind: "note", x: 14, y: 66, text: "Supplier follow-up" },
-      ];
-      markersHtml = showMarkers
-        ? missingMarkers
-            .map((m) => `<div class="paper-marker paper-marker--${escapeHtml(m.kind)}" style="left:${escapeHtml(String(m.x))}%;top:${escapeHtml(String(m.y))}%">${escapeHtml(m.text)}</div>`)
-            .join("")
-        : "";
     } else {
       const pages = Array.isArray(activeDoc.mockPages) && activeDoc.mockPages.length ? activeDoc.mockPages : [{ title: activeDoc.title || activeDoc.type, rows: [] }];
-      const p = pages[activePageIdx] || pages[0];
-      const rows = Array.isArray(p.rows) ? p.rows : [];
-      const markers = Array.isArray(p.markers) ? p.markers : [];
-      markersHtml = showMarkers
-        ? markers
-            .map((m) => {
-              const kind = m && m.kind ? String(m.kind) : "note";
-              const x = typeof m?.x === "number" ? m.x : 12;
-              const y = typeof m?.y === "number" ? m.y : 12;
-              const text = m && m.text ? String(m.text) : "";
-              return `<div class="paper-marker paper-marker--${escapeHtml(kind)}" style="left:${escapeHtml(String(x))}%;top:${escapeHtml(String(y))}%">${escapeHtml(text)}</div>`;
-            })
-            .join("")
-        : "";
-      pageHtml = `
-        <div class="paper-page">
-          <div class="paper-page__title">${escapeHtml(p.title || activeDoc.title || activeDoc.type || activeDoc.label || activeDoc.id)}</div>
-          ${p.subtitle ? `<div class="paper-page__sub">${escapeHtml(p.subtitle)}</div>` : ""}
-          <div class="paper-page__grid">
-            ${rows
-              .map((r) => {
-                const key = r && r.k != null ? String(r.k) : "";
-                const value = r && r.v != null ? String(r.v) : "";
-                const note = r && r.note ? String(r.note) : "";
-                const warn = r && r.warn ? String(r.warn) : "";
-                return `<div class="paper-row">
-                  <div class="paper-row__k">${escapeHtml(key)}</div>
-                  <div class="paper-row__v">${escapeHtml(value)}${warn ? ` <span class="pill pill--mini pill--warn">${escapeHtml(warn)}</span>` : ""}</div>
-                  ${note ? `<div class="paper-row__note">${escapeHtml(note)}</div>` : ""}
-                </div>`;
-              })
-              .join("")}
-          </div>
-          ${
-            p.annotation
-              ? `<div class="paper-annotation">
-                  <div class="paper-annotation__title">Annotation</div>
-                  <div class="paper-annotation__body">${escapeHtml(p.annotation)}</div>
-                </div>`
-              : ""
-          }
-          ${markersHtml ? `<div class="paper-overlay" aria-hidden="true">${markersHtml}</div>` : ""}
-        </div>
-      `;
+      pagesHtml = pages
+        .map((p, idx) => {
+          const rows = Array.isArray(p?.rows) ? p.rows : [];
+          const overlay = renderMarkersHtml(p?.markers);
+          const pageNo = `${idx + 1} / ${pages.length}`;
+          return `
+            <div class="paper-page">
+              <div class="paper-page__page-no">${escapeHtml(pageNo)}</div>
+              <div class="paper-page__title">${escapeHtml(p?.title || activeDoc.title || activeDoc.type || activeDoc.label || activeDoc.id)}</div>
+              ${p?.subtitle ? `<div class="paper-page__sub">${escapeHtml(p.subtitle)}</div>` : ""}
+              <div class="paper-page__grid">
+                ${rows
+                  .map((r) => {
+                    const key = r && r.k != null ? String(r.k) : "";
+                    const value = r && r.v != null ? String(r.v) : "";
+                    const note = r && r.note ? String(r.note) : "";
+                    const warn = r && r.warn ? String(r.warn) : "";
+                    return `<div class="paper-row">
+                      <div class="paper-row__k">${escapeHtml(key)}</div>
+                      <div class="paper-row__v">${escapeHtml(value)}${warn ? ` <span class="pill pill--mini pill--warn">${escapeHtml(warn)}</span>` : ""}</div>
+                      ${note ? `<div class="paper-row__note">${escapeHtml(note)}</div>` : ""}
+                    </div>`;
+                  })
+                  .join("")}
+              </div>
+              ${
+                p?.annotation
+                  ? `<div class="paper-annotation">
+                      <div class="paper-annotation__title">Annotation</div>
+                      <div class="paper-annotation__body">${escapeHtml(String(p.annotation))}</div>
+                    </div>`
+                  : ""
+              }
+              ${overlay ? `<div class="paper-overlay" aria-hidden="true">${overlay}</div>` : ""}
+            </div>
+          `;
+        })
+        .join("");
     }
   }
 
-  const thumbsHtml = `
-    <div class="page-thumbs" aria-label="Page thumbnails">
-      ${Array.from({ length: pageCount })
-        .map((_, idx) => {
-          const isActive = idx === activePageIdx;
-          return `<button class="page-thumb ${isActive ? "is-active" : ""}" type="button"
-            data-doc-thumb="${idx}"
-            data-workspace-viewer="${escapeHtml(viewerKey)}"
-            aria-label="page ${idx + 1}"
-          ><span class="page-thumb__num">${idx + 1}</span></button>`;
-        })
-        .join("")}
-    </div>
-  `;
-
   const toolsHtml = `
     <div class="document-tools" aria-label="Viewer tools">
-      <button class="btn btn--ghost btn--mini" type="button" data-doc-zoom="-10" data-workspace-viewer="${escapeHtml(viewerKey)}" aria-label="Zoom out">−</button>
+      <button class="btn btn--ghost btn--tiny" type="button" data-doc-zoom="-10" data-workspace-viewer="${escapeHtml(viewerKey)}" aria-label="Zoom out">−</button>
       <div class="document-tools__zoom">${zoom}%</div>
-      <button class="btn btn--ghost btn--mini" type="button" data-doc-zoom="10" data-workspace-viewer="${escapeHtml(viewerKey)}" aria-label="Zoom in">＋</button>
-      <button class="btn btn--ghost btn--mini" type="button" data-doc-marker-toggle="1" data-workspace-viewer="${escapeHtml(viewerKey)}" aria-label="Toggle annotations">${showMarkers ? "Annotations: ON" : "Annotations: OFF"}</button>
-    </div>
-  `;
-
-  const controlsHtml = `
-    <div class="page-controls">
-      <button class="btn btn--ghost btn--mini" type="button" data-doc-prev="1" data-workspace-viewer="${escapeHtml(viewerKey)}" ${activePageIdx <= 0 ? "disabled" : ""}>前のページ</button>
-      <div class="page-controls__count">page ${activePageIdx + 1} / ${pageCount}</div>
-      <button class="btn btn--ghost btn--mini" type="button" data-doc-next="1" data-workspace-viewer="${escapeHtml(viewerKey)}" ${activePageIdx >= pageCount - 1 ? "disabled" : ""}>次のページ</button>
+      <button class="btn btn--ghost btn--tiny" type="button" data-doc-zoom="10" data-workspace-viewer="${escapeHtml(viewerKey)}" aria-label="Zoom in">＋</button>
+      <button class="btn btn--ghost btn--tiny" type="button" data-doc-marker-toggle="1" data-workspace-viewer="${escapeHtml(viewerKey)}" aria-label="Toggle annotations">Annotations</button>
     </div>
   `;
 
   return `
     <div class="document-viewer" data-doc-viewer="${escapeHtml(viewerKey)}">
       <div class="document-viewer__top">
-        ${tabsHtml}
         ${toolsHtml}
       </div>
       <div class="document-stage" role="region" aria-label="Document stage">
-        ${thumbsHtml}
         <div class="paper-viewport">
           <div class="paper-document" role="document" aria-label="Document page" style="--paper-zoom:${escapeHtml(String(zoom / 100))}">
-            ${pageHtml}
+            ${pagesHtml}
           </div>
         </div>
       </div>
-      ${controlsHtml}
+    </div>
+  `;
+}
+
+function renderDocumentTabs(documents, { activeDocId, viewerKey } = {}) {
+  const docs = Array.isArray(documents) ? documents.filter(Boolean) : [];
+  const activeId = activeDocId ? String(activeDocId) : "";
+  const vKey = String(viewerKey || "").trim() || "document";
+  return `
+    <div class="document-tabs document-tabs--workspace" role="tablist" aria-label="Documents">
+      ${docs
+        .map((d) => {
+          const docId = String(d?.id || "");
+          if (!docId) return "";
+          const isActive = Boolean(activeId && docId === activeId);
+          const label = d?.label || docId;
+          const isMissing = d?.status === "missing";
+          const isMismatch = d?.status === "mismatch";
+          return `<button class="document-tab ${isActive ? "is-active" : ""} ${isMissing ? "is-missing" : ""} ${isMismatch ? "is-danger" : ""}" type="button" role="tab"
+            aria-selected="${isActive ? "true" : "false"}"
+            data-doc-tab="${escapeHtml(docId)}"
+            data-workspace-viewer="${escapeHtml(vKey)}"
+          >${escapeHtml(label)}${isMissing ? ` <span class="pill pill--mini pill--warn">missing</span>` : ""}${isMismatch ? ` <span class="pill pill--mini pill--danger">mismatch</span>` : ""}</button>`;
+        })
+        .filter(Boolean)
+        .join("")}
     </div>
   `;
 }
@@ -10190,6 +10211,15 @@ function setupWorkspaceModals() {
           ui.focusId = String(nextFocus.focusId || "-");
         }
         if (tc) {
+          if (modalId === "document-workspace-modal") {
+            const titleEl = modalEl.querySelector(".modal__title");
+            if (titleEl) {
+              titleEl.innerHTML = renderWorkspaceTitleHtml("Document Workspace", [
+                { text: `Focus: ${formatFocusLabel(ui.focusType, ui.focusId)}` },
+                { text: `Case ${tc.id || "-"}` },
+              ]);
+            }
+          }
           const body = modalEl.querySelector(".modal__body");
           if (body) body.innerHTML = renderWorkspaceBody(modalId, tc);
         }
