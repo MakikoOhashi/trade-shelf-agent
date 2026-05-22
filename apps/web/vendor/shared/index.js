@@ -1183,18 +1183,15 @@ function canonicalNormalizeSiId(siId, now = new Date()) {
         return `SI-${String(now.getFullYear())}-${String(m2[1]).padStart(3, "0")}`;
     return upper.startsWith("SI-") ? upper : "";
 }
-function canonicalNormalizeShipmentId(shp, now = new Date()) {
+function canonicalNormalizeShipmentId(shp, _now = new Date()) {
     const raw = String(shp || "").trim();
     if (!raw)
         return "";
     const upper = raw.toUpperCase().replace(/\s+/g, "");
-    const m1 = upper.match(/^SHP-(\d{4})-(\d{3,})$/);
+    const m1 = upper.match(/^SHP-(\d{4})-(\d{3})$/);
     if (m1)
         return `SHP-${m1[1]}-${m1[2]}`;
-    const m2 = upper.match(/^SHP-(\d{3,})$/);
-    if (m2)
-        return `SHP-${String(now.getFullYear())}-${String(m2[1]).padStart(3, "0")}`;
-    return upper.startsWith("SHP-") ? upper : "";
+    return "";
 }
 function canonicalUniqueUpper(values) {
     const out = [];
@@ -1215,7 +1212,7 @@ function canonicalExtractEntityIdsFromText(text) {
     const siFull = Array.from(t.matchAll(/\bSI-\d{4}-\d+\b/gi)).map((m) => canonicalNormalizeSiId(m[0], now));
     const siSimple = Array.from(t.matchAll(/\bSI[-\s]?(\d+)\b(?!-\d)/gi)).map((m) => canonicalNormalizeSiId(`SI-${m[1]}`, now));
     const siNormalized = canonicalUniqueUpper([...siFull, ...siSimple]);
-    const shipmentMatches = Array.from(t.matchAll(/SHP[-\s]?(\d{1,6})/gi)).map((m) => canonicalNormalizeShipmentId(`SHP-${m[1]}`, now));
+    const shipmentMatches = Array.from(t.matchAll(/\bSHP[-_\s]?(\d{4})[-_\s]?(\d{3})\b/gi)).map((m) => canonicalNormalizeShipmentId(`SHP-${m[1]}-${m[2]}`, now));
     const shipmentNormalized = canonicalUniqueUpper(shipmentMatches);
     const invMatches = Array.from(t.matchAll(/INV[-\s]?(\d{1,8})/gi)).map((m) => `INV-${m[1]}`.toUpperCase());
     const invNormalized = canonicalUniqueUpper(invMatches);
@@ -1397,17 +1394,14 @@ function normalizeSiId(siId, now = new Date()) {
     }
     return raw.toUpperCase();
 }
-function normalizeShipmentId(shipmentId, now = new Date()) {
+function normalizeShipmentId(shipmentId, _now = new Date()) {
     const raw = String(shipmentId || "").trim();
     if (!raw)
         return "";
-    const normalizedMatch = raw.match(/^SHP-(\d{4})-(\d+)$/i);
+    const normalizedMatch = raw.match(/^SHP-(\d{4})-(\d{3})$/i);
     if (normalizedMatch)
-        return `SHP-${normalizedMatch[1]}-${String(normalizedMatch[2]).padStart(3, "0")}`;
-    const simpleMatch = raw.match(/^SHP-(\d+)$/i);
-    if (simpleMatch)
-        return `SHP-${String(now.getFullYear())}-${String(simpleMatch[1]).padStart(3, "0")}`;
-    return raw;
+        return `SHP-${normalizedMatch[1]}-${normalizedMatch[2]}`.toUpperCase();
+    return "";
 }
 function uniqueUpper(values) {
     const arr = Array.isArray(values) ? values : [];
@@ -1432,7 +1426,7 @@ function extractEntityIdsFromText(text) {
     const siFull = Array.from(t.matchAll(/\bSI-\d{4}-\d+\b/gi)).map((m) => normalizeSiId(m[0], now));
     const siSimple = Array.from(t.matchAll(/\bSI[-\s]?(\d+)\b(?!-\d)/gi)).map((m) => normalizeSiId(`SI-${m[1]}`, now));
     const siNormalized = uniqueUpper([...siFull, ...siSimple]);
-    const shipmentMatches = Array.from(t.matchAll(/SHP[-\s]?(\d{1,6})/gi)).map((m) => normalizeShipmentId(`SHP-${m[1]}`, now));
+    const shipmentMatches = Array.from(t.matchAll(/\bSHP[-_\s]?(\d{4})[-_\s]?(\d{3})\b/gi)).map((m) => normalizeShipmentId(`SHP-${m[1]}-${m[2]}`, now));
     const shipmentNormalized = uniqueUpper(shipmentMatches);
     const invMatches = Array.from(t.matchAll(/INV[-\s]?(\d{1,8})/gi)).map((m) => `INV-${m[1]}`.toUpperCase());
     const invNormalized = uniqueUpper(invMatches);
