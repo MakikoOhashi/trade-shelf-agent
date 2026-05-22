@@ -160,6 +160,16 @@ Processor 同士は直接呼び出さない。
 - Issue Planner は internal Issue Candidate を自動作成してよい（外部送信はしない）
 - 仕入先・顧客・フォワーダーなど外部関係者への送信は Approval Handler による人間承認を必須とする
 
+## State Transition Agent
+
+State Transition Agent evaluates whether an external event or document evidence should move an internal entity from one operational state to another.
+It emits `StateTransitionCandidate`.
+A candidate is not automatically an Issue or Approval.
+
+- High confidence + no contradiction: auto-apply candidate and log activity
+- Low confidence / contradiction / high impact: convert to Issue Candidate
+- External action: requires Approval
+
 ## Processor I/O shape（最小）
 
 各 Processor は「最小の I/O shape（入力/出力）」を持つ。ここで示す shape は、Orchestrator が Processor を差し替え可能に保つための契約である。

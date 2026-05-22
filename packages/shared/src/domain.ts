@@ -947,3 +947,68 @@ export type MockIngestResult = {
   pendingClarifications?: PendingClarification[];
   matchedPendingClarification?: PendingClarification;
 };
+
+/**
+ * StateTransitionCandidate represents an internal state movement proposed by agents.
+ *
+ * It is not an Issue by itself.
+ * It is not an Approval by itself.
+ *
+ * Normal, high-confidence transitions may be auto-applied and logged.
+ * Low-confidence, contradictory, or high-impact transitions should become Issue Candidates.
+ * External actions derived from a transition still require Approval.
+ */
+export type StateTransitionEntityType =
+  | "Shipment"
+  | "SI"
+  | "Document"
+  | "TradeCase";
+
+export type StateTransitionDecision =
+  | "auto_apply"
+  | "needs_issue_candidate"
+  | "needs_human_review"
+  | "reject";
+
+export type StateTransitionEvidence = {
+  sourceType:
+    | "raw_input"
+    | "document"
+    | "email"
+    | "teams"
+    | "timeline"
+    | "incident"
+    | "entity_link";
+  sourceId: string;
+  summary: string;
+  confidence?: number;
+};
+
+export type StateTransitionRisk = {
+  type:
+    | "low_confidence"
+    | "quantity_mismatch"
+    | "date_mismatch"
+    | "missing_document"
+    | "customer_deadline_impact"
+    | "external_confirmation_required"
+    | "manual_decision_required";
+  severity: "low" | "medium" | "high" | "critical";
+  summary: string;
+};
+
+export type StateTransitionCandidate = {
+  id: string;
+  entityType: StateTransitionEntityType;
+  entityId: string;
+  fromState: string;
+  toState: string;
+  decision: StateTransitionDecision;
+  confidence: number;
+  reason: string;
+  evidence: StateTransitionEvidence[];
+  risks: StateTransitionRisk[];
+  relatedIssueCandidateIds?: string[];
+  relatedIncidentIds?: string[];
+  generatedAt: string;
+};
