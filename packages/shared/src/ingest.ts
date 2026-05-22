@@ -100,14 +100,12 @@ function normalizeSiId(siId: string, now = new Date()) {
   return raw.toUpperCase();
 }
 
-function normalizeShipmentId(shipmentId: string, now = new Date()) {
+function normalizeShipmentId(shipmentId: string, _now = new Date()) {
   const raw = String(shipmentId || "").trim();
   if (!raw) return "";
-  const normalizedMatch = raw.match(/^SHP-(\d{4})-(\d+)$/i);
-  if (normalizedMatch) return `SHP-${normalizedMatch[1]}-${String(normalizedMatch[2]).padStart(3, "0")}`;
-  const simpleMatch = raw.match(/^SHP-(\d+)$/i);
-  if (simpleMatch) return `SHP-${String(now.getFullYear())}-${String(simpleMatch[1]).padStart(3, "0")}`;
-  return raw;
+  const normalizedMatch = raw.match(/^SHP-(\d{4})-(\d{3})$/i);
+  if (normalizedMatch) return `SHP-${normalizedMatch[1]}-${normalizedMatch[2]}`.toUpperCase();
+  return "";
 }
 
 function uniqueUpper(values: string[]) {
@@ -134,7 +132,9 @@ function extractEntityIdsFromText(text: string) {
   const siSimple = Array.from(t.matchAll(/\bSI[-\s]?(\d+)\b(?!-\d)/gi)).map((m) => normalizeSiId(`SI-${m[1]}`, now));
   const siNormalized = uniqueUpper([...siFull, ...siSimple]);
 
-  const shipmentMatches = Array.from(t.matchAll(/SHP[-\s]?(\d{1,6})/gi)).map((m) => normalizeShipmentId(`SHP-${m[1]}`, now));
+  const shipmentMatches = Array.from(t.matchAll(/\bSHP[-_\s]?(\d{4})[-_\s]?(\d{3})\b/gi)).map((m) =>
+    normalizeShipmentId(`SHP-${m[1]}-${m[2]}`, now),
+  );
   const shipmentNormalized = uniqueUpper(shipmentMatches);
 
   const invMatches = Array.from(t.matchAll(/INV[-\s]?(\d{1,8})/gi)).map((m) => `INV-${m[1]}`.toUpperCase());
@@ -160,6 +160,52 @@ export function buildStateTransitionCandidates(args: {
   const now = String(args.now || "").trim() || ingestNowIso();
 
   const candidates: StateTransitionCandidate[] = [];
+
+  const hasStrongShippedLanguage = (text: string) => {
+    const t = String(text || "").toLowerCase();
+    return (
+      /\b(goods have shipped|goods shipped)\b/.test(t) ||
+      /\b(shipped|dispatched|departed|picked up)\b/.test(t) ||
+      /(出荷|発送|搬出|集荷|出発|出港|出発しました)/.test(t)
+    );
+  };
+
+  const hasUncertaintyLanguage = (text: string) => {
+    const t = String(text || "").toLowerCase();
+    return (
+      /\b(maybe|might|expected|probably|likely|estimate|estimated)\b/.test(t) ||
+      /(かも|可能性|見込み|たぶん|おそらく|予定)/.test(t)
+    );
+  };
+
+  const hasQuantityMismatchLanguage = (text: string) => {
+    const t = String(text || "").toLowerCase();
+    return /\b(quantity mismatch|qty mismatch|short|shortage)\b/.test(t) || /(数量差異|数量.*違|不足|ショート)/.test(t);
+  };
+
+  const hasDateMismatchLanguage = (text: string) => {
+    const t = String(text || "").toLowerCase();
+    return /\b(date mismatch|inconsistent date|conflicting date)\b/.test(t) || /(日付.*矛盾|日程.*矛盾|日付.*違)/.test(t);
+  };
+
+  const hasMissingDocumentLanguage = (text: string) => {
+    const t = String(text || "").toLowerCase();
+    return (
+      /\b(missing document|document missing|bl missing|invoice missing|packing list missing)\b/.test(t) ||
+      /(書類不足|書類未着|未着|未入手)/.test(t)
+    );
+  };
+
+  const hasExplicitShipmentIdInText = (text: string, shipmentId: string) => {
+    const id = String(shipmentId || "").trim();
+    if (!id) return false;
+    const t = String(text || "");
+    const escaped = id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    if (new RegExp(`\\b${escaped}\\b`, "i").test(t)) return true;
+    // Allow minor formatting variations like spaces/underscores/hyphens in "SHP-2026-009"
+    const flex = escaped.replace(/-/g, "[-_\\s]?");
+    return new RegExp(`\\b${flex}\\b`, "i").test(t);
+  };
 
   const detectTransitionSignal = (text: string) => {
     const t = String(text || "").toLowerCase();
@@ -245,14 +291,43 @@ export function buildStateTransitionCandidates(args: {
       return Math.max(0, Math.min(1, (a + b) / 2));
     };
 
-    const decide = (confidence: number, risks: StateTransitionRisk[]) => {
-      // `auto_apply` means this candidate is eligible for automatic application.
-      // Phase 6-1 does not apply it. It only emits the candidate.
-      return confidence >= 0.8 && risks.length === 0 ? ("auto_apply" as const) : ("needs_issue_candidate" as const);
-    };
-
-    const buildRisks = (confidence: number): StateTransitionRisk[] => {
+    const buildRisks = (entityLink: EntityLink | null, confidence: number, combinedText: string): StateTransitionRisk[] => {
       const risks: StateTransitionRisk[] = [];
+      if (hasUncertaintyLanguage(combinedText)) {
+        risks.push({
+          type: "low_confidence",
+          severity: "medium",
+          summary: "Update contains uncertainty language (e.g., maybe/expected), requiring human confirmation.",
+        });
+      }
+      if (entityLink && typeof entityLink.confidence === "number" && entityLink.confidence < 0.75) {
+        risks.push({
+          type: "low_confidence",
+          severity: "medium",
+          summary: "Entity link confidence is low or ambiguous.",
+        });
+      }
+      if (hasQuantityMismatchLanguage(combinedText)) {
+        risks.push({
+          type: "quantity_mismatch",
+          severity: "high",
+          summary: "Potential quantity discrepancy detected in the update text.",
+        });
+      }
+      if (hasDateMismatchLanguage(combinedText)) {
+        risks.push({
+          type: "date_mismatch",
+          severity: "high",
+          summary: "Potential date inconsistency detected in the update text.",
+        });
+      }
+      if (hasMissingDocumentLanguage(combinedText)) {
+        risks.push({
+          type: "missing_document",
+          severity: "high",
+          summary: "Update suggests missing documents; avoid auto-apply transitions.",
+        });
+      }
       if (confidence < 0.8) {
         risks.push({
           type: "low_confidence",
@@ -263,10 +338,53 @@ export function buildStateTransitionCandidates(args: {
       return risks;
     };
 
+    const decide = (confidence: number, risks: StateTransitionRisk[]) => {
+      // `auto_apply` means this candidate is eligible for automatic application.
+      // Phase 6-1 does not apply it. It only emits the candidate.
+      return confidence >= 0.8 && risks.length === 0 ? ("auto_apply" as const) : ("needs_issue_candidate" as const);
+    };
+
+    const computeConfidenceAndRisks = (entityLink: EntityLink | null, combinedText: string) => {
+      const base = scoreConfidence(entityLink);
+      const risksPre = buildRisks(entityLink, base, combinedText);
+
+      const shipmentId = entityLink && entityLink.entityType === "Shipment" ? String(entityLink.entityId || "").trim() : "";
+      const explicitShipmentId = shipmentId ? hasExplicitShipmentIdInText(combinedText, shipmentId) : false;
+
+      const isClearShippedUpdate =
+        Boolean(shipmentId) &&
+        explicitShipmentId &&
+        hasStrongShippedLanguage(combinedText) &&
+        !hasUncertaintyLanguage(combinedText) &&
+        !hasQuantityMismatchLanguage(combinedText) &&
+        !hasDateMismatchLanguage(combinedText) &&
+        !hasMissingDocumentLanguage(combinedText);
+
+      if (shipmentId && !explicitShipmentId) {
+        risksPre.push({
+          type: "low_confidence",
+          severity: "medium",
+          summary: "Shipment ID is linked, but not explicitly present in the raw input or thread summary.",
+        });
+      }
+
+      let confidence = base;
+      let risks = risksPre;
+
+      if (isClearShippedUpdate) {
+        confidence = Math.max(confidence, 0.85);
+        risks = [];
+      } else if (risks.length > 0) {
+        confidence = Math.min(confidence, 0.79);
+      }
+
+      return { confidence, risks };
+    };
+
     // Shipment-linked candidates
     for (const lnk of shipmentLinks) {
-      const confidence = scoreConfidence(lnk);
-      const risks = buildRisks(confidence);
+      const combinedText = `${rawInput.rawText}\n${thread.title}\n${thread.summary}`;
+      const { confidence, risks } = computeConfidenceAndRisks(lnk, combinedText);
       candidates.push({
         id: stateTransitionCandidateIdFromParts({
           rawInputId: rawInput.id,
@@ -288,8 +406,9 @@ export function buildStateTransitionCandidates(args: {
 
     // SI-linked candidates (minimal support)
     for (const lnk of siLinks) {
+      const combinedText = `${rawInput.rawText}\n${thread.title}\n${thread.summary}`;
       const confidence = scoreConfidence(lnk);
-      const risks = buildRisks(confidence);
+      const risks = buildRisks(lnk, confidence, combinedText);
       candidates.push({
         id: stateTransitionCandidateIdFromParts({
           rawInputId: rawInput.id,

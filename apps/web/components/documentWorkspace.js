@@ -836,14 +836,22 @@ export function createDocumentWorkspaceRenderer(deps) {
     const tc = tradeCase || null;
     const focus = String(focusId || "").trim();
 
-    const relevantCandidates = list.filter((candidate) => {
-      const entityId = String(candidate?.entityId || "").trim();
-      return (
-        (focus && entityId === focus) ||
-        entityId === String(tc?.shipmentEntity?.id || "").trim() ||
-        entityId === String(tc?.siEntity?.id || "").trim()
-      );
-    });
+    const relatedEntityIds = new Set(
+      [
+        focus,
+        tc?.id,
+        tc?.shipmentEntity?.id,
+        tc?.siEntity?.id,
+        tc?.siEntity?.siNo,
+        ...(tc?.siNumbers ?? []),
+        ...(tc?.shipmentIds ?? []),
+      ]
+        .filter(Boolean)
+        .map((v) => String(v).trim())
+        .filter(Boolean),
+    );
+
+    const relevantCandidates = list.filter((candidate) => relatedEntityIds.has(String(candidate?.entityId || "").trim()));
     if (!relevantCandidates.length) return "";
 
     const cardsHtml = relevantCandidates.map(renderStateTransitionCandidateCard).join("");
