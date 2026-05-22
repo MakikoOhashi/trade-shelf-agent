@@ -745,7 +745,124 @@ export function createDocumentWorkspaceRenderer(deps) {
   `;
   }
 
-  function renderDocumentWorkspace(tradeCase, { focusType, focusId, initialDocId } = {}) {
+  function renderStateTransitionCandidateCard(candidate) {
+    const c = candidate && typeof candidate === "object" ? candidate : {};
+    const id = String(c.id || "").trim();
+    const entityType = String(c.entityType || "").trim();
+    const entityId = String(c.entityId || "").trim();
+    const fromState = String(c.fromState || "").trim();
+    const toState = String(c.toState || "").trim();
+    const decision = String(c.decision || "").trim();
+    const confidence = typeof c.confidence === "number" ? c.confidence : null;
+    const reason = String(c.reason || "").trim();
+
+    const evidence = Array.isArray(c.evidence) ? c.evidence.filter(Boolean) : [];
+    const risks = Array.isArray(c.risks) ? c.risks.filter(Boolean) : [];
+
+    const eligibleForManualApply = decision === "auto_apply" || decision === "needs_human_review";
+    const appliedIds = Array.isArray(state?.appliedStateTransitionCandidateIds) ? state.appliedStateTransitionCandidateIds.filter(Boolean).map(String) : [];
+    const alreadyApplied = !!(id && appliedIds.includes(id));
+
+    const decisionLabel = (() => {
+      if (decision === "auto_apply") return "自動適用候補（未適用）";
+      if (decision === "needs_issue_candidate") return "要Issue化（未作成）";
+      if (decision === "needs_human_review") return "要人手確認";
+      if (decision === "reject") return "却下候補";
+      return decision || "-";
+    })();
+
+    const confidenceLabel = confidence == null ? "-" : `${Math.round(confidence * 100)}%`;
+
+    const evidenceSummary = (() => {
+      if (!evidence.length) return "";
+      const summaries = evidence
+        .map((e) => String(e?.summary || "").trim())
+        .filter(Boolean)
+        .slice(0, 3);
+      if (!summaries.length) return "";
+      const suffix = evidence.length > summaries.length ? `（他${evidence.length - summaries.length}件）` : "";
+      return `${summaries.join(" / ")}${suffix}`;
+    })();
+
+    const risksSummary = (() => {
+      if (!risks.length) return "";
+      const summaries = risks
+        .map((r) => String(r?.summary || "").trim())
+        .filter(Boolean)
+        .slice(0, 2);
+      if (!summaries.length) return "";
+      const suffix = risks.length > summaries.length ? `（他${risks.length - summaries.length}件）` : "";
+      return `${summaries.join(" / ")}${suffix}`;
+    })();
+
+    return `
+      <article class="state-transition-candidate-card" aria-label="State transition candidate">
+        <div class="state-transition-candidate-card__meta">
+          <span class="mono">${escapeHtml(id || "-")}</span>
+          <span class="muted">·</span>
+          <span>${escapeHtml(entityType || "-")}</span>
+          <span class="muted">·</span>
+          <span class="mono">${escapeHtml(entityId || "-")}</span>
+        </div>
+        <div class="state-transition-candidate-card__title">${escapeHtml(fromState || "-")} → ${escapeHtml(toState || "-")}</div>
+        <div class="state-transition-candidate-card__chips">
+          <span class="pill pill--mini pill--muted">decision: ${escapeHtml(decisionLabel)}</span>
+          <span class="pill pill--mini pill--muted">confidence: <span class="mono">${escapeHtml(confidenceLabel)}</span></span>
+        </div>
+        ${reason ? `<div class="state-transition-candidate-card__body">${escapeHtml(reason)}</div>` : ""}
+        ${evidenceSummary ? `<div class="state-transition-candidate-card__sub"><span class="muted">evidence</span>: ${escapeHtml(evidenceSummary)}</div>` : ""}
+        ${risksSummary ? `<div class="state-transition-candidate-card__sub"><span class="muted">risks</span>: ${escapeHtml(risksSummary)}</div>` : ""}
+        ${
+          eligibleForManualApply
+            ? `<div class="state-transition-candidate-card__actions">
+                <button
+                  type="button"
+                  class="btn btn--ghost"
+                  data-apply-state-transition-candidate="${escapeHtml(id)}"
+                  ${alreadyApplied ? "disabled" : ""}
+                >
+                  ${alreadyApplied ? "反映済み" : "この状態に反映"}
+                </button>
+              </div>`
+            : ""
+        }
+      </article>
+    `;
+  }
+
+  function renderStateTransitionCandidates({ candidates, tradeCase, focusId }) {
+    const list = Array.isArray(candidates) ? candidates.filter(Boolean) : [];
+    if (!list.length) return "";
+    const tc = tradeCase || null;
+    const focus = String(focusId || "").trim();
+
+    const relevantCandidates = list.filter((candidate) => {
+      const entityId = String(candidate?.entityId || "").trim();
+      return (
+        (focus && entityId === focus) ||
+        entityId === String(tc?.shipmentEntity?.id || "").trim() ||
+        entityId === String(tc?.siEntity?.id || "").trim()
+      );
+    });
+    if (!relevantCandidates.length) return "";
+
+    const cardsHtml = relevantCandidates.map(renderStateTransitionCandidateCard).join("");
+    if (!cardsHtml) return "";
+
+    return `
+      <div class="workspace-section">
+        <div class="workspace-section__title">
+          <span>状態遷移候補</span>
+          <span class="muted"> / State Transition Candidate</span>
+        </div>
+        <div class="state-transition-candidates__list">
+          ${cardsHtml}
+        </div>
+      </div>
+    `;
+  }
+
+  function renderDocumentWorkspace(tradeCase, { focusType, focusId, initialDocId, stateTransitionCandidates } = {}) {
     const tc = tradeCase || null;
     if (!tc) return "";
 
@@ -797,6 +914,11 @@ export function createDocumentWorkspaceRenderer(deps) {
     const relationshipTreeHtml = renderWorkspaceRelationshipTree(relationshipTree);
     const operationalSummary = buildWorkspaceOperationalSummary(tc, type, id);
     const operationalSummaryHtml = renderWorkspaceOperationalSummaryHtml(operationalSummary);
+    const stateTransitionCandidatesHtml = renderStateTransitionCandidates({
+      candidates: stateTransitionCandidates,
+      tradeCase: tc,
+      focusId: id,
+    });
 
     const resolveFocusMemoEntity = (focusType, focusId) => {
       const ft = normalizeFocusType(focusType);
@@ -894,6 +1016,7 @@ export function createDocumentWorkspaceRenderer(deps) {
             <div class="workspace-section__title">${escapeHtml(docCheckResults?.title || "AIの書類チェック")}</div>
             ${docCheckHtml}
           </div>
+          ${stateTransitionCandidatesHtml}
           <div class="workspace-section">
             <div class="workspace-section__title human-memo__header">
               <span>人間メモ</span>
@@ -921,4 +1044,3 @@ export function createDocumentWorkspaceRenderer(deps) {
     renderDocumentWorkspace,
   };
 }
-

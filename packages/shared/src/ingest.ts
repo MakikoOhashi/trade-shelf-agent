@@ -11,9 +11,12 @@ import type {
   MockIngestResult,
   OperationalThread,
   RawInput,
+  StateTransitionCandidate,
+  StateTransitionEvidence,
+  StateTransitionRisk,
 } from "./domain";
 import type { ActivityEventType } from "./domain";
-import { matchPendingClarification, resolveCanonicalIssueLink } from "./canonical";
+import { matchPendingClarification, resolveCanonicalIssueLink, stateTransitionCandidateIdFromParts } from "./canonical";
 
 function ingestStableId(prefix: string, seed: string) {
   let h = 2166136261;
@@ -48,6 +51,7 @@ const ACTIVITY_SEQUENCE: Record<ActivityEventType, number> = {
   reminder_planned: 17,
   classified: 20,
   entity_linked: 30,
+  state_transition_candidate_detected: 33,
   intake_resolved: 35,
   action_planned: 40,
   approval_required: 50,
@@ -141,6 +145,179 @@ function extractEntityIdsFromText(text: string) {
 
 function pendingClarificationId(seed: string) {
   return `CLR-${ingestHash8(String(seed || ""))}`.toUpperCase();
+}
+
+export function buildStateTransitionCandidates(args: {
+  rawInput: RawInput;
+  threads: OperationalThread[];
+  entityLinks: EntityLink[];
+  intakeResolutions: IntakeResolution[];
+  now?: string;
+}): StateTransitionCandidate[] {
+  const rawInput = args.rawInput;
+  const threads = Array.isArray(args.threads) ? args.threads.filter(Boolean) : [];
+  const links = Array.isArray(args.entityLinks) ? args.entityLinks.filter(Boolean) : [];
+  const now = String(args.now || "").trim() || ingestNowIso();
+
+  const candidates: StateTransitionCandidate[] = [];
+
+  const detectTransitionSignal = (text: string) => {
+    const t = String(text || "").toLowerCase();
+
+    // Minimal heuristic rules for Phase 6-1.
+    if (/\b(shipped|dispatched|departed|picked up)\b/.test(t) || /(出荷|発送|搬出|集荷|出発|出港|出発しました)/.test(t)) {
+      return {
+        fromState: "shippingPending",
+        toState: "inTransit",
+        reason: "External update indicates goods have departed / been shipped.",
+      };
+    }
+    if (/\b(booking confirmed|booked)\b/.test(t) || /(booking確定|ブッキング確定|ブッキング取れました)/.test(t)) {
+      return {
+        fromState: "bookingRequested",
+        toState: "shippingPending",
+        reason: "Booking has been confirmed.",
+      };
+    }
+    if (/\b(bl issued|bill of lading issued)\b/.test(t) || /(B\/L発行|BL発行|B\/L issued)/i.test(t)) {
+      return {
+        fromState: "shippingPending",
+        toState: "shipped",
+        reason: "BL has been issued, indicating shipment has progressed to shipped.",
+      };
+    }
+    if (/\b(arrival notice)\b/.test(t) || /(到着案内|Arrival Notice)/i.test(t)) {
+      return {
+        fromState: "inTransit",
+        toState: "arrived",
+        reason: "Arrival notice received.",
+      };
+    }
+    if (/\b(customs cleared)\b/.test(t) || /(通関済|通関完了|輸入通関完了)/.test(t)) {
+      return {
+        fromState: "arrived",
+        toState: "customsCleared",
+        reason: "Customs clearance confirmed.",
+      };
+    }
+    if (/\b(warehouse received|received at warehouse)\b/.test(t) || /(倉庫入庫|入庫しました|倉庫受領)/.test(t)) {
+      return {
+        fromState: "customsCleared",
+        toState: "delivered",
+        reason: "Warehouse receipt confirmed.",
+      };
+    }
+
+    return null;
+  };
+
+  for (const thread of threads) {
+    const signal = detectTransitionSignal(`${thread.title}\n${thread.summary}\n${rawInput.rawText}`);
+    if (!signal) continue;
+
+    const threadLinks = links.filter((l) => String(l.threadId || "") === String(thread.id || ""));
+    const shipmentLinks = threadLinks.filter((l) => l.entityType === "Shipment" && String(l.entityId || "").trim());
+    const siLinks = threadLinks.filter((l) => l.entityType === "SI" && String(l.entityId || "").trim());
+
+    const makeEvidence = (entityLink: EntityLink | null): StateTransitionEvidence[] => {
+      const evidence: StateTransitionEvidence[] = [
+        {
+          sourceType: "raw_input",
+          sourceId: rawInput.id,
+          summary: String(thread.summary || "").trim(),
+          confidence: typeof thread.confidence === "number" ? thread.confidence : undefined,
+        },
+      ];
+      if (entityLink) {
+        evidence.push({
+          sourceType: "entity_link",
+          sourceId: entityLink.entityId,
+          summary: `Linked to ${entityLink.entityType}`,
+          confidence: typeof entityLink.confidence === "number" ? entityLink.confidence : undefined,
+        });
+      }
+      return evidence;
+    };
+
+    const scoreConfidence = (entityLink: EntityLink | null) => {
+      const a = typeof thread.confidence === "number" ? thread.confidence : 0.5;
+      const b = entityLink && typeof entityLink.confidence === "number" ? entityLink.confidence : 0.5;
+      return Math.max(0, Math.min(1, (a + b) / 2));
+    };
+
+    const decide = (confidence: number, risks: StateTransitionRisk[]) => {
+      // `auto_apply` means this candidate is eligible for automatic application.
+      // Phase 6-1 does not apply it. It only emits the candidate.
+      return confidence >= 0.8 && risks.length === 0 ? ("auto_apply" as const) : ("needs_issue_candidate" as const);
+    };
+
+    const buildRisks = (confidence: number): StateTransitionRisk[] => {
+      const risks: StateTransitionRisk[] = [];
+      if (confidence < 0.8) {
+        risks.push({
+          type: "low_confidence",
+          severity: "medium",
+          summary: "Transition signal confidence is below auto-apply threshold.",
+        });
+      }
+      return risks;
+    };
+
+    // Shipment-linked candidates
+    for (const lnk of shipmentLinks) {
+      const confidence = scoreConfidence(lnk);
+      const risks = buildRisks(confidence);
+      candidates.push({
+        id: stateTransitionCandidateIdFromParts({
+          rawInputId: rawInput.id,
+          entityId: lnk.entityId,
+          toState: signal.toState,
+        }),
+        entityType: "Shipment",
+        entityId: lnk.entityId,
+        fromState: signal.fromState,
+        toState: signal.toState,
+        decision: decide(confidence, risks),
+        confidence,
+        reason: signal.reason,
+        evidence: makeEvidence(lnk),
+        risks,
+        generatedAt: now,
+      });
+    }
+
+    // SI-linked candidates (minimal support)
+    for (const lnk of siLinks) {
+      const confidence = scoreConfidence(lnk);
+      const risks = buildRisks(confidence);
+      candidates.push({
+        id: stateTransitionCandidateIdFromParts({
+          rawInputId: rawInput.id,
+          entityId: lnk.entityId,
+          toState: signal.toState,
+        }),
+        entityType: "SI",
+        entityId: lnk.entityId,
+        fromState: signal.fromState,
+        toState: signal.toState,
+        decision: decide(confidence, risks),
+        confidence,
+        reason: signal.reason,
+        evidence: makeEvidence(lnk),
+        risks,
+        generatedAt: now,
+      });
+    }
+  }
+
+  // Deduplicate by id (deterministic generation may collide across multiple threads)
+  const seen = new Set<string>();
+  return candidates.filter((c) => {
+    const id = String(c?.id || "");
+    if (!id || seen.has(id)) return false;
+    seen.add(id);
+    return true;
+  });
 }
 
 export function resolveContext(input: RawInput, options: IngestBuildOptions = {}): ContextResolution {
@@ -675,6 +852,7 @@ export function buildActivityEvents(
   links: EntityLink[],
   occurredAt: string,
   options: IngestBuildOptions = {},
+  stateTransitionCandidates: StateTransitionCandidate[] = [],
 ): ActivityEvent[] {
   const events: ActivityEvent[] = [];
   const actor = options.sourceLabel || "AI";
@@ -740,6 +918,33 @@ export function buildActivityEvents(
     status: "ok",
     actor,
   });
+
+  const stCandidates = Array.isArray(stateTransitionCandidates) ? stateTransitionCandidates.filter(Boolean) : [];
+  for (const candidate of stCandidates) {
+    const entityType = String(candidate?.entityType || "").trim();
+    const entityId = String(candidate?.entityId || "").trim();
+    const fromState = String(candidate?.fromState || "").trim();
+    const toState = String(candidate?.toState || "").trim();
+
+    const linked = (() => {
+      // Reuse existing links if we can map candidate entityType into EntityType.
+      if (entityType !== "Shipment" && entityType !== "SI" && entityType !== "Document") return undefined;
+      return links.filter((l) => l?.entityType === entityType && String(l?.entityId || "").trim() === entityId);
+    })();
+
+    events.push({
+      id: `ACT-${String(candidate?.id || "").trim() || ingestStableId("ACT", `${input.id}:${entityType}:${entityId}:${toState}:stc_detected`)}`,
+      type: "state_transition_candidate_detected",
+      occurredAt,
+      sequence: ACTIVITY_SEQUENCE.state_transition_candidate_detected,
+      title: "状態遷移候補を検出",
+      description: `AI detected state transition candidate: ${entityType} ${entityId} ${fromState} → ${toState}（未適用）`,
+      sourceRawInputId: input.id,
+      linkedEntities: linked && linked.length ? linked : undefined,
+      status: "ok",
+      actor: "ai_agent",
+    });
+  }
 
   for (const thread of threads) {
     const shouldRequireApproval =
@@ -1227,6 +1432,7 @@ export function runIngestPipeline(input: RawInput, options: IngestPipelineOption
       ],
       links: [],
       intakeResolutions: [intakeResolution],
+      stateTransitionCandidates: [],
       activityEvents: events,
       issueMutations: [],
       actionPlans: [actionPlan],
@@ -1258,6 +1464,13 @@ export function runIngestPipeline(input: RawInput, options: IngestPipelineOption
 
   const links = dedupeEntityLinks([...baseLinks, ...injectedLinks]);
   const intakeResolutions = resolveIntake(effectiveInput, normalizedThreads, links, options);
+  const stateTransitionCandidates = buildStateTransitionCandidates({
+    rawInput: effectiveInput,
+    threads: normalizedThreads,
+    entityLinks: links,
+    intakeResolutions,
+    now: pipelineOccurredAt,
+  });
   const issueMutations = buildIssueMutations(effectiveInput, normalizedThreads, links, intakeResolutions, options);
   const actionPlansBase = planNextActions(effectiveInput, normalizedThreads, links, intakeResolutions, issueMutations, options);
 
@@ -1271,8 +1484,6 @@ export function runIngestPipeline(input: RawInput, options: IngestPipelineOption
     const status = isApprovalRequired(thread) ? "pending_approval" : "planned";
     return { ...ap, status };
   });
-
-  const activityEventsBase = buildActivityEvents(effectiveInput, normalizedThreads, links, pipelineOccurredAt, options);
 
   const intakeResolvedEvents: ActivityEvent[] = intakeResolutions.map((r) => {
     const threadId = String(r?.threadId || "").trim();
@@ -1303,6 +1514,14 @@ export function runIngestPipeline(input: RawInput, options: IngestPipelineOption
   });
 
   const drafts = buildDraftDocuments(effectiveInput, normalizedThreads, links, intakeResolutions, issueMutations, actionPlans, options);
+  const activityEventsBase = buildActivityEvents(
+    effectiveInput,
+    normalizedThreads,
+    links,
+    pipelineOccurredAt,
+    options,
+    stateTransitionCandidates,
+  );
 
   const clarificationMatchedEvent: ActivityEvent[] =
     matchedPendingClarification && resolvedLabel
@@ -1379,6 +1598,7 @@ export function runIngestPipeline(input: RawInput, options: IngestPipelineOption
     threads: normalizedThreads,
     links,
     intakeResolutions,
+    stateTransitionCandidates,
     activityEvents: [
       ...clarificationMatchedEvent,
       ...activityEventsBase,

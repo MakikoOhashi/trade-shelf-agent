@@ -80,6 +80,11 @@ const state = {
    */
   latestIngestResult: null,
   /**
+   * StateTransitionCandidate の手動反映済みID（manual apply）
+   * @type {string[]}
+   */
+  appliedStateTransitionCandidateIds: [],
+  /**
    * Latest ingest result mode ("mock" | "llm")
    * @type {"mock" | "llm" | null}
    */
@@ -451,7 +456,12 @@ function openDocumentWorkspace(tradeCaseId, focusType, focusId, initialDocId) {
       { text: `Focus: ${formatFocusLabel(type, id)}` },
       { text: `Case ${tc.id || "-"}` },
     ]),
-    bodyHtml: documentWorkspaceRenderer.renderDocumentWorkspace(tc, { focusType: type, focusId: id, initialDocId }),
+    bodyHtml: documentWorkspaceRenderer.renderDocumentWorkspace(tc, {
+      focusType: type,
+      focusId: id,
+      initialDocId,
+      stateTransitionCandidates: state.latestIngestResult?.stateTransitionCandidates ?? [],
+    }),
     tradeCaseId: tc.id,
   });
 
@@ -1314,6 +1324,116 @@ function recordApprovalActivityEventDetailed(actionPlanId, { action, nextStatus,
   }
 }
 
+function applyStateTransitionCandidate(candidateId, { tradeCaseId } = {}) {
+  const candId = String(candidateId || "").trim();
+  if (!candId) return { ok: false, error: "missing_candidate_id" };
+
+  const candidates = Array.isArray(state.latestIngestResult?.stateTransitionCandidates)
+    ? state.latestIngestResult.stateTransitionCandidates.filter(Boolean)
+    : [];
+  const candidate = candidates.find((c) => String(c?.id || "").trim() === candId) || null;
+  if (!candidate) return { ok: false, error: "candidate_not_found" };
+
+  if (!Array.isArray(state.appliedStateTransitionCandidateIds)) state.appliedStateTransitionCandidateIds = [];
+  const appliedIds = state.appliedStateTransitionCandidateIds.map(String);
+  if (appliedIds.includes(candId)) return { ok: false, error: "already_applied" };
+
+  const entityType = String(candidate?.entityType || "").trim();
+  const entityId = String(candidate?.entityId || "").trim();
+  const fromState = String(candidate?.fromState || "").trim();
+  const toState = String(candidate?.toState || "").trim();
+
+  const now = nowIso();
+  const pushActivity = ({ statusKey, title, summary, details }) => {
+    const item = {
+      id: `act:${shortId()}`,
+      type: "manualStateTransition",
+      source: "human",
+      title: String(title || "Manual state transition").trim() || "Manual state transition",
+      actor: "human",
+      occurredAt: now,
+      at: formatLocalTime(now),
+      summary: String(summary || "").trim(),
+      details: Array.isArray(details) ? details.filter(Boolean).map(String) : [],
+      statusKey: String(statusKey || "processing"),
+      linked: entityId ? [{ kind: entityType.toLowerCase(), label: entityId }] : [],
+      links: [],
+    };
+    state.activityFeedItems = prependUniqueById(state.activityFeedItems, [item]);
+  };
+
+  if (entityType !== "Shipment") {
+    pushActivity({
+      statusKey: "warning",
+      title: "状態遷移候補: 未対応",
+      summary: `Unsupported entityType: ${entityType || "-"}`,
+      details: [candId],
+    });
+    log(`State transition candidate not applied: unsupported entityType ${entityType || "-"}.`);
+    return { ok: false, error: "unsupported_entity_type" };
+  }
+
+  const tc = (() => {
+    if (tradeCaseId) return getTradeCaseById(tradeCaseId);
+    const list = Array.isArray(state.tradeCases) ? state.tradeCases.filter(Boolean) : [];
+    const byShipment = list.find((c) => String(c?.shipmentEntity?.id || "").trim() === entityId) || null;
+    if (byShipment) return byShipment;
+    const bySi = list.find((c) => String(c?.siEntity?.id || "").trim() === entityId) || null;
+    return bySi || null;
+  })();
+
+  if (!tc) {
+    pushActivity({
+      statusKey: "failed",
+      title: "状態遷移候補: 反映失敗",
+      summary: `TradeCase not found for Shipment ${entityId || "-"}`,
+      details: [candId],
+    });
+    log("State transition candidate not applied: TradeCase not found.");
+    return { ok: false, error: "trade_case_not_found" };
+  }
+
+  const currentState = String(tc?.shipmentEntity?.shipmentState || tc?.shipmentState || "").trim();
+  if (fromState && currentState && currentState !== fromState) {
+    pushActivity({
+      statusKey: "warning",
+      title: "状態遷移候補: 反映せず（conflict）",
+      summary: `State transition candidate not applied: current state no longer matches fromState.`,
+      details: [
+        `Shipment ${entityId || "-"}`,
+        `candidate: ${fromState || "-"} → ${toState || "-"}`,
+        `current: ${currentState || "-"}`,
+        candId,
+      ],
+    });
+    log("State transition candidate not applied: current state no longer matches candidate fromState.");
+    return { ok: false, error: "conflict" };
+  }
+
+  if (tc.shipmentEntity) tc.shipmentEntity.shipmentState = toState;
+  tc.shipmentState = toState;
+
+  recordTimelineEvent(tc.id, {
+    id: shortId(),
+    at: now,
+    type: "statusChanged",
+    message: `状態遷移を反映: Shipment ${entityId || "-"} ${fromState || "-"} → ${toState || "-"}`,
+    shipmentState: toState || undefined,
+    actor: "human",
+  });
+
+  pushActivity({
+    statusKey: "success",
+    title: "状態遷移を手動反映",
+    summary: `Manual state transition applied: Shipment ${entityId || "-"} ${fromState || "-"} → ${toState || "-"} from ${candId}.`,
+    details: [String(candidate?.reason || "").trim()].filter(Boolean),
+  });
+  log(`Manual state transition applied: Shipment ${entityId || "-"} ${fromState || "-"} → ${toState || "-"} from ${candId}.`);
+
+  state.appliedStateTransitionCandidateIds = [...state.appliedStateTransitionCandidateIds, candId];
+  return { ok: true };
+}
+
 function applyApprovalAction(idLike, action, { description } = {}) {
   const actionPlanId = findActionPlanIdFromAnyId(idLike);
   if (!actionPlanId) return { ok: false, error: "ActionPlan が見つかりませんでした。" };
@@ -1521,6 +1641,8 @@ function activityEventToFeedItem(ev) {
         return "AI分類";
       case "entity_linked":
         return "関連紐付け";
+      case "state_transition_candidate_detected":
+        return "状態遷移候補を検出";
       case "intake_resolved":
         return "Intake判定";
       case "action_planned":
@@ -4382,7 +4504,13 @@ function rerenderOpenDocumentWorkspaceBody() {
     ]);
   }
   const body = modalEl.querySelector(".modal__body");
-  if (body) body.innerHTML = documentWorkspaceRenderer.renderDocumentWorkspace(tc, { focusType: ui.focusType, focusId: ui.focusId });
+  if (body) {
+    body.innerHTML = documentWorkspaceRenderer.renderDocumentWorkspace(tc, {
+      focusType: ui.focusType,
+      focusId: ui.focusId,
+      stateTransitionCandidates: state.latestIngestResult?.stateTransitionCandidates ?? [],
+    });
+  }
 }
 
 function renderWorkspaceTitleHtml(title, pills) {
@@ -7223,7 +7351,11 @@ function setupWorkspaceModals() {
   const renderWorkspaceBody = (modalId, tc) => {
     if (modalId === "document-workspace-modal") {
       const ui = getWorkspaceUi(modalId);
-      return documentWorkspaceRenderer.renderDocumentWorkspace(tc, { focusType: ui.focusType, focusId: ui.focusId });
+      return documentWorkspaceRenderer.renderDocumentWorkspace(tc, {
+        focusType: ui.focusType,
+        focusId: ui.focusId,
+        stateTransitionCandidates: state.latestIngestResult?.stateTransitionCandidates ?? [],
+      });
     }
     if (modalId === "shipment-workspace-modal") return renderShipmentWorkspace(tc);
     return renderSiWorkspace(tc);
@@ -7315,6 +7447,18 @@ function setupWorkspaceModals() {
         e.stopPropagation();
         state.activeTimelineScenarioModal = null;
         rerenderWorkspaceBody();
+        return;
+      }
+
+      const applyStateTransitionEl = target.closest && target.closest("[data-apply-state-transition-candidate]");
+      if (applyStateTransitionEl && modalId === "document-workspace-modal") {
+        e.preventDefault();
+        e.stopPropagation();
+        const candidateId = applyStateTransitionEl.getAttribute("data-apply-state-transition-candidate") || "";
+        const tradeCaseId = modalEl.getAttribute("data-tradecase-id") || "";
+        applyStateTransitionCandidate(candidateId, { tradeCaseId });
+        renderApp();
+        rerenderOpenDocumentWorkspaceBody();
         return;
       }
 

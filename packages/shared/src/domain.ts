@@ -822,6 +822,7 @@ export type ActivityEventType =
   | "reminder_planned"
   | "classified"
   | "entity_linked"
+  | "state_transition_candidate_detected"
   | "intake_resolved"
   | "issue_updated"
   | "action_planned"
@@ -940,6 +941,7 @@ export type MockIngestResult = {
   threads: OperationalThread[];
   links: EntityLink[];
   intakeResolutions?: IntakeResolution[];
+  stateTransitionCandidates: StateTransitionCandidate[];
   activityEvents: ActivityEvent[];
   issueMutations: IssueMutation[];
   actionPlans?: ActionPlan[];

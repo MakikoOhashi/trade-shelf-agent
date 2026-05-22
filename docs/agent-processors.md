@@ -166,6 +166,13 @@ State Transition Agent evaluates whether an external event or document evidence 
 It emits `StateTransitionCandidate`.
 A candidate is not automatically an Issue or Approval.
 
+Phase 6-1 (current implementation):
+- State Transition Agent emits `StateTransitionCandidate[]` as `stateTransitionCandidates` in `runIngestPipeline` result
+- Candidates are not applied yet
+- Candidates are not shown in UI yet
+- Candidates are not converted to IssueMutation yet
+
+Future intent (not implemented yet):
 - High confidence + no contradiction: auto-apply candidate and log activity
 - Low confidence / contradiction / high impact: convert to Issue Candidate
 - External action: requires Approval

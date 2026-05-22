@@ -195,6 +195,18 @@ export function issueCandidateIdFromThreadId(threadId: string) {
   return `ISS-CAND-${h}`;
 }
 
+export function stateTransitionCandidateIdFromParts(parts: {
+  rawInputId: string;
+  entityId: string;
+  toState: string;
+}): string {
+  const rawInputId = String(parts?.rawInputId || "").trim();
+  const entityId = String(parts?.entityId || "").trim();
+  const toState = String(parts?.toState || "").trim();
+  const h = stableHash8(`stc:${rawInputId}:${entityId}:${toState}`).slice(-8);
+  return `STC-${h}`;
+}
+
 export function resolveCanonicalIssueLink(
   thread: OperationalThread,
   threadLinks: EntityLink[] = [],
