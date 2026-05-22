@@ -150,24 +150,9 @@ function clamp01(n) {
   return n;
 }
 
-function normalizeShipmentId(shipmentId, now = new Date()) {
-  const raw = String(shipmentId || "").trim();
-  if (!raw) return "";
-
-  const normalizedMatch = raw.match(/^SHP-(\d{4})-(\d+)$/i);
-  if (normalizedMatch) {
-    const year = normalizedMatch[1];
-    const num = normalizedMatch[2];
-    return `SHP-${year}-${num.padStart(3, "0")}`;
-  }
-
-  const simpleMatch = raw.match(/^SHP-(\d+)$/i);
-  if (simpleMatch) {
-    const year = String(now.getFullYear());
-    return `SHP-${year}-${String(simpleMatch[1]).padStart(3, "0")}`;
-  }
-
-  return raw;
+function normalizeShipmentId(shipmentId, _now = new Date()) {
+  const normalized = String(shipmentId ?? "").trim().toUpperCase();
+  return /^SHP-\d{4}-\d{3}$/.test(normalized) ? normalized : null;
 }
 
 function uniqueStrings(values) {
@@ -193,7 +178,9 @@ function linkEntitiesByRules(rawText, threads) {
   const siFull = Array.from(text.matchAll(/\bSI-\d{4}-\d+\b/gi)).map((m) => normalizeSiId(m[0], now));
   const siSimple = Array.from(text.matchAll(/\bSI[-\s]?(\d+)\b(?!-\d)/gi)).map((m) => normalizeSiId(`SI-${m[1]}`, now));
   const siIds = [...siFull, ...siSimple];
-  const shipmentIds = Array.from(text.matchAll(/SHP[-\s]?(\d{1,6})/gi)).map((m) => normalizeShipmentId(`SHP-${m[1]}`, now));
+  const shipmentIds = Array.from(text.matchAll(/SHP-\d{4}-\d{3}/gi))
+    .map((m) => normalizeShipmentId(m[0], now))
+    .filter(Boolean);
   const invoiceIds = Array.from(text.matchAll(/INV[-\s]?(\d{1,8})/gi)).map((m) => `INV-${m[1]}`.toUpperCase());
 
   const documentTypes = [];
@@ -236,9 +223,9 @@ function normalizeThreads(parsed, rawText) {
   const raw = String(rawText || "");
   const rawHasPL = /\bPL\b/i.test(raw);
   const rawSiIds = Array.from(raw.matchAll(/\bSI-\d{4}-\d+\b|\bSI[-\s]?\d+\b(?!-\d)/gi)).map((m) => normalizeSiId(m[0], now));
-  const rawShipmentIds = Array.from(raw.matchAll(/\bSHP-(\d{1,6})\b/gi)).map((m) =>
-    normalizeShipmentId(m[0], now),
-  );
+  const rawShipmentIds = Array.from(raw.matchAll(/\bSHP-\d{4}-\d{3}\b/gi))
+    .map((m) => normalizeShipmentId(m[0], now))
+    .filter(Boolean);
 
   return threads.map((t, index) => {
     const id =
@@ -259,9 +246,9 @@ function normalizeThreads(parsed, rawText) {
     const siIds = toStringArray(extracted.siIds).map((v) =>
       normalizeSiId(v, now),
     );
-    const shipmentIds = toStringArray(extracted.shipmentIds).map((v) =>
-      normalizeShipmentId(v, now),
-    );
+    const shipmentIds = toStringArray(extracted.shipmentIds)
+      .map((v) => normalizeShipmentId(v, now))
+      .filter(Boolean);
     const invoiceIds = toStringArray(extracted.invoiceIds);
     const supplierNames = toStringArray(extracted.supplierNames);
     const documentTypes = toStringArray(extracted.documentTypes);

@@ -454,6 +454,17 @@ export function resolveContext(input: RawInput, options: IngestBuildOptions = {}
   const hasDocType = /\bPL\b|\bINV\b|\bBL\b|Packing\s*List|Invoice|B\/L/i.test(text) || /PLまだ|PL\s*未着/i.test(text);
   const hasSupplier = /\bACME\b/i.test(text);
   const hasPronounOnly = /(これ|あれ|それ|例の件|例の)/.test(text);
+  const hasStrongStateUpdateSignal = (() => {
+    const t = text.toLowerCase();
+    return (
+      /\b(goods have shipped|goods shipped)\b/.test(t) ||
+      /\b(shipped|dispatched|departed|picked up)\b/.test(t) ||
+      /\b(booking confirmed|booked)\b/.test(t) ||
+      /\b(bl issued|bill of lading issued)\b/.test(t) ||
+      /\b(arrival notice)\b/.test(t) ||
+      /(出荷|発送|搬出|集荷|出発|出港|出発しました|ブッキング確定|booking確定|到着案内)/.test(text)
+    );
+  })();
 
   const id = ingestStableId("CTX", `${input.id}:${rawText}`);
   const now = ingestNowIso();
@@ -477,6 +488,25 @@ export function resolveContext(input: RawInput, options: IngestBuildOptions = {}
       ],
       reason: "対象Entityを推定できるため、後続Processorへ進めます。",
       confidence: 0.9,
+    } satisfies ContextResolution;
+  }
+
+  // If we detect a strong shipment/state update signal but we cannot identify the target,
+  // treat it as missing context so a follow-up (e.g. "this was SHP-2026-009") can be merged
+  // via PendingClarification matching.
+  if (hasStrongStateUpdateSignal) {
+    return {
+      ...base,
+      status: "missing_context",
+      missingFields: ["SI or Shipment"],
+      clarificationQuestion: "どのSIまたはShipmentの更新でしょうか？対象を教えてください。",
+      waitingState: "awaiting_clarification_reply",
+      reminder: {
+        followUpAt: addHoursIso(now, 4),
+        message: "対象SIまたはShipmentが未回答です。確認してください。",
+      },
+      reason: "出荷/状態更新のシグナルはあるが対象が特定できないため",
+      confidence: 0.8,
     } satisfies ContextResolution;
   }
 
@@ -1400,6 +1430,13 @@ export function runIngestPipeline(input: RawInput, options: IngestPipelineOption
     return updated;
   })();
 
+  // If this run is a follow-up reply that resolves a pending clarification by identifying
+  // the target entity (e.g. "That was SHP-2026-009"), we want to:
+  // - keep any StateTransitionCandidate detection
+  // - mark the pending clarification as matched
+  // - avoid generating *new* approvals / reply drafts / approval-center items
+  const isClarificationResolvedByReply = Boolean(matchedPendingClarification && resolvedLabel);
+
   if (contextResolution.status !== "resolved_enough") {
     const threadId = `${input.id}-ctx-001`;
 
@@ -1582,7 +1619,18 @@ export function runIngestPipeline(input: RawInput, options: IngestPipelineOption
   })();
 
   const links = dedupeEntityLinks([...baseLinks, ...injectedLinks]);
-  const intakeResolutions = resolveIntake(effectiveInput, normalizedThreads, links, options);
+  let intakeResolutions = resolveIntake(effectiveInput, normalizedThreads, links, options);
+  if (isClarificationResolvedByReply) {
+    intakeResolutions = intakeResolutions.map((r) => ({
+      ...r,
+      status: "informational_only",
+      shouldCreateIssue: false,
+      missingFields: undefined,
+      clarificationQuestion: undefined,
+      statusAnswer: undefined,
+      reason: "補足返信で対象が特定できたため、確認待ちを解消しました。",
+    }));
+  }
   const stateTransitionCandidates = buildStateTransitionCandidates({
     rawInput: effectiveInput,
     threads: normalizedThreads,
@@ -1590,19 +1638,25 @@ export function runIngestPipeline(input: RawInput, options: IngestPipelineOption
     intakeResolutions,
     now: pipelineOccurredAt,
   });
-  const issueMutations = buildIssueMutations(effectiveInput, normalizedThreads, links, intakeResolutions, options);
-  const actionPlansBase = planNextActions(effectiveInput, normalizedThreads, links, intakeResolutions, issueMutations, options);
+  const issueMutations = isClarificationResolvedByReply
+    ? []
+    : buildIssueMutations(effectiveInput, normalizedThreads, links, intakeResolutions, options);
+  const actionPlansBase = isClarificationResolvedByReply
+    ? []
+    : planNextActions(effectiveInput, normalizedThreads, links, intakeResolutions, issueMutations, options);
 
   const approvalPolicy = options.approvalPolicy ?? "low_confidence";
   const isApprovalRequired = (thread: OperationalThread) =>
     approvalPolicy === "all" ? true : approvalPolicy === "low_confidence" ? thread.confidence < 0.7 : false;
 
-  const actionPlans: ActionPlan[] = actionPlansBase.map((ap) => {
-    const thread = normalizedThreads.find((t) => t.id === ap.threadId);
-    if (!thread) return ap;
-    const status = isApprovalRequired(thread) ? "pending_approval" : "planned";
-    return { ...ap, status };
-  });
+  const actionPlans: ActionPlan[] = isClarificationResolvedByReply
+    ? []
+    : actionPlansBase.map((ap) => {
+        const thread = normalizedThreads.find((t) => t.id === ap.threadId);
+        if (!thread) return ap;
+        const status = isApprovalRequired(thread) ? "pending_approval" : "planned";
+        return { ...ap, status };
+      });
 
   const intakeResolvedEvents: ActivityEvent[] = intakeResolutions.map((r) => {
     const threadId = String(r?.threadId || "").trim();
@@ -1632,15 +1686,34 @@ export function runIngestPipeline(input: RawInput, options: IngestPipelineOption
     } satisfies ActivityEvent;
   });
 
-  const drafts = buildDraftDocuments(effectiveInput, normalizedThreads, links, intakeResolutions, issueMutations, actionPlans, options);
+  const drafts = isClarificationResolvedByReply
+    ? []
+    : buildDraftDocuments(effectiveInput, normalizedThreads, links, intakeResolutions, issueMutations, actionPlans, options);
   const activityEventsBase = buildActivityEvents(
     effectiveInput,
     normalizedThreads,
     links,
     pipelineOccurredAt,
-    options,
+    isClarificationResolvedByReply ? { ...options, approvalPolicy: "none" } : options,
     stateTransitionCandidates,
   );
+
+  const contextResolvedEvent: ActivityEvent[] =
+    matchedPendingClarification && resolvedLabel
+      ? [
+          {
+            id: ingestStableId("ACT", `${input.id}:${matchedPendingClarification.id}:context_resolved`),
+            type: "context_resolved",
+            occurredAt: pipelineOccurredAt,
+            sequence: ACTIVITY_SEQUENCE.context_resolved,
+            title: "補足で対象を特定",
+            description: `Pending clarification (${matchedPendingClarification.id}) を補足返信で解決しました。`,
+            sourceRawInputId: input.id,
+            status: "ok",
+            actor,
+          },
+        ]
+      : [];
 
   const clarificationMatchedEvent: ActivityEvent[] =
     matchedPendingClarification && resolvedLabel
@@ -1719,6 +1792,7 @@ export function runIngestPipeline(input: RawInput, options: IngestPipelineOption
     intakeResolutions,
     stateTransitionCandidates,
     activityEvents: [
+      ...contextResolvedEvent,
       ...clarificationMatchedEvent,
       ...activityEventsBase,
       ...intakeResolvedEvents,

@@ -1900,8 +1900,10 @@ function computeConversationThreadsFromRawRequests(rawRequests) {
 
     const shouldClearAwaitingClarification = Boolean(pendingId && hasResolvedSi && hasResolvedIssueLink && reflectedToApprovals);
 
+    // When a pending clarification gets matched by a follow-up reply, the "確認待ち" loop is effectively resolved.
+    // We intentionally treat it as resolved so it disappears from the pre-issue inbox.
     const status = normalizeConversationStatusKey(
-      matchedId ? "matched" : pendingId && !shouldClearAwaitingClarification ? "awaiting_clarification" : "reflected_to_approvals",
+      matchedId ? "resolved" : pendingId && !shouldClearAwaitingClarification ? "awaiting_clarification" : "reflected_to_approvals",
     );
 
     const threadTitles = uniq(
@@ -8494,8 +8496,20 @@ function setupNewTop() {
             }
             const muts = Array.isArray(result?.issueMutations) ? result.issueMutations.filter(Boolean) : [];
             const plans = Array.isArray(result?.actionPlans) ? result.actionPlans.filter(Boolean) : [];
-            const count = muts.length || plans.length || 0;
+            const events = Array.isArray(result?.activityEvents) ? result.activityEvents.filter(Boolean) : [];
+            const hasApprovalItems = Boolean(
+              muts.length ||
+                plans.length ||
+                events.some((ev) => ev && String(ev.type || "") === "approval_required"),
+            );
             const label = state.classifyMode === "llm" ? "AI分類" : "モック";
+            if (!hasApprovalItems) {
+              if (result?.matchedPendingClarification?.id) return `(${label}) 補足情報を反映しました。`;
+              if (Array.isArray(result?.stateTransitionCandidates) && result.stateTransitionCandidates.length)
+                return `(${label}) 状態遷移候補を検出しました。`;
+              return `(${label}) 解析結果を更新しました。`;
+            }
+            const count = muts.length || plans.length || 0;
             return `(${label}) 承認センターに反映しました${count ? `（${count}件）` : ""}。`;
           })();
 
@@ -8521,6 +8535,14 @@ function setupNewTop() {
               };
             });
 
+              const muts = Array.isArray(result?.issueMutations) ? result.issueMutations.filter(Boolean) : [];
+              const plans = Array.isArray(result?.actionPlans) ? result.actionPlans.filter(Boolean) : [];
+              const events = Array.isArray(result?.activityEvents) ? result.activityEvents.filter(Boolean) : [];
+              const hasApprovalItems = Boolean(
+                muts.length ||
+                  plans.length ||
+                  events.some((ev) => ev && String(ev.type || "") === "approval_required"),
+              );
 	            const item = {
 	              id: `raw-${shortId()}`,
 	              source: "teams",
@@ -8534,13 +8556,21 @@ function setupNewTop() {
 	                return pcs[0] && pcs[0].id ? String(pcs[0].id) : "";
 	              })(),
 	              matchedPendingClarificationId: result?.matchedPendingClarification?.id ? String(result.matchedPendingClarification.id) : "",
-	              reflectedToApprovals: true,
+	              reflectedToApprovals: hasApprovalItems,
 	              messages: [],
 	            };
 	            item.conversationThreadId = resolveConversationThreadIdForRawRequest(item);
 	            const ctx = result?.contextResolution || null;
 	            const q = ctx && ctx.clarificationQuestion ? String(ctx.clarificationQuestion).trim() : "";
-	            const aiText = ctx && String(ctx.status || "") !== "resolved_enough" && q ? q : "承認センターに反映しました。";
+	            const aiText = (() => {
+                if (ctx && String(ctx.status || "") !== "resolved_enough" && q) return q;
+                if (!hasApprovalItems) {
+                  if (result?.matchedPendingClarification?.id) return "補足情報を反映しました。";
+                  if (Array.isArray(result?.stateTransitionCandidates) && result.stateTransitionCandidates.length) return "状態遷移候補を検出しました。";
+                  return "解析結果を更新しました。";
+                }
+                return "承認センターに反映しました。";
+              })();
 	            appendConversationMessagesWithSequence(item, [
 	              { role: "human", text: rawText, createdAt: at },
 	              { role: "ai", text: aiText, createdAt: at },
