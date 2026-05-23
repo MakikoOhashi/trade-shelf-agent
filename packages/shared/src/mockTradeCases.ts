@@ -1,9 +1,11 @@
 import type { TradeCase } from "./domain";
 
-export const mockTradeCases: TradeCase[] = [
-  {
-    id: "TC-2026-0001",
-    title: "【輸入】SI 1000pcs 指図済み / INV 400pcs のみ発行（数量差異）",
+// Shelf redesign: "Book = shipment slice" mock.
+// - Planned/unshipped slice uses shipmentEntity.id starting with "PLN-"
+// - Partial shipments (分納) are represented as multiple TradeCase rows sharing the same SI.
+const baseTc20260001: TradeCase = {
+  id: "TC-2026-0001-BASE",
+  title: "【輸入】SI 1000pcs 指図済み / INV 400pcs のみ発行（数量差異）",
     tradeType: "import",
     siNumbers: ["SI-2026-001"],
     invoiceNumbers: [
@@ -37,7 +39,7 @@ export const mockTradeCases: TradeCase[] = [
       id: "SIE-2026-001",
       siNo: "SI-2026-001",
       requestedDeliveryDate: "2026-05-15",
-      relatedShipmentIds: ["SHP-2026-009"],
+      relatedShipmentIds: ["SHP-2026-009", "SHP-2026-012"],
       relatedInvoiceNos: ["INV-1122", "INV-1240"],
       salesOwners: ["営業A", "営業B"],
     },
@@ -603,6 +605,51 @@ export const mockTradeCases: TradeCase[] = [
     createdAt: "2026-04-18T08:55:00.000Z",
     supplierBehaviorHints: ["frequentPartialInvoice", "slowReply"],
     marginRiskHints: ["quantityShortage"],
+};
+
+export const mockTradeCases: TradeCase[] = [
+  // 未出荷 (planned slice)
+  {
+    ...baseTc20260001,
+    id: "TC-2026-0001",
+    shipmentRefs: [],
+    shipmentEntity: { id: "PLN-SI-2026-001", shipmentState: "notArranged" },
+    shipmentState: "notArranged",
+    updatedAt: "2026-05-07T01:30:00.000Z",
+  },
+  // 分納1: 洋上
+  {
+    ...baseTc20260001,
+    id: "TC-2026-0001-S1",
+    shipmentRefs: ["SHP-2026-009"],
+    shipmentEntity: {
+      id: "SHP-2026-009",
+      blNo: "BL-SZX-7781",
+      bookingNo: "BK-88201",
+      containerNo: "TCLU-998877",
+      supplierInvoices: ["INV-1122"],
+      eta: "2026-05-12",
+      shipmentState: "inTransit",
+    },
+    shipmentState: "inTransit",
+    updatedAt: "2026-05-09T01:30:00.000Z",
+  },
+  // 分納2: 出荷指図
+  {
+    ...baseTc20260001,
+    id: "TC-2026-0001-S2",
+    shipmentRefs: ["SHP-2026-012"],
+    shipmentEntity: {
+      id: "SHP-2026-012",
+      blNo: "BL-SZX-7781",
+      bookingNo: "BK-88255",
+      containerNo: "TCLU-224466",
+      supplierInvoices: ["INV-1240"],
+      eta: "2026-05-20",
+      shipmentState: "shippingPending",
+    },
+    shipmentState: "shippingPending",
+    updatedAt: "2026-05-08T01:30:00.000Z",
   },
   {
     id: "TC-2026-0002",

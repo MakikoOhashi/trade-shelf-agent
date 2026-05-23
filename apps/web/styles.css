@@ -5427,12 +5427,32 @@ body {
 }
 
 #app .shelf-book__title {
+  display: block;
+}
+
+#app .shelf-book__spine {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+#app .shelf-book__spine-line {
   font-weight: 900;
   font-size: 12px;
   letter-spacing: 0.3px;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
   writing-mode: vertical-rl;
   text-orientation: mixed;
+  max-height: 150px;
+  overflow: hidden;
+}
+
+#app .shelf-book__spine-line--sub {
+  font-weight: 800;
+  font-size: 10px;
+  opacity: 0.82;
 }
 
 #app .shelf-book__sub {

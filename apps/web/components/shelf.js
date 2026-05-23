@@ -68,20 +68,46 @@ function createShelfRenderer({
   resolveIssueLabelForTradeCase,
   getMockEvidenceArchiveItems,
 }) {
+  // NOTE: Shelf rendering is migrating to "shipment slice is canonical".
+  // The "SI / Shipments" toggle is kept for now but will be removed once the UI fully converges.
+  const resolveShipmentSequence = (tc) => {
+    const siNo = String(tc?.siEntity?.siNo || "").trim();
+    const shId = String(tc?.shipmentEntity?.id || "").trim();
+    if (!siNo || !shId) return null;
+    if (shId.startsWith("PLN-")) return null;
+
+    const siblings = shipments
+      .filter((x) => String(x?.siEntity?.siNo || "").trim() === siNo)
+      .map((x) => String(x?.shipmentEntity?.id || "").trim())
+      .filter((id) => id && !id.startsWith("PLN-"))
+      .sort((a, b) => a.localeCompare(b));
+
+    const idx = siblings.indexOf(shId);
+    return idx === -1 ? null : idx + 1;
+  };
+
+  const buildBookSpineLabels = (tc) => {
+    const siNo = String(tc?.siEntity?.siNo || "-");
+    const shId = String(tc?.shipmentEntity?.id || "").trim();
+    const seq = resolveShipmentSequence(tc);
+    const hasRealShipment = Boolean(shId) && !shId.startsWith("PLN-");
+    const siLabel = hasRealShipment && seq ? `${siNo}（分納${seq}）` : siNo;
+    const shipmentLabel = hasRealShipment ? shId : "";
+    return { siLabel, shipmentLabel, shipmentSequence: seq };
+  };
+
   const renderShelfCard = (viewType, tc, opts = {}) => {
-    const isShipment = viewType === "shipments";
     const sh = tc && tc.shipmentEntity ? tc.shipmentEntity : null;
     const si = tc && tc.siEntity ? tc.siEntity : null;
 
-    const idText = isShipment ? String(sh?.id || "Planned Shipment") : String(si?.siNo || "-");
+    const { siLabel, shipmentLabel } = buildBookSpineLabels(tc);
+    const idText = shipmentLabel ? `${siLabel} / ${shipmentLabel}` : siLabel;
 
     const salesCommitments = Array.isArray(tc?.decisionContext?.salesCommitments) ? tc.decisionContext.salesCommitments : [];
-    const partyName = isShipment
-      ? String(tc?.supplier?.name || "Supplier")
-      : String(salesCommitments[0]?.customerName || tc?.customer?.name || tc?.supplier?.name || "Customer");
+    const partyName = String(salesCommitments[0]?.customerName || tc?.customer?.name || tc?.supplier?.name || "Customer");
 
-    const dueYmd = isShipment ? String(sh?.eta || "") : String(si?.requestedDeliveryDate || "");
-    const dueLabel = isShipment ? (dueYmd ? `ETA ${dueYmd}` : "ETA未定") : dueYmd ? `delivery ${dueYmd}` : "delivery未定";
+    const dueYmd = String(sh?.eta || si?.requestedDeliveryDate || "");
+    const dueLabel = sh?.eta ? `ETA ${dueYmd}` : dueYmd ? `delivery ${dueYmd}` : "delivery未定";
 
     const blockers = deriveBlockerLabels(tc);
     const blockerCount = blockers.length;
@@ -104,9 +130,9 @@ function createShelfRenderer({
       .filter(Boolean)
       .join(" ");
 
-    const openAttr = isShipment ? `data-open-shipment="${escapeHtml(tc.id)}"` : `data-open-si="${escapeHtml(tc.id)}"`;
-    const focusType = isShipment ? "shipment" : "si";
-    const focusId = isShipment ? String(sh?.id || "").trim() : String(si?.siNo || "").trim();
+    const openAttr = `data-open-shipment="${escapeHtml(tc.id)}"`;
+    const focusType = "shipment";
+    const focusId = String(sh?.id || "").trim();
     const workspaceAttrs = `data-open-document-workspace="${escapeHtml(tc.id)}" data-focus-type="${escapeHtml(
       focusType,
     )}" data-focus-id="${escapeHtml(focusId || "-")}" data-initial-doc-id="${escapeHtml(focusType)}"`;
@@ -127,20 +153,18 @@ function createShelfRenderer({
   };
 
   const renderShelfBook = (viewType, tc) => {
-    const isShipment = viewType === "shipments";
     const sh = tc && tc.shipmentEntity ? tc.shipmentEntity : null;
     const si = tc && tc.siEntity ? tc.siEntity : null;
 
     const previewId = String(tc?.id || "").trim();
-    const idText = isShipment ? String(sh?.id || "-") : String(si?.siNo || "-");
+    const { siLabel, shipmentLabel } = buildBookSpineLabels(tc);
+    const idText = shipmentLabel ? `${siLabel} / ${shipmentLabel}` : siLabel;
 
     const salesCommitments = Array.isArray(tc?.decisionContext?.salesCommitments) ? tc.decisionContext.salesCommitments : [];
-    const partyName = isShipment
-      ? String(tc?.supplier?.name || "Supplier")
-      : String(salesCommitments[0]?.customerName || tc?.customer?.name || tc?.supplier?.name || "Customer");
+    const partyName = String(salesCommitments[0]?.customerName || tc?.customer?.name || tc?.supplier?.name || "Customer");
 
-    const dueYmd = isShipment ? String(sh?.eta || "") : String(si?.requestedDeliveryDate || "");
-    const dueLabel = isShipment ? (dueYmd ? `ETA ${dueYmd}` : "ETA未定") : dueYmd ? `delivery ${dueYmd}` : "delivery未定";
+    const dueYmd = String(sh?.eta || si?.requestedDeliveryDate || "");
+    const dueLabel = sh?.eta ? (dueYmd ? `ETA ${dueYmd}` : "ETA未定") : dueYmd ? `delivery ${dueYmd}` : "delivery未定";
 
     const blockers = deriveBlockerLabels(tc);
     const blockerCount = blockers.length;
@@ -151,35 +175,15 @@ function createShelfRenderer({
       return s === "warehouseReceived" || s === "completed";
     };
 
-    const stageId = (() => {
-      if (isShipment) return shelfStageIdFromShipmentState(sh?.shipmentState);
-      const relIds = Array.isArray(si?.relatedShipmentIds) ? si.relatedShipmentIds.filter(Boolean) : [];
-      if (!relIds.length) return SHELF_STAGE_IDS.INSTRUCTION;
-      let best = SHELF_STAGE_IDS.INSTRUCTION;
-      for (const id of relIds) {
-        const shTc = shipments.find((x) => x?.shipmentEntity?.id === id);
-        const sid = shelfStageIdFromShipmentState(shTc?.shipmentEntity?.shipmentState);
-        if (getShelfStageOrder(sid) < getShelfStageOrder(best)) best = sid;
-      }
-      return best;
-    })();
-
-    const completed =
-      (isShipment && isCompletedShipmentState(sh?.shipmentState)) ||
-      (!isShipment &&
-        Array.isArray(si?.relatedShipmentIds) &&
-        si.relatedShipmentIds.length > 0 &&
-        si.relatedShipmentIds.every((id) => {
-          const shTc = shipments.find((x) => x?.shipmentEntity?.id === id);
-          return isCompletedShipmentState(shTc?.shipmentEntity?.shipmentState);
-        }));
+    const stageId = shelfStageIdFromShipmentState(sh?.shipmentState);
+    const completed = isCompletedShipmentState(sh?.shipmentState);
 
     const riskClass = overdue ? "is-overdue" : blockerCount > 0 ? "is-blocker" : completed ? "is-completed" : "is-normal";
 
     const issueLabel = resolveIssueLabelForTradeCase(tc);
 
-    const focusType = isShipment ? "shipment" : "si";
-    const focusId = isShipment ? String(sh?.id || "").trim() : String(si?.siNo || "").trim();
+    const focusType = "shipment";
+    const focusId = String(sh?.id || "").trim();
     const workspaceAttrs = `data-open-document-workspace="${escapeHtml(tc.id)}" data-focus-type="${escapeHtml(
       focusType,
     )}" data-focus-id="${escapeHtml(focusId || "-")}" data-initial-doc-id="${escapeHtml(focusType)}"`;
@@ -206,16 +210,20 @@ function createShelfRenderer({
       html: `<button class="shelf-book ${riskClass}" type="button" ${workspaceAttrs} data-shelf-preview-id="${escapeHtml(
         previewId,
       )}" aria-label="${escapeHtml(idText)}">
-        <span class="shelf-book__title">${escapeHtml(idText)}</span>
+        <span class="shelf-book__title">
+          <span class="shelf-book__spine">
+            <span class="shelf-book__spine-line">${escapeHtml(siLabel)}</span>
+            ${shipmentLabel ? `<span class="shelf-book__spine-line shelf-book__spine-line--sub">${escapeHtml(shipmentLabel)}</span>` : ""}
+          </span>
+        </span>
         <span class="shelf-book__sub">${escapeHtml(partyName)}</span>
       </button>`,
     };
   };
 
   const renderTradeBookshelf = (viewType) => {
-    const isShipment = viewType === "shipments";
     const items = shipments
-      .filter((tc) => (isShipment ? !!tc?.shipmentEntity : !!tc?.siEntity))
+      .filter((tc) => !!tc?.shipmentEntity)
       .map((tc) => renderShelfBook(viewType, tc));
 
     const nextPreviewPayloadById = {};
@@ -228,10 +236,7 @@ function createShelfRenderer({
 
     const timestampMs = (tc) => {
       const sh = tc && tc.shipmentEntity ? tc.shipmentEntity : null;
-      const si = tc && tc.siEntity ? tc.siEntity : null;
-      const updatedAt = isShipment ? sh?.updatedAt : si?.updatedAt;
-      const createdAt = isShipment ? sh?.createdAt : si?.createdAt;
-      const best = String(updatedAt || createdAt || "");
+      const best = String(sh?.updatedAt || sh?.createdAt || tc?.updatedAt || tc?.createdAt || "");
       const t = Date.parse(best);
       return Number.isFinite(t) ? t : 0;
     };
@@ -267,7 +272,8 @@ function createShelfRenderer({
       </section>`;
     }).join("");
 
-    return `<div class="trade-bookshelf" aria-label="${isShipment ? "Shipments Bookshelf" : "SI Bookshelf"}">
+    void viewType;
+    return `<div class="trade-bookshelf" aria-label="Shipments Slice Bookshelf">
       ${stageSections}
     </div>`;
   };
