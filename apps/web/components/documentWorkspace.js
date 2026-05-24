@@ -833,7 +833,7 @@ export function createDocumentWorkspaceRenderer(deps) {
   `;
   }
 
-  function renderStateTransitionCandidateCard(candidate) {
+  function renderStateTransitionCandidateCard(candidate, tradeCase) {
     const c = candidate && typeof candidate === "object" ? candidate : {};
     const id = String(c.id || "").trim();
     const entityType = String(c.entityType || "").trim();
@@ -849,7 +849,18 @@ export function createDocumentWorkspaceRenderer(deps) {
 
     const eligibleForManualApply = decision === "auto_apply" || decision === "needs_human_review";
     const appliedIds = Array.isArray(state?.appliedStateTransitionCandidateIds) ? state.appliedStateTransitionCandidateIds.filter(Boolean).map(String) : [];
-    const alreadyApplied = !!(id && appliedIds.includes(id));
+    const alreadyAppliedById = !!(id && appliedIds.includes(id));
+
+    const currentState = (() => {
+      const tc = tradeCase || null;
+      if (!tc) return "";
+      if (entityType !== "Shipment") return "";
+      const shipmentId = String(tc?.shipmentEntity?.id || "").trim();
+      if (!shipmentId || shipmentId !== entityId) return "";
+      return String(tc?.shipmentEntity?.shipmentState || tc?.shipmentState || "").trim();
+    })();
+    const alreadyAppliedByState = !!(currentState && toState && currentState === toState);
+    const alreadyApplied = alreadyAppliedById || alreadyAppliedByState;
 
     const decisionLabel = (() => {
       if (decision === "auto_apply") return "自動適用候補（未適用）";
@@ -883,6 +894,12 @@ export function createDocumentWorkspaceRenderer(deps) {
       return `${summaries.join(" / ")}${suffix}`;
     })();
 
+    const buttonLabel = (() => {
+      if (!alreadyApplied) return "この状態に反映";
+      if (alreadyAppliedByState && !alreadyAppliedById) return "既にこの状態です";
+      return "反映済み";
+    })();
+
     return `
       <article class="state-transition-candidate-card" aria-label="State transition candidate">
         <div class="state-transition-candidate-card__meta">
@@ -909,7 +926,7 @@ export function createDocumentWorkspaceRenderer(deps) {
                   data-apply-state-transition-candidate="${escapeHtml(id)}"
                   ${alreadyApplied ? "disabled" : ""}
                 >
-                  ${alreadyApplied ? "反映済み" : "この状態に反映"}
+                  ${escapeHtml(buttonLabel)}
                 </button>
               </div>`
             : ""
@@ -942,7 +959,7 @@ export function createDocumentWorkspaceRenderer(deps) {
     const relevantCandidates = list.filter((candidate) => relatedEntityIds.has(String(candidate?.entityId || "").trim()));
     if (!relevantCandidates.length) return "";
 
-    const cardsHtml = relevantCandidates.map(renderStateTransitionCandidateCard).join("");
+    const cardsHtml = relevantCandidates.map((c) => renderStateTransitionCandidateCard(c, tc)).join("");
     if (!cardsHtml) return "";
 
     return `

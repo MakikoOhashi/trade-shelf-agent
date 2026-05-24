@@ -1338,7 +1338,40 @@ function applyStateTransitionCandidate(candidateId, { tradeCaseId } = {}) {
   const toState = String(candidate?.toState || "").trim();
 
   const now = nowIso();
+  const isRecentDuplicateActivity = ({ statusKey, needleId } = {}) => {
+    const items = Array.isArray(state.activityFeedItems) ? state.activityFeedItems.filter(Boolean) : [];
+    if (!items.length) return false;
+    const nowMs = Date.parse(now);
+    if (!Number.isFinite(nowMs)) return false;
+
+    for (let i = 0; i < Math.min(items.length, 30); i += 1) {
+      const it = items[i];
+      if (!it || String(it.type || "") !== "manualStateTransition") continue;
+      if (statusKey && String(it.statusKey || "") !== String(statusKey)) continue;
+      const occurredAt = String(it.occurredAt || "").trim();
+      const atMs = Date.parse(occurredAt);
+      if (!Number.isFinite(atMs)) continue;
+      if (Math.abs(nowMs - atMs) > 3000) continue;
+      const details = Array.isArray(it.details) ? it.details.filter(Boolean).map(String) : [];
+      if (needleId && !details.includes(String(needleId))) continue;
+      return true;
+    }
+    return false;
+  };
+
   const pushActivity = ({ statusKey, title, summary, details }) => {
+    if (isRecentDuplicateActivity({ statusKey, needleId: candId })) return;
+    const detailLines = (() => {
+      const base = Array.isArray(details) ? details.filter(Boolean).map(String) : [];
+      const withId = candId ? [...base, candId] : base;
+      const uniq = [];
+      for (const line of withId) {
+        if (!line) continue;
+        if (uniq.includes(line)) continue;
+        uniq.push(line);
+      }
+      return uniq;
+    })();
     const item = {
       id: `act:${shortId()}`,
       type: "manualStateTransition",
@@ -1348,7 +1381,7 @@ function applyStateTransitionCandidate(candidateId, { tradeCaseId } = {}) {
       occurredAt: now,
       at: formatLocalTime(now),
       summary: String(summary || "").trim(),
-      details: Array.isArray(details) ? details.filter(Boolean).map(String) : [],
+      details: detailLines,
       statusKey: String(statusKey || "processing"),
       linked: entityId ? [{ kind: entityType.toLowerCase(), label: entityId }] : [],
       links: [],
@@ -1388,6 +1421,10 @@ function applyStateTransitionCandidate(candidateId, { tradeCaseId } = {}) {
   }
 
   const currentState = String(tc?.shipmentEntity?.shipmentState || tc?.shipmentState || "").trim();
+  if (toState && currentState && currentState === toState) {
+    // Already applied (by state), do not treat as conflict and do not duplicate activity logs.
+    return { ok: false, error: "already_applied" };
+  }
   if (fromState && currentState && currentState !== fromState) {
     pushActivity({
       statusKey: "warning",
