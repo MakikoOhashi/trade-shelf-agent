@@ -252,10 +252,6 @@ body {
   gap: 12px;
 }
 
-#app .shelf-view-switch {
-  flex: 0 0 auto;
-}
-
 #app .shelf-toolbar .evidence-search {
   flex: 1 1 auto;
   min-width: 280px;

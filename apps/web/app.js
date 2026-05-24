@@ -182,11 +182,6 @@ const state = {
    */
   activityFilterKey: "all",
   /**
-   * Shelf view mode toggle state
-   * @type {"si" | "shipments"}
-   */
-  shelfViewMode: "si",
-  /**
    * Resolution Decision Tree の branch 選択状態（branch.value）
    * @type {string | null}
    */
@@ -8709,14 +8704,6 @@ function setupNewTop() {
       const threadId = reqActionEl.getAttribute("data-req-thread") || "";
       if (reqActionEl.classList && reqActionEl.classList.contains("is-disabled")) return;
       handleRequestsAction({ action, threadId });
-      return;
-    }
-
-    const shelfViewEl = target.closest && target.closest("[data-shelf-view]");
-    if (shelfViewEl) {
-      const nextMode = shelfViewEl.getAttribute("data-shelf-view") || "si";
-      state.shelfViewMode = nextMode === "shipments" ? "shipments" : "si";
-      renderApp();
       return;
     }
 

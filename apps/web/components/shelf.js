@@ -68,8 +68,6 @@ function createShelfRenderer({
   resolveIssueLabelForTradeCase,
   getMockEvidenceArchiveItems,
 }) {
-  // NOTE: Shelf rendering is migrating to "shipment slice is canonical".
-  // The "SI / Shipments" toggle is kept for now but will be removed once the UI fully converges.
   const resolveShipmentSequence = (tc) => {
     const siNo = String(tc?.siEntity?.siNo || "").trim();
     const shId = String(tc?.shipmentEntity?.id || "").trim();
@@ -363,16 +361,6 @@ function createShelfRenderer({
   };
 
   const renderShelf = () => {
-    const mode = state.shelfViewMode === "shipments" ? "shipments" : "si";
-    const toggleHtml = `<div class="nt-seg shelf-view-switch" role="tablist" aria-label="Shelf view mode">
-      <button class="nt-seg__btn ${mode === "si" ? "is-active" : ""}" type="button" data-shelf-view="si" role="tab" aria-selected="${
-        mode === "si" ? "true" : "false"
-      }">SI（出荷指図）でみる</button>
-      <button class="nt-seg__btn ${mode === "shipments" ? "is-active" : ""}" type="button" data-shelf-view="shipments" role="tab" aria-selected="${
-        mode === "shipments" ? "true" : "false"
-      }">船積（INV）でみる</button>
-    </div>`;
-
     const query = String(state.shelfSearchQuery || "").trim();
 
     const normalizeQ = (s) => String(s || "").toLowerCase();
@@ -570,11 +558,10 @@ function createShelfRenderer({
         </section>`
       : "";
 
-    const boardHtml = mode === "si" ? renderSi() : renderShipments();
+    const boardHtml = renderSi();
     return `<section class="nt-shelf" aria-label="Shelf">
       <div class="nt-shelf-top">
         <div class="shelf-toolbar">
-          ${toggleHtml}
           ${searchHtml}
         </div>
       </div>
