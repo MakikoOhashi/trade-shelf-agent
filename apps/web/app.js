@@ -3106,11 +3106,11 @@ function renderNewTop() {
 
     const feedHtml = filtered.length
       ? filtered.map(renderItem).join("")
-      : `<div class="activity-empty nt-muted">No activities.</div>`;
+      : `<div class="activity-empty nt-muted">活動ログがありません。</div>`;
 
     const headerHtml = `<header class="activity-head" aria-label="Feed header">
       <div class="activity-head__title">活動ログ</div>
-      <div class="activity-head__sub nt-muted">AI・Teams・メールの処理ログを時系列で監視します。</div>
+      <div class="activity-head__sub nt-muted">AI・Teams・メールの更新を時系列で表示します。</div>
     </header>`;
 
     const queueCounts = (() => {
@@ -3128,42 +3128,42 @@ function renderNewTop() {
     })();
 
     const railHtml = `<aside class="activity-rail" aria-label="System rail">
-      <section class="activity-rail__section" aria-label="AI Queue">
-        <div class="activity-rail__h">AI Queue</div>
-        <div class="activity-rail__kv"><span class="k">awaiting classification</span><span class="v nt-mono">${escapeHtml(
+      <section class="activity-rail__section" aria-label="AI処理状況">
+        <div class="activity-rail__h">AI処理状況</div>
+        <div class="activity-rail__kv"><span class="k">未整理連絡</span><span class="v nt-mono">${escapeHtml(
           String(queueCounts.awaitingClassification),
         )}</span></div>
-        <div class="activity-rail__kv"><span class="k">awaiting approval</span><span class="v nt-mono">${escapeHtml(
+        <div class="activity-rail__kv"><span class="k">確認待ち</span><span class="v nt-mono">${escapeHtml(
           String(queueCounts.awaitingApproval),
         )}</span></div>
-        <div class="activity-rail__kv"><span class="k">failed processing</span><span class="v nt-mono">${escapeHtml(
+        <div class="activity-rail__kv"><span class="k">要確認</span><span class="v nt-mono">${escapeHtml(
           String(queueCounts.failedProcessing),
         )}</span></div>
       </section>
 
-      <section class="activity-rail__section" aria-label="Recent escalations">
-        <div class="activity-rail__h">Recent escalations</div>
+      <section class="activity-rail__section" aria-label="最近の注意案件">
+        <div class="activity-rail__h">最近の注意案件</div>
         <ul class="activity-rail__list">
-          <li>ETA changed</li>
-          <li>INV mismatch</li>
-          <li>PL missing</li>
+          <li>ETA変更</li>
+          <li>INV不一致</li>
+          <li>PL未着</li>
         </ul>
       </section>
 
-      <section class="activity-rail__section" aria-label="Supplier waiting replies">
-        <div class="activity-rail__h">Supplier waiting replies</div>
+      <section class="activity-rail__section" aria-label="返信待ち仕入先">
+        <div class="activity-rail__h">返信待ち仕入先</div>
         <ul class="activity-rail__list">
           <li>ACME Components</li>
           <li>Orion Plastics</li>
         </ul>
       </section>
 
-      <section class="activity-rail__section" aria-label="Unlinked inputs">
-        <div class="activity-rail__h">Unlinked inputs</div>
-        <div class="nt-muted">AIが紐付けできなかったもの。</div>
+      <section class="activity-rail__section" aria-label="未紐付け連絡">
+        <div class="activity-rail__h">未紐付け連絡</div>
+        <div class="nt-muted">紐付けできなかった連絡。</div>
         <ul class="activity-rail__list">
-          <li>unknown shipment reference</li>
-          <li>unreadable attachment</li>
+          <li>出荷番号不明</li>
+          <li>読取不可添付</li>
         </ul>
       </section>
     </aside>`;
@@ -7912,113 +7912,113 @@ function seedActivityFeedMock() {
   const tcId = tcShipment?.id || findTcBySiNo("SI-2026-001")?.id || "";
   const issueNo = tcId ? issueNoForCase(tcId) : "ISS-0002";
 
-  state.activityFeedItems = [
-    {
-      id: `act-${shortId()}`,
-      type: "teamsReceived",
-      source: "teams",
-      title: "Teams received",
-      actor: "営業A",
-      at: "2026-05-12 13:40",
-      summary: "「PLまだ？あとSI-224も確認して」",
-      details: ["AI classified: PL未着確認 / SI-224確認", `Linked: Issue ${issueNo} / Shipment SHP-2026-009`, "Status: waiting approval"],
-      statusKey: "awaitingApproval",
-      linked: [
-        { kind: "issue", label: issueNo },
-        { kind: "shipment", label: "SHP-2026-009" },
-      ],
-      links: [
-        { label: "Open Issue", href: `/#issues/${encodeURIComponent(issueNo)}` },
-        { label: "Open Shipment", href: `/#shipments/SHP-2026-009` },
-        { label: "Open SI Workspace", href: `/#si/SI-2026-001` },
-        { label: "Retry classify", href: `/#retry/classify/${encodeURIComponent(issueNo)}` },
-      ],
-    },
-    {
-      id: `act-${shortId()}`,
-      type: "emailReceived",
-      source: "email",
-      title: "Email received",
-      actor: "supplier@acme.com",
-      at: "2026-05-12 14:12",
-      summary: "Attached: PL.pdf",
-      details: ["AI processed: Packing List recognized", "Updated: Shipment SHP-2026-009", `Issue ${issueNo} resolved candidate`],
-      statusKey: "processing",
-      linked: [
-        { kind: "shipment", label: "SHP-2026-009" },
-        { kind: "issue", label: issueNo },
-      ],
-      links: [
-        { label: "Open Shipment", href: `/#shipments/SHP-2026-009` },
-        { label: "Open Issue", href: `/#issues/${encodeURIComponent(issueNo)}` },
-      ],
-    },
-    {
-      id: `act-${shortId()}`,
-      type: "aiProcessed",
-      source: "ai",
-      title: "AI processed",
-      actor: "trade-shelf-agent",
-      at: "2026-05-12 14:13",
-      summary: "PL.pdf parsed → document status updated",
-      details: ["Confidence: 0.94", "Extraction: cartons / gross weight / HS codes (mock)"],
-      statusKey: "success",
-      linked: [{ kind: "shipment", label: "SHP-2026-009" }],
-      links: [{ label: "Open Shipment", href: `/#shipments/SHP-2026-009` }],
-    },
-    {
-      id: `act-${shortId()}`,
-      type: "issueUpdated",
-      source: "ai",
-      title: "Issue updated",
-      actor: "trade-shelf-agent",
-      at: "2026-05-12 14:14",
-      summary: `${issueNo} status: blocked → review`,
-      details: ["Proposed: mark resolved if PL matches SI/INV (mock)"],
-      statusKey: "warning",
-      linked: [{ kind: "issue", label: issueNo }],
-      links: [{ label: "Open Issue", href: `/#issues/${encodeURIComponent(issueNo)}` }],
-    },
-    {
-      id: `act-${shortId()}`,
-      type: "escalation",
-      source: "system",
-      title: "Escalation detected",
-      actor: "system",
-      at: "2026-05-12 15:02",
-      summary: "ETA changed on SHP-2026-009",
-      details: ["Old ETA: 2026-05-20 → New ETA: 2026-05-23 (mock)"],
-      statusKey: "warning",
-      linked: [{ kind: "shipment", label: "SHP-2026-009" }],
-      links: [{ label: "Open Shipment", href: `/#shipments/SHP-2026-009` }],
-    },
-    {
-      id: `act-${shortId()}`,
-      type: "supplierReply",
-      source: "email",
-      title: "Supplier reply",
-      actor: "sales@acme-components.example",
-      at: "2026-05-12 16:18",
-      summary: "Re: INV mismatch — will reissue invoice today",
-      details: ["Attachment: INV-1122-rev.pdf (mock)"],
-      statusKey: "success",
-      linked: [{ kind: "issue", label: issueNo }],
-      links: [{ label: "Open Issue", href: `/#issues/${encodeURIComponent(issueNo)}` }],
-    },
-    {
-      id: `act-${shortId()}`,
-      type: "failedProcessing",
-      source: "ai",
-      title: "Failed processing",
-      actor: "trade-shelf-agent",
-      at: "2026-05-12 17:05",
-      summary: "Attachment unreadable (mock)",
-      details: ["Reason: PDF corrupted", "Action: retry OCR / request resend"],
-      statusKey: "failed",
-      linked: [],
-      links: [{ label: "Retry classify", href: `/#retry/ocr/${shortId()}` }],
-    },
-  ];
+    state.activityFeedItems = [
+      {
+        id: `act-${shortId()}`,
+        type: "teamsReceived",
+        source: "teams",
+        title: "Teams受信",
+        actor: "営業A",
+        at: "2026-05-12 13:40",
+        summary: "「PLまだ？あとSI-224も確認して」",
+        details: ["AI整理: PL未着確認 / SI-224確認", `紐付け: 案件 ${issueNo} / 出荷 SHP-2026-009`, "状態: 確認待ち"],
+        statusKey: "awaitingApproval",
+        linked: [
+          { kind: "issue", label: issueNo },
+          { kind: "shipment", label: "SHP-2026-009" },
+        ],
+        links: [
+          { label: "案件を開く", href: `/#issues/${encodeURIComponent(issueNo)}` },
+          { label: "出荷を開く", href: `/#shipments/SHP-2026-009` },
+          { label: "SIワークスペースを開く", href: `/#si/SI-2026-001` },
+          { label: "再整理する", href: `/#retry/classify/${encodeURIComponent(issueNo)}` },
+        ],
+      },
+      {
+        id: `act-${shortId()}`,
+        type: "emailReceived",
+        source: "email",
+        title: "Email受信",
+        actor: "supplier@acme.com",
+        at: "2026-05-12 14:12",
+        summary: "Attached: PL.pdf",
+        details: ["AI整理完了: Packing Listを認識", "更新: 出荷 SHP-2026-009", `案件 ${issueNo} 解決候補`],
+        statusKey: "processing",
+        linked: [
+          { kind: "shipment", label: "SHP-2026-009" },
+          { kind: "issue", label: issueNo },
+        ],
+        links: [
+          { label: "出荷を開く", href: `/#shipments/SHP-2026-009` },
+          { label: "案件を開く", href: `/#issues/${encodeURIComponent(issueNo)}` },
+        ],
+      },
+      {
+        id: `act-${shortId()}`,
+        type: "aiProcessed",
+        source: "ai",
+        title: "AI整理完了",
+        actor: "trade-shelf-agent",
+        at: "2026-05-12 14:13",
+        summary: "PL.pdf parsed → document status updated",
+        details: ["信頼度: 0.94", "抽出: cartons / gross weight / HS codes（モック）"],
+        statusKey: "success",
+        linked: [{ kind: "shipment", label: "SHP-2026-009" }],
+        links: [{ label: "出荷を開く", href: `/#shipments/SHP-2026-009` }],
+      },
+      {
+        id: `act-${shortId()}`,
+        type: "issueUpdated",
+        source: "ai",
+        title: "案件更新",
+        actor: "trade-shelf-agent",
+        at: "2026-05-12 14:14",
+        summary: `${issueNo} status: blocked → review`,
+        details: ["提案: PLがSI/INVと一致なら解決扱い（モック）"],
+        statusKey: "warning",
+        linked: [{ kind: "issue", label: issueNo }],
+        links: [{ label: "案件を開く", href: `/#issues/${encodeURIComponent(issueNo)}` }],
+      },
+      {
+        id: `act-${shortId()}`,
+        type: "escalation",
+        source: "system",
+        title: "注意案件検出",
+        actor: "system",
+        at: "2026-05-12 15:02",
+        summary: "ETA changed on SHP-2026-009",
+        details: ["旧ETA: 2026-05-20 → 新ETA: 2026-05-23（モック）"],
+        statusKey: "warning",
+        linked: [{ kind: "shipment", label: "SHP-2026-009" }],
+        links: [{ label: "出荷を開く", href: `/#shipments/SHP-2026-009` }],
+      },
+      {
+        id: `act-${shortId()}`,
+        type: "supplierReply",
+        source: "email",
+        title: "仕入先返信",
+        actor: "sales@acme-components.example",
+        at: "2026-05-12 16:18",
+        summary: "Re: INV mismatch — will reissue invoice today",
+        details: ["添付: INV-1122-rev.pdf（モック）"],
+        statusKey: "success",
+        linked: [{ kind: "issue", label: issueNo }],
+        links: [{ label: "案件を開く", href: `/#issues/${encodeURIComponent(issueNo)}` }],
+      },
+      {
+        id: `act-${shortId()}`,
+        type: "failedProcessing",
+        source: "ai",
+        title: "処理失敗",
+        actor: "trade-shelf-agent",
+        at: "2026-05-12 17:05",
+        summary: "Attachment unreadable (mock)",
+        details: ["理由: PDF破損", "対応: OCR再試行 / 再送依頼"],
+        statusKey: "failed",
+        linked: [],
+        links: [{ label: "再整理する", href: `/#retry/ocr/${shortId()}` }],
+      },
+    ];
 }
 
 function decomposeRawRequestMock(text) {
