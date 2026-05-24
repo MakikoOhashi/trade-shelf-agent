@@ -1749,6 +1749,24 @@ function mergePendingClarificationsFromIngestResult(result) {
   state.pendingClarifications = Array.from(byId.values()).filter(Boolean);
 }
 
+function buildActivityProcessingSummary(appState) {
+  const activityItems = Array.isArray(appState?.activityFeedItems) ? appState.activityFeedItems.filter(Boolean) : [];
+  const approvals = Object.values(appState?.approvalsByActionPlanId ?? {}).filter(Boolean);
+  const pendingClarifications = Array.isArray(appState?.pendingClarifications) ? appState.pendingClarifications.filter(Boolean) : [];
+
+  const awaitingClassification = pendingClarifications.filter((p) => String(p?.status || "") === "awaiting_clarification_reply").length;
+  const awaitingApproval = approvals.filter((a) => String(a?.status || "") === "pending_approval").length;
+
+  let failedProcessing = 0;
+  for (const it of activityItems) {
+    const status = String(it?.statusKey || "").toLowerCase();
+    const type = String(it?.type || "").toLowerCase();
+    if (status === "failed" || type === "failedprocessing") failedProcessing++;
+  }
+
+  return { awaitingClassification, awaitingApproval, failedProcessing };
+}
+
 function normalizeConversationStatusKey(status) {
   const s = String(status || "").toLowerCase();
   if (s === "awaiting_clarification") return "awaiting_clarification";
@@ -2987,6 +3005,9 @@ function renderNewTop() {
   };
 
   const renderActivityFeedPage = () => {
+    // Activity page is an audit surface.
+    // Operational work should happen in Shelf / Workspace / Approval Center.
+    // This side summary only shows processing status derived from current state.
     const filterKey = state.activityFilterKey || "all";
     const itemsRaw = Array.isArray(state.activityFeedItems) ? state.activityFeedItems.filter(Boolean) : [];
     const items = itemsRaw
@@ -3113,19 +3134,7 @@ function renderNewTop() {
       <div class="activity-head__sub nt-muted">AI・Teams・メールの更新を時系列で表示します。</div>
     </header>`;
 
-    const queueCounts = (() => {
-      let awaitingClassification = 0;
-      let awaitingApproval = 0;
-      let failedProcessing = 0;
-      for (const it of items) {
-        const s = String(it?.statusKey || "").toLowerCase();
-        const t = String(it?.type || "").toLowerCase();
-        if (s === "awaitingclassification") awaitingClassification++;
-        if (s === "awaitingapproval" || s === "waitingapproval") awaitingApproval++;
-        if (s === "failed" || t === "failedprocessing") failedProcessing++;
-      }
-      return { awaitingClassification, awaitingApproval, failedProcessing };
-    })();
+    const queueCounts = buildActivityProcessingSummary(state);
 
     const railHtml = `<aside class="activity-rail" aria-label="System rail">
       <section class="activity-rail__section" aria-label="AI処理状況">
@@ -3139,32 +3148,6 @@ function renderNewTop() {
         <div class="activity-rail__kv"><span class="k">要確認</span><span class="v nt-mono">${escapeHtml(
           String(queueCounts.failedProcessing),
         )}</span></div>
-      </section>
-
-      <section class="activity-rail__section" aria-label="最近の注意案件">
-        <div class="activity-rail__h">最近の注意案件</div>
-        <ul class="activity-rail__list">
-          <li>ETA変更</li>
-          <li>INV不一致</li>
-          <li>PL未着</li>
-        </ul>
-      </section>
-
-      <section class="activity-rail__section" aria-label="返信待ち仕入先">
-        <div class="activity-rail__h">返信待ち仕入先</div>
-        <ul class="activity-rail__list">
-          <li>ACME Components</li>
-          <li>Orion Plastics</li>
-        </ul>
-      </section>
-
-      <section class="activity-rail__section" aria-label="未紐付け連絡">
-        <div class="activity-rail__h">未紐付け連絡</div>
-        <div class="nt-muted">紐付けできなかった連絡。</div>
-        <ul class="activity-rail__list">
-          <li>出荷番号不明</li>
-          <li>読取不可添付</li>
-        </ul>
       </section>
     </aside>`;
 
