@@ -20,6 +20,94 @@ export function createDocumentWorkspaceRenderer(deps) {
     activityEventToFeedItem,
   } = deps || {};
 
+  function shipmentStateToJa(shipmentState) {
+    const s = String(shipmentState || "").trim();
+    if (!s || s === "-") return "-";
+    if (s === "shippingPending") return "出荷指図段階";
+    if (s === "shipped") return "仕入れ先出発済み";
+    if (s === "exportCustoms") return "輸出通関中";
+    if (s === "inTransit") return "船積輸送中";
+    if (s === "arrived") return "到着済み";
+    if (s === "importCustoms") return "通関中";
+    if (s === "customsCleared") return "通関完了";
+    if (s === "waitingWarehouseReceipt") return "倉庫入荷待ち";
+    if (s === "warehouseReceived" || s === "completed") return "在庫化済み";
+    return s;
+  }
+
+  function resolveShipmentSequence(tc, shipmentId) {
+    const shId = String(shipmentId || "").trim();
+    if (!shId || shId === "-" || shId.startsWith("PLN-")) return null;
+    const shipmentIds = Array.isArray(tc?.shipmentIds) ? tc.shipmentIds.filter(Boolean) : [];
+    if (!shipmentIds.length) return null;
+
+    const siblings = shipmentIds
+      .map((x) => String(x).trim())
+      .filter((x) => x && !x.startsWith("PLN-"))
+      .sort((a, b) => a.localeCompare(b));
+    if (!siblings.length) return null;
+    const idx = siblings.indexOf(shId);
+    return idx === -1 ? null : idx + 1;
+  }
+
+  function buildWorkspaceHeaderLabels({ tradeCase, focusType, focusId } = {}) {
+    const tc = tradeCase || null;
+    if (!tc) return { title: "状況", subtitle: "" };
+
+    const type = normalizeFocusType(focusType);
+    const id = String(focusId || "").trim();
+
+    const sh = tc?.shipmentEntity || null;
+    const si = tc?.siEntity || null;
+
+    const siNo = String(si?.siNo || tc?.siNumbers?.[0] || "").trim();
+    const shipmentId = String(sh?.id || "").trim();
+    const hasRealShipment = Boolean(shipmentId) && !shipmentId.startsWith("PLN-");
+
+    const title = (() => {
+      if (hasRealShipment) {
+        const seq = resolveShipmentSequence(tc, shipmentId);
+        const seqLabel = seq ? `分納${seq}` : "分納";
+        return `${seqLabel} / ${shipmentId} の状況`;
+      }
+      if (siNo) return `未出荷分 / ${siNo} の状況`;
+      return "未出荷分 の状況";
+    })();
+
+    const invNo = (() => {
+      if (type === "invoice") return normalizeInvoiceNo(id || "");
+      const invoiceRefs = Array.isArray(tc?.invoiceNumbers) ? tc.invoiceNumbers.filter(Boolean) : [];
+      const first = invoiceRefs[0]?.invoiceNo ? String(invoiceRefs[0].invoiceNo).trim() : "";
+      if (first) return normalizeInvoiceNo(first);
+      const fromShipment = Array.isArray(sh?.supplierInvoices) ? sh.supplierInvoices.filter(Boolean)[0] : "";
+      if (fromShipment) return normalizeInvoiceNo(fromShipment);
+      const fromSi = Array.isArray(si?.relatedInvoiceNos) ? si.relatedInvoiceNos.filter(Boolean)[0] : "";
+      if (fromSi) return normalizeInvoiceNo(fromSi);
+      return "";
+    })();
+
+    const blNo = (() => {
+      if (type === "bl") return String(id || "").trim();
+      const fromShipment = String(sh?.blNo || "").trim();
+      if (fromShipment) return fromShipment;
+      const fromTc = Array.isArray(tc?.blNumbers) ? String(tc.blNumbers[0] || "").trim() : "";
+      return fromTc;
+    })();
+
+    const shipmentStateJa = shipmentStateToJa(sh?.shipmentState || tc?.shipmentState || "shippingPending");
+
+    const parts = [];
+    if (siNo) parts.push(`${siNo} 配下`);
+    if (invNo) parts.push(invNo);
+    if (blNo) parts.push(blNo);
+    if (shipmentStateJa && shipmentStateJa !== "-") parts.push(shipmentStateJa);
+
+    return {
+      title,
+      subtitle: parts.join("・"),
+    };
+  }
+
   function buildWorkspaceRelationshipTree(tradeCase, focusType, focusId) {
     const tc = tradeCase || null;
     const sh = tc?.shipmentEntity || null;
@@ -1049,6 +1137,7 @@ export function createDocumentWorkspaceRenderer(deps) {
   }
 
   return {
+    buildWorkspaceHeaderLabels,
     renderDocumentWorkspace,
   };
 }

@@ -2664,8 +2664,20 @@ body {
   flex-wrap: wrap;
 }
 
+.workspace-title__main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
 .workspace-title__text {
   font-weight: 1000;
+}
+
+.workspace-title__sub {
+  font-size: 12px;
+  line-height: 1.2;
 }
 
 .workspace-title__pill {

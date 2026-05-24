@@ -445,12 +445,11 @@ function openDocumentWorkspace(tradeCaseId, focusType, focusId, initialDocId) {
     ui.activeDocId = resolved;
     ui.activePageByDocId[resolved] = 0;
   }
+
+  const headerLabels = documentWorkspaceRenderer.buildWorkspaceHeaderLabels({ tradeCase: tc, focusType: type, focusId: id });
   openWorkspaceModal("document-workspace-modal", {
     title: "Document Workspace",
-    titleHtml: renderWorkspaceTitleHtml("Document Workspace", [
-      { text: `Focus: ${formatFocusLabel(type, id)}` },
-      { text: `Case ${tc.id || "-"}` },
-    ]),
+    titleHtml: renderWorkspaceTitleHtml(headerLabels),
     bodyHtml: documentWorkspaceRenderer.renderDocumentWorkspace(tc, {
       focusType: type,
       focusId: id,
@@ -4495,10 +4494,8 @@ function rerenderOpenDocumentWorkspaceBody() {
   const ui = getWorkspaceUi(modalId);
   const titleEl = modalEl.querySelector(".modal__title");
   if (titleEl) {
-    titleEl.innerHTML = renderWorkspaceTitleHtml("Document Workspace", [
-      { text: `Focus: ${formatFocusLabel(ui.focusType, ui.focusId)}` },
-      { text: `Case ${tc.id || "-"}` },
-    ]);
+    const headerLabels = documentWorkspaceRenderer.buildWorkspaceHeaderLabels({ tradeCase: tc, focusType: ui.focusType, focusId: ui.focusId });
+    titleEl.innerHTML = renderWorkspaceTitleHtml(headerLabels);
   }
   const body = modalEl.querySelector(".modal__body");
   if (body) {
@@ -4510,18 +4507,14 @@ function rerenderOpenDocumentWorkspaceBody() {
   }
 }
 
-function renderWorkspaceTitleHtml(title, pills) {
-  const t = String(title || "").trim();
-  const list = Array.isArray(pills) ? pills.filter(Boolean) : [];
-  const pillHtml = list
-    .map((p) => {
-      const text = p && p.text != null ? String(p.text) : "";
-      if (!text) return "";
-      return `<span class="pill pill--muted workspace-title__pill">${escapeHtml(text)}</span>`;
-    })
-    .filter(Boolean)
-    .join("");
-  return `<div class="workspace-title"><span class="workspace-title__text">${escapeHtml(t)}</span>${pillHtml}</div>`;
+function renderWorkspaceTitleHtml(labels) {
+  const l = labels && typeof labels === "object" ? labels : {};
+  const title = String(l.title || "").trim();
+  const subtitle = String(l.subtitle || "").trim();
+  const subtitleHtml = subtitle ? `<div class="workspace-title__sub muted">${escapeHtml(subtitle)}</div>` : "";
+  return `<div class="workspace-title"><div class="workspace-title__main"><div class="workspace-title__text">${escapeHtml(
+    title || "-",
+  )}</div>${subtitleHtml}</div></div>`;
 }
 
 function uniqLinkedEntities(entities) {
@@ -7623,10 +7616,8 @@ function setupWorkspaceModals() {
           if (modalId === "document-workspace-modal") {
             const titleEl = modalEl.querySelector(".modal__title");
             if (titleEl) {
-              titleEl.innerHTML = renderWorkspaceTitleHtml("Document Workspace", [
-                { text: `Focus: ${formatFocusLabel(ui.focusType, ui.focusId)}` },
-                { text: `Case ${tc.id || "-"}` },
-              ]);
+              const headerLabels = documentWorkspaceRenderer.buildWorkspaceHeaderLabels({ tradeCase: tc, focusType: ui.focusType, focusId: ui.focusId });
+              titleEl.innerHTML = renderWorkspaceTitleHtml(headerLabels);
             }
           }
           const body = modalEl.querySelector(".modal__body");
