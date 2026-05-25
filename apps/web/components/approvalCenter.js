@@ -86,11 +86,19 @@ export function createApprovalCenterRenderer(deps) {
       if (Number.isNaN(d.getTime())) return "-";
       const diffMs = Date.now() - d.getTime();
       const min = Math.max(0, Math.round(diffMs / 60000));
-      if (min < 60) return `updated ${min}min ago`;
+      if (min < 60) return `${min}分前`;
       const hr = Math.round(min / 60);
-      if (hr < 24) return `updated ${hr}h ago`;
+      if (hr < 24) return `${hr}時間前`;
       const day = Math.round(hr / 24);
-      return `updated ${day}d ago`;
+      return `${day}日前`;
+    };
+
+    const severityLabelJa = (sevLike) => {
+      const sev = String(sevLike || "").toLowerCase();
+      if (sev === "critical" || sev === "high") return "高";
+      if (sev === "medium") return "中";
+      if (sev === "low") return "低";
+      return "中";
     };
 
     const computeLastUpdatedIso = (tc) => {
@@ -209,10 +217,10 @@ export function createApprovalCenterRenderer(deps) {
       const raw = String(statusLike || "").trim();
       const normalized = raw.toLowerCase().replace(/_/g, " ");
       if (!normalized) return "-";
-      if (normalized === "pending approval" || normalized === "requires approval") return "承認待ち";
+      if (normalized === "pending approval" || normalized === "requires approval" || normalized === "pending approval") return "確認待ち";
       if (normalized === "edited") return "編集済み";
       if (normalized === "on hold" || normalized === "held") return "保留中";
-      if (normalized === "mock sent") return "対応済み";
+      if (normalized === "mock sent") return "完了";
       if (normalized === "approved") return "承認済み";
       if (normalized === "completed" || normalized === "resolved") return "完了";
       return raw.replace(/_/g, " ");
@@ -240,11 +248,11 @@ export function createApprovalCenterRenderer(deps) {
         <div class="issue-row__right">
           <div class="issue-row__meta">
             <span class="issue-pill nt-mono">#${escapeHtml(it.issueNo)}</span>
-            <span class="issue-pill ${sevClass}">${escapeHtml(sev.toUpperCase())}</span>
+            <span class="issue-pill ${sevClass}">${escapeHtml(severityLabelJa(sev))}</span>
             <span class="issue-pill">${escapeHtml(issueListStatusLabelJa(listStatus))}</span>
             <span class="issue-pill">${escapeHtml(linkText)}</span>
             <span class="issue-pill">${escapeHtml(it.updatedText || "-")}</span>
-            <span class="issue-pill nt-mono">${escapeHtml(String(cc))} comments</span>
+            <span class="issue-pill">${escapeHtml(`返信${String(cc)}`)}</span>
           </div>
         </div>
       </div>`;
@@ -859,7 +867,7 @@ export function createApprovalCenterRenderer(deps) {
             const shipment = linkedEntities.find((l) => String(l?.entityType || "").toLowerCase() === "shipment") || null;
             const linkText = [si?.entityId ? String(si.entityId) : "", shipment?.entityId ? String(shipment.entityId) : ""].filter(Boolean).join(" / ") || "-";
 
-            const sevText = "MEDIUM";
+            const sevText = "中";
 
             const pills = [
               `<span class="issue-pill nt-mono">#${escapeHtml(issueId || apId || "-")}</span>`,
@@ -867,7 +875,7 @@ export function createApprovalCenterRenderer(deps) {
               `<span class="issue-pill">${escapeHtml(issueListStatusLabelJa(approvalStatus))}</span>`,
               `<span class="issue-pill">${escapeHtml(linkText)}</span>`,
               `<span class="issue-pill">${escapeHtml(updatedText || "-")}</span>`,
-              `<span class="issue-pill nt-mono">${escapeHtml(String(cc))} comments</span>`,
+              `<span class="issue-pill">${escapeHtml(`返信${String(cc)}`)}</span>`,
             ].join("");
 
             return `<div class="issue-row" role="button" tabindex="0" data-mutation-open="${escapeHtml(mutationOpenId)}">
@@ -883,7 +891,7 @@ export function createApprovalCenterRenderer(deps) {
           .join("");
 
         const hasAny = Boolean(runtimeRows) || sorted.length > 0;
-        const sampleHeading = sorted.length ? `<div class="issue-list__subheading">mock existing issues</div>` : "";
+        const sampleHeading = sorted.length ? `<div class="issue-list__subheading">サンプル案件</div>` : "";
         const sampleBody = sorted.length ? body : "";
         const empty = !hasAny ? `<div class="nt-muted" style="padding: 12px;">No items</div>` : "";
 
@@ -1324,7 +1332,7 @@ export function createApprovalCenterRenderer(deps) {
             <div class="issue-history-header__h">${escapeHtml(issueLike.title)}</div>
             <div class="issue-history-header__badges">
               <span class="issue-pill nt-mono">#${escapeHtml(issueLike.issueNo)}</span>
-              <span class="issue-pill ${sevClass}">${escapeHtml(sev.toUpperCase())}</span>
+              <span class="issue-pill ${sevClass}">${escapeHtml(severityLabelJa(sev))}</span>
               <span class="issue-pill">${escapeHtml(statusText)}</span>
               <span class="issue-pill">${escapeHtml(approvalStatusLabelJa(approvalStatus) || approvalStatus)}</span>
             </div>
@@ -1603,7 +1611,7 @@ export function createApprovalCenterRenderer(deps) {
               <div class="issue-history-header__h">${escapeHtml(it.title)}</div>
               <div class="issue-history-header__badges">
                 <span class="issue-pill nt-mono">#${escapeHtml(it.issueNo)}</span>
-                <span class="issue-pill ${sevClass}">${escapeHtml(sev.toUpperCase())}</span>
+                <span class="issue-pill ${sevClass}">${escapeHtml(severityLabelJa(sev))}</span>
                 <span class="issue-pill">${escapeHtml(statusText)}</span>
               </div>
             </div>

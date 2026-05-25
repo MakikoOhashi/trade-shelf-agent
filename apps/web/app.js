@@ -147,6 +147,11 @@ const state = {
    */
   activeDraftEditActionPlanId: null,
   /**
+   * 承認センター（Issues）右カラム折りたたみ状態（変更・確認依頼）
+   * @type {boolean}
+   */
+  approvalCenterRightPanelCollapsed: false,
+  /**
    * tradeCaseId -> sequential issue number (1-based)
    * @type {Record<string, number>}
    */
@@ -1056,6 +1061,14 @@ function dedupePreIssueItems(items) {
 }
 
 const DEBUG_PRE_ISSUE = false;
+// Debug-only: allow switching between mock/LLM classification from the UI.
+// In demo mode, we keep LLM (Kimi) fixed and hide the toggle.
+const DEBUG_CLASSIFY_MODE_SWITCH = Boolean(window.TRADE_SHELF_DEBUG_CLASSIFY_MODE_SWITCH);
+
+const getEffectiveClassifyMode = (classifyModeLike) => {
+  if (DEBUG_CLASSIFY_MODE_SWITCH) return classifyModeLike === "mock" ? "mock" : "llm";
+  return "llm";
+};
 
 function transitionApprovalState(currentState, action) {
   const s = String(currentState || "planned");
@@ -3163,7 +3176,8 @@ function renderNewTop() {
     </section>`;
   };
 
-  const renderRequests = ({ embedded } = {}) => {
+  const renderRequests = ({ embedded, rightPanelToggle } = {}) => {
+    const effectiveClassifyMode = getEffectiveClassifyMode(state.classifyMode);
     const list = Array.isArray(state.rawRequests) ? state.rawRequests.filter(Boolean) : [];
     const conversationThreads = computeConversationThreadsFromRawRequests(list);
     const approvalSide = {
@@ -3397,17 +3411,15 @@ function renderNewTop() {
             <div class="requests-intake__title">変更・確認依頼を取り込む</div>
             <div class="requests-intake__sub muted">貼り付けた依頼をAIが整理し、受信ボックスへ反映します。</div>
           </div>
-          <div class="classification-mode-switch" aria-label="Classification Mode">
-            <div class="classification-mode-switch__label">分類モード</div>
-            <div class="classification-mode-switch__controls" role="tablist" aria-label="Classification Mode">
-              <button class="mode-chip ${state.classifyMode === "mock" ? "is-active" : ""}" type="button" data-classify-mode="mock" ${
-                state.ingestLoading ? "disabled" : ""
-              }>モック</button>
-              <button class="mode-chip ${state.classifyMode === "llm" ? "is-active" : ""}" type="button" data-classify-mode="llm" ${
-                state.ingestLoading ? "disabled" : ""
-              }>LLM（Kimi）</button>
-            </div>
-          </div>
+          ${
+            embedded && rightPanelToggle
+              ? `<div class="requests-intake__head-right">
+                  <button class="right-panel-toggle right-panel-toggle--inside" type="button" data-toggle-approval-right-panel="1" aria-label="${escapeHtml(
+                    rightPanelToggle.label,
+                  )}">${escapeHtml(rightPanelToggle.icon)}</button>
+                </div>`
+              : ""
+          }
         </div>
 
         <div class="requests-intake__form" aria-label="Mock ingest form">
@@ -3417,11 +3429,11 @@ function renderNewTop() {
           <div class="requests-intake__actions">
             <button class="btn btn--primary btn--small" type="button" data-ingest-submit="1" ${
               state.ingestLoading ? "disabled" : ""
-            }>${state.classifyMode === "mock" ? "モックを実行" : "AI分類を実行"}</button>
+            }>${effectiveClassifyMode === "mock" ? "モックを実行" : "AI分類を実行"}</button>
             <button class="btn btn--ghost btn--small" type="button" data-ingest-sample="1" ${state.ingestLoading ? "disabled" : ""}>サンプル</button>
             ${
               state.ingestLoading
-                ? state.classifyMode === "llm"
+                ? effectiveClassifyMode === "llm"
                   ? `<span class="ingest-loading nt-muted"><span class="spinner" aria-hidden="true"></span>Kimiが分類中...</span>`
                   : `<span class="ingest-loading nt-muted">loading...</span>`
                 : ""
@@ -3467,12 +3479,36 @@ function renderNewTop() {
     tab === "shelf"
       ? renderShelf()
       : tab === "issues"
-        ? `<section class="operations-page" aria-label="Operations">
-            <div class="operations-layout" aria-label="Approvals + Requests layout">
-              <div class="operations-left" aria-label="Approvals">${renderIssues()}</div>
-              <div class="operations-right" aria-label="Requests">${renderRequests({ embedded: true })}</div>
-            </div>
-          </section>`
+        ? (() => {
+            const rightCollapsed = Boolean(state.approvalCenterRightPanelCollapsed);
+            const toggleLabel = rightCollapsed ? "変更・確認依頼パネルを開く" : "変更・確認依頼パネルを閉じる";
+            // UI only: keep approval/ingest logic and state names unchanged.
+            const toggleIcon = rightCollapsed ? "‹ 入力" : "›";
+            return `<section class="operations-page" aria-label="Operations">
+              <div class="operations-layout ${rightCollapsed ? "is-right-collapsed" : ""}" aria-label="Approvals + Requests layout">
+                <div class="operations-left" aria-label="Approvals">${renderIssues()}</div>
+                <div class="operations-right ${rightCollapsed ? "is-collapsed" : ""}" aria-label="Requests">
+                  ${
+                    rightCollapsed
+                      ? `<div class="operations-right__handle" aria-label="Right panel handle">
+                          <button class="right-panel-toggle right-panel-toggle--collapsed" type="button" data-toggle-approval-right-panel="1" aria-label="${escapeHtml(
+                            toggleLabel,
+                          )}">${escapeHtml(toggleIcon)}</button>
+                        </div>`
+                      : ""
+                  }
+                  <div class="operations-right__body" ${rightCollapsed ? 'aria-hidden="true"' : ""}>${
+                    rightCollapsed
+                      ? ""
+                      : renderRequests({
+                          embedded: true,
+                          rightPanelToggle: { label: toggleLabel, icon: toggleIcon },
+                        })
+                  }</div>
+                </div>
+              </div>
+            </section>`;
+          })()
         : tab === "activity"
           ? renderActivityFeedPage()
         : renderPlaceholder("Settings");
@@ -8068,6 +8104,15 @@ function setupNewTop() {
     });
     if (!target) return;
 
+    const approvalRightToggleEl = target.closest && target.closest("[data-toggle-approval-right-panel]");
+    if (approvalRightToggleEl) {
+      e.preventDefault();
+      e.stopPropagation();
+      state.approvalCenterRightPanelCollapsed = !state.approvalCenterRightPanelCollapsed;
+      renderApp();
+      return;
+    }
+
     const guardApprovalClick = (idLike, action, { description } = {}) => {
       const apId = findActionPlanIdFromAnyId(idLike);
       if (!apId) return { ok: false, ignored: true, reason: "missing_action_plan" };
@@ -8291,6 +8336,11 @@ function setupNewTop() {
       if (state.ingestLoading) return;
       e.preventDefault();
       e.stopPropagation();
+      if (!DEBUG_CLASSIFY_MODE_SWITCH) {
+        // Demo mode: keep LLM fixed. (UI is hidden, but we guard clicks just in case.)
+        state.classifyMode = "llm";
+        return;
+      }
       const next = classifyModeEl.getAttribute("data-classify-mode") || "llm";
       state.classifyMode = next === "mock" ? "mock" : "llm";
       renderApp();
@@ -8472,8 +8522,9 @@ function setupNewTop() {
       (async () => {
         try {
           let result = null;
+          const mode = getEffectiveClassifyMode(state.classifyMode);
 
-          if (state.classifyMode === "mock") {
+          if (mode === "mock") {
             const payload = await submitMockIngest(rawText);
             if (payload && payload.ok === false) {
               throw new Error(payload.error || "Mock ingest failed");
@@ -8488,7 +8539,7 @@ function setupNewTop() {
           }
 
           state.latestIngestResult = result || null;
-          state.latestIngestResultMode = state.classifyMode;
+          state.latestIngestResultMode = mode;
           ensureApprovalsInitializedFromIngestResult(result);
           mergePendingClarificationsFromIngestResult(result);
           state.ingestNotice = (() => {
@@ -8508,7 +8559,7 @@ function setupNewTop() {
                 plans.length ||
                 events.some((ev) => ev && String(ev.type || "") === "approval_required"),
             );
-            const label = state.classifyMode === "llm" ? "AI分類" : "モック";
+            const label = mode === "llm" ? "AI分類" : "モック";
             if (!hasApprovalItems) {
               if (result?.matchedPendingClarification?.id) return `(${label}) 補足情報を反映しました。`;
               if (Array.isArray(result?.stateTransitionCandidates) && result.stateTransitionCandidates.length)
@@ -8663,7 +8714,8 @@ function setupNewTop() {
 	          });
           state.issueMutationItems = prependUniqueById(state.issueMutationItems, mutations);
         } catch (e) {
-          state.ingestError = e && e.message ? String(e.message) : state.classifyMode === "llm" ? "LLM classify failed" : "Mock ingest failed";
+          const mode = getEffectiveClassifyMode(state.classifyMode);
+          state.ingestError = e && e.message ? String(e.message) : mode === "llm" ? "LLM classify failed" : "Mock ingest failed";
           state.ingestNotice = "";
         } finally {
           state.ingestLoading = false;
