@@ -20,6 +20,8 @@ const API_BASE_URL = (() => {
 let serverActivityPollTimer = null;
 let slackStatusPollTimer = null;
 
+const DEBUG_UI_LOGS = Boolean(window && window.TRADE_SHELF_DEBUG_UI_LOGS);
+
 const TOP_TAB_PATHS = {
   shelf: "/shelf",
   issues: "/approvals",
@@ -3700,22 +3702,26 @@ function renderNewTop() {
 
 function renderApp() {
   window.__renderAppCount = (window.__renderAppCount || 0) + 1;
-  console.log("[renderApp]", {
-    count: window.__renderAppCount,
-    newTopCountBefore: document.querySelectorAll("#app > .new-top").length,
-    workspaceModalExists: !!document.getElementById("document-workspace-modal"),
-  });
+  if (DEBUG_UI_LOGS) {
+    console.log("[renderApp]", {
+      count: window.__renderAppCount,
+      newTopCountBefore: document.querySelectorAll("#app > .new-top").length,
+      workspaceModalExists: !!document.getElementById("document-workspace-modal"),
+    });
+  }
 
   const root = document.getElementById("app");
   if (!root) return;
   root.innerHTML = renderNewTop();
   syncOperationalThreadModal();
 
-  console.log("[renderApp done]", {
-    count: window.__renderAppCount,
-    newTopCountAfter: document.querySelectorAll("#app > .new-top").length,
-    workspaceModalExists: !!document.getElementById("document-workspace-modal"),
-  });
+  if (DEBUG_UI_LOGS) {
+    console.log("[renderApp done]", {
+      count: window.__renderAppCount,
+      newTopCountAfter: document.querySelectorAll("#app > .new-top").length,
+      workspaceModalExists: !!document.getElementById("document-workspace-modal"),
+    });
+  }
 }
 
 function handleOperationalThreadAction({ action, threadId, messageId }) {
@@ -8260,9 +8266,11 @@ function decomposeRawRequestMock(text) {
 
 function setupNewTop() {
   window.__setupNewTopCount = (window.__setupNewTopCount || 0) + 1;
-  console.log("[setupNewTop]", {
-    count: window.__setupNewTopCount,
-  });
+  if (DEBUG_UI_LOGS) {
+    console.log("[setupNewTop]", {
+      count: window.__setupNewTopCount,
+    });
+  }
 
   const root = document.getElementById("app");
   if (!root) return;
@@ -8270,10 +8278,12 @@ function setupNewTop() {
   function handleNewTopClick(e) {
     window.__newTopClickCount = (window.__newTopClickCount || 0) + 1;
     const target = e.target;
-    console.log("[handleNewTopClick]", {
-      count: window.__newTopClickCount,
-      target,
-    });
+    if (DEBUG_UI_LOGS) {
+      console.log("[handleNewTopClick]", {
+        count: window.__newTopClickCount,
+        target,
+      });
+    }
     if (!target) return;
 
     const approvalRightToggleEl = target.closest && target.closest("[data-toggle-approval-right-panel]");
