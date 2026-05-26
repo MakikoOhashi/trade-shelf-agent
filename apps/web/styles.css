@@ -1560,6 +1560,63 @@ body {
   margin-bottom: 6px;
 }
 
+/* Settings (minimal) */
+#app .settings-page {
+  padding: 16px;
+  display: grid;
+  gap: 12px;
+}
+
+#app .settings-head__title {
+  font-size: 18px;
+  font-weight: 700;
+}
+
+#app .settings-head__sub {
+  margin-top: 4px;
+}
+
+#app .settings-grid {
+  display: grid;
+  gap: 12px;
+}
+
+#app .settings-card {
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+  padding: 14px;
+  display: grid;
+  gap: 10px;
+  max-width: 720px;
+}
+
+#app .settings-card__h {
+  font-weight: 700;
+}
+
+#app .settings-kv {
+  display: grid;
+  grid-template-columns: 120px 1fr;
+  gap: 10px;
+  align-items: baseline;
+}
+
+#app .settings-kv .k {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+#app .settings-actions {
+  display: flex;
+  gap: 8px;
+}
+
+#app .settings-note {
+  font-size: 12px;
+}
+
 /* Ingestion modal (GitHub-like) */
 .modal--ingestion .modal__dialog {
   border: 1px solid #d0d7de;
@@ -7286,6 +7343,17 @@ body {
   font-weight: 800;
   color: #6e7781;
   white-space: nowrap;
+}
+
+#app .activity-summary {
+  margin-top: 4px;
+  color: #57606a;
+  font-size: 12px;
+  line-height: 1.35;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 #app .activity-detail {

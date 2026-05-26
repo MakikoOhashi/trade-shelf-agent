@@ -82,6 +82,32 @@ function sendJson(res, statusCode, payload) {
   res.end(body);
 }
 
+/**
+ * Slack Events API (hackathon demo)
+ * TODO(security): verify Slack signing secret (X-Slack-Signature / X-Slack-Request-Timestamp).
+ */
+const slackState = {
+  /**
+   * @type {Array<{
+   *  id: string,
+   *  type: string,
+   *  source: string,
+   *  title: string,
+   *  actor: string,
+   *  occurredAt: string,
+   *  at?: string,
+   *  summary?: string,
+   *  details?: string[],
+   *  statusKey?: string,
+   *  links?: any[],
+   *  linked?: any[]
+   * }>}
+   */
+  activityFeedItems: [],
+  processedEventIds: new Set(),
+  lastReceivedAt: null,
+};
+
 function readJsonBody(req) {
   return new Promise((resolve, reject) => {
     let raw = "";
@@ -366,7 +392,9 @@ async function serveStatic(req, res) {
     pathname === "/ingest" ||
     pathname.startsWith("/ingest/") ||
     pathname === "/teams" ||
-    pathname.startsWith("/teams/");
+    pathname.startsWith("/teams/") ||
+    pathname === "/slack" ||
+    pathname.startsWith("/slack/");
 
   // Never serve SPA fallback for API namespaces.
   if (isApiNamespace) {
@@ -421,6 +449,98 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(204);
     res.end();
     return;
+  }
+
+  if (method === "GET" && reqUrl.pathname === "/api/activity") {
+    sendJson(res, 200, {
+      ok: true,
+      items: Array.isArray(slackState.activityFeedItems) ? slackState.activityFeedItems : [],
+      lastReceivedAt: slackState.lastReceivedAt,
+    });
+    return;
+  }
+
+  if (method === "GET" && reqUrl.pathname === "/api/slack/status") {
+    sendJson(res, 200, {
+      ok: true,
+      status: slackState.lastReceivedAt ? "connected" : "unknown",
+      lastReceivedAt: slackState.lastReceivedAt,
+      events: Array.isArray(slackState.activityFeedItems) ? slackState.activityFeedItems.length : 0,
+    });
+    return;
+  }
+
+  if (method === "POST" && reqUrl.pathname === "/slack/events") {
+    try {
+      const body = await readJsonBody(req);
+
+      if (body && body.type === "url_verification" && typeof body.challenge === "string") {
+        // Slack URL Verification expects JSON with the challenge echoed.
+        sendJson(res, 200, { challenge: body.challenge });
+        return;
+      }
+
+      const eventType = body && body.type ? String(body.type) : "";
+      const eventId = body && body.event_id ? String(body.event_id) : "";
+
+      if (eventId) {
+        if (slackState.processedEventIds.has(eventId)) {
+          sendJson(res, 200, { ok: true, deduped: true });
+          return;
+        }
+        slackState.processedEventIds.add(eventId);
+        // Prevent unbounded growth in a long-running demo.
+        if (slackState.processedEventIds.size > 5000) slackState.processedEventIds.clear();
+      }
+
+      if (eventType === "event_callback" && body && body.event && body.event.type === "message") {
+        const ev = body.event || {};
+        const channelRaw = String(ev.channel || ev.channel_name || "").trim();
+        const channel = channelRaw ? (channelRaw.startsWith("#") ? channelRaw : `#${channelRaw}`) : "#unknown";
+        const user = String(ev.user || ev.username || "unknown").trim() || "unknown";
+        const text = String(ev.text || "").trim();
+        const ts = String(ev.ts || body.event_time || Date.now()).trim();
+
+        const occurredAt = (() => {
+          const n = Number(ts);
+          if (Number.isFinite(n) && n > 0 && n < 4_000_000_000) return new Date(n * 1000).toISOString();
+          const ms = Number(ev.event_ts);
+          if (Number.isFinite(ms) && ms > 0 && ms < 4_000_000_000) return new Date(ms * 1000).toISOString();
+          return new Date().toISOString();
+        })();
+
+        const id = eventId || `slack:${ts}:${Date.now()}`;
+        const item = {
+          id,
+          type: "slackMessage",
+          source: "slack",
+          title: `[Slack] ${channel}`,
+          actor: user,
+          occurredAt,
+          summary: text ? `"${text}"` : "",
+          details: [text, `ts: ${ts}`],
+          statusKey: "success",
+          linked: [],
+          links: [],
+        };
+
+        slackState.lastReceivedAt = new Date().toISOString();
+        slackState.activityFeedItems = [item, ...(Array.isArray(slackState.activityFeedItems) ? slackState.activityFeedItems : [])].slice(
+          0,
+          200,
+        );
+
+        sendJson(res, 200, { ok: true });
+        return;
+      }
+
+      // Ignore non-message events in demo mode.
+      sendJson(res, 200, { ok: true, ignored: true });
+      return;
+    } catch (e) {
+      sendJson(res, 400, { ok: false, error: "invalid request body" });
+      return;
+    }
   }
 
   if (method === "GET" && reqUrl.pathname === "/ai/ping") {

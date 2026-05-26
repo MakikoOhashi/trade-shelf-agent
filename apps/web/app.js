@@ -12,6 +12,9 @@ import { createApprovalCenterRenderer } from "./components/approvalCenter.js";
 
 const API_BASE_URL = window.TRADE_SHELF_API_BASE_URL || "http://127.0.0.1:3000";
 
+let serverActivityPollTimer = null;
+let slackStatusPollTimer = null;
+
 const TOP_TAB_PATHS = {
   shelf: "/shelf",
   issues: "/approvals",
@@ -47,6 +50,8 @@ function setTopActiveTab(nextTab, { push = false, replace = false } = {}) {
   if (push) syncUrlForTopTab(tab, { replace: false });
   if (replace) syncUrlForTopTab(tab, { replace: true });
   renderApp();
+  scheduleServerActivityPoll();
+  scheduleSlackStatusPoll();
 }
 
 const movementShelfDefs = [
@@ -220,9 +225,14 @@ const state = {
   timelineIssueCandidates: [],
   /**
    * Activity Feed filter key
-   * @type {"all" | "teams" | "email" | "aiProcessed" | "awaitingApproval" | "failed" | "supplierReply"}
+   * @type {"all" | "teams" | "email" | "slack" | "aiProcessed" | "awaitingApproval" | "failed" | "supplierReply"}
    */
   activityFilterKey: "all",
+  /**
+   * Slack integration status (mock-ish; fetched from API)
+   * @type {{ status: "connected" | "unknown", lastReceivedAt: string | null } | null}
+   */
+  slackIntegrationStatus: null,
   /**
    * Resolution Decision Tree の branch 選択状態（branch.value）
    * @type {string | null}
@@ -521,6 +531,83 @@ function fetchWithTimeout(url, options, timeoutMs = 20000) {
   const timer = window.setTimeout(() => controller.abort(), timeoutMs);
   const opts = { ...(options || {}), signal: controller.signal };
   return fetch(url, opts).finally(() => window.clearTimeout(timer));
+}
+
+function normalizeServerActivityFeedItem(item) {
+  const it = item && typeof item === "object" ? item : {};
+  const id = String(it.id || "").trim();
+  if (!id) return null;
+  const occurredAt = String(it.occurredAt || "").trim();
+  const resolvedOccurredAt = occurredAt && !Number.isNaN(Date.parse(occurredAt)) ? occurredAt : nowIso();
+  const at = it.at ? String(it.at) : formatLocalTime(resolvedOccurredAt);
+  return {
+    ...it,
+    id,
+    occurredAt: resolvedOccurredAt,
+    at,
+    source: String(it.source || "").trim() || "unknown",
+    title: String(it.title || "").trim(),
+    actor: String(it.actor || "").trim(),
+    statusKey: String(it.statusKey || "").trim() || "success",
+    details: Array.isArray(it.details) ? it.details.filter(Boolean).map((d) => String(d)) : [],
+  };
+}
+
+async function fetchServerActivityFeed() {
+  try {
+    const response = await fetchWithTimeout(`${API_BASE_URL}/api/activity`, { method: "GET" }, 12000);
+    if (!response.ok) return;
+    const json = await response.json();
+    const itemsRaw = Array.isArray(json?.items) ? json.items : [];
+    const normalized = itemsRaw.map(normalizeServerActivityFeedItem).filter(Boolean);
+    if (!normalized.length) return;
+    state.activityFeedItems = prependUniqueById(state.activityFeedItems, normalized);
+    renderApp();
+  } catch {
+    // ignore (demo)
+  }
+}
+
+async function fetchSlackIntegrationStatus() {
+  try {
+    const response = await fetchWithTimeout(`${API_BASE_URL}/api/slack/status`, { method: "GET" }, 12000);
+    if (!response.ok) return;
+    const json = await response.json();
+    const status = json && json.status === "connected" ? "connected" : "unknown";
+    const lastReceivedAt = json && typeof json.lastReceivedAt === "string" ? json.lastReceivedAt : null;
+    state.slackIntegrationStatus = { status, lastReceivedAt };
+    renderApp();
+  } catch {
+    // ignore (demo)
+  }
+}
+
+function scheduleServerActivityPoll() {
+  if (serverActivityPollTimer) {
+    window.clearTimeout(serverActivityPollTimer);
+    serverActivityPollTimer = null;
+  }
+  if (state.topActiveTab !== "activity") return;
+  const tick = async () => {
+    await fetchServerActivityFeed();
+    if (state.topActiveTab !== "activity") return;
+    serverActivityPollTimer = window.setTimeout(tick, 5000);
+  };
+  serverActivityPollTimer = window.setTimeout(tick, 200);
+}
+
+function scheduleSlackStatusPoll() {
+  if (slackStatusPollTimer) {
+    window.clearTimeout(slackStatusPollTimer);
+    slackStatusPollTimer = null;
+  }
+  if (state.topActiveTab !== "settings") return;
+  const tick = async () => {
+    await fetchSlackIntegrationStatus();
+    if (state.topActiveTab !== "settings") return;
+    slackStatusPollTimer = window.setTimeout(tick, 8000);
+  };
+  slackStatusPollTimer = window.setTimeout(tick, 200);
 }
 
 async function submitMockIngest(rawText) {
@@ -3075,6 +3162,7 @@ function renderNewTop() {
       { key: "all", label: "全て" },
       { key: "teams", label: "Teams" },
       { key: "email", label: "Email" },
+      { key: "slack", label: "Slack" },
       { key: "aiProcessed", label: "AI処理" },
       { key: "awaitingApproval", label: "承認待ち" },
       { key: "failed", label: "失敗" },
@@ -3087,6 +3175,7 @@ function renderNewTop() {
       const status = String(it?.statusKey || "").toLowerCase();
       if (filterKey === "teams") return src === "teams";
       if (filterKey === "email") return src === "email";
+      if (filterKey === "slack") return src === "slack";
       if (filterKey === "aiProcessed") return t === "aiprocessed" || t === "issueupdated" || t === "issueresolved";
       if (filterKey === "awaitingApproval") return status === "awaitingapproval" || status === "waitingapproval";
       if (filterKey === "failed") return status === "failed" || t === "failedprocessing";
@@ -3132,11 +3221,13 @@ function renderNewTop() {
       const title = String(it?.title || "");
       const actor = String(it?.actor || "");
       const at = String(it?.at || "");
+      const summary = String(it?.summary || "").trim();
       const details = Array.isArray(it?.details) ? it.details.filter(Boolean) : [];
       const id = String(it?.id || "");
       const expanded = !!(state.activityExpandedById && state.activityExpandedById[id]);
       const toggleIcon = expanded ? "▼" : "▶";
       const metaInline = [actor, at].filter(Boolean).join(" · ");
+      const summaryHtml = summary ? `<div class="activity-summary">${escapeHtml(summary)}</div>` : "";
       const detailsHtml =
         expanded && details.length
           ? `<div class="activity-detail">
@@ -3157,6 +3248,7 @@ function renderNewTop() {
             <div class="activity-title" title="${escapeHtml(title || "-")}">${escapeHtml(title || "-")}</div>
             <div class="activity-meta-inline">${escapeHtml(metaInline || "")}</div>
           </div>
+          ${summaryHtml}
           ${expanded ? renderLinked(it) : ""}
           ${detailsHtml}
           ${expanded ? renderLinks(it) : ""}
@@ -3181,7 +3273,7 @@ function renderNewTop() {
 
     const headerHtml = `<header class="activity-head" aria-label="Feed header">
       <div class="activity-head__title">活動ログ</div>
-      <div class="activity-head__sub nt-muted">AI・Teams・メールの更新を時系列で表示します。</div>
+      <div class="activity-head__sub nt-muted">AI・Teams・Email・Slack の更新を時系列で表示します。</div>
     </header>`;
 
     const queueCounts = buildActivityProcessingSummary(state);
@@ -3209,6 +3301,44 @@ function renderNewTop() {
           <div class="activity-stream" aria-label="Activity stream">${feedHtml}</div>
         </div>
         ${railHtml}
+      </div>
+    </section>`;
+  };
+
+  const renderSettingsPage = () => {
+    const endpointPath = "/slack/events";
+    const endpointFull = `${API_BASE_URL}${endpointPath}`;
+    const status = state.slackIntegrationStatus?.status || "unknown";
+    const lastReceivedAt = state.slackIntegrationStatus?.lastReceivedAt || null;
+    const lastText = lastReceivedAt ? formatLocalTime(lastReceivedAt) : "—";
+    const statusText = status === "connected" ? "Connected" : "Unknown";
+
+    return `<section class="settings-page" aria-label="Settings page">
+      <header class="settings-head">
+        <div class="settings-head__title">Settings</div>
+        <div class="settings-head__sub nt-muted">Integrations（hackathon demo）</div>
+      </header>
+
+      <div class="settings-grid" aria-label="Settings grid">
+        <section class="settings-card" aria-label="Slack integration">
+          <div class="settings-card__h">Slack Integration</div>
+          <div class="settings-kv">
+            <div class="k">Endpoint</div>
+            <div class="v nt-mono">${escapeHtml(endpointFull)}</div>
+          </div>
+          <div class="settings-kv">
+            <div class="k">Status</div>
+            <div class="v">${escapeHtml(statusText)}</div>
+          </div>
+          <div class="settings-kv">
+            <div class="k">Last Event</div>
+            <div class="v nt-mono">${escapeHtml(lastText)}</div>
+          </div>
+          <div class="settings-actions">
+            <button class="btn btn--ghost btn--small" type="button" data-slack-refresh="1">Refresh</button>
+          </div>
+          <div class="nt-muted settings-note">※ Signing secret verification は TODO（hackathon demo）</div>
+        </section>
       </div>
     </section>`;
   };
@@ -3548,7 +3678,7 @@ function renderNewTop() {
           })()
         : tab === "activity"
           ? renderActivityFeedPage()
-        : renderPlaceholder("Settings");
+        : renderSettingsPage();
 
 	  return `
 	    <div class="new-top">
@@ -8488,6 +8618,14 @@ function setupNewTop() {
       return;
     }
 
+    const slackRefreshEl = target.closest && target.closest("[data-slack-refresh]");
+    if (slackRefreshEl) {
+      e.preventDefault();
+      e.stopPropagation();
+      fetchSlackIntegrationStatus();
+      return;
+    }
+
     const convOpenEl = target.closest && target.closest("[data-conversation-thread-open]");
     if (convOpenEl) {
       const id = convOpenEl.getAttribute("data-conversation-thread-open") || "";
@@ -9548,6 +9686,8 @@ function main() {
   });
   setupNewTop();
   renderApp();
+  scheduleServerActivityPoll();
+  scheduleSlackStatusPoll();
 }
 
 main();
