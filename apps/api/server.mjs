@@ -582,7 +582,8 @@ const server = http.createServer(async (req, res) => {
 });
 
 const port = Number(process.env.PORT || 3000);
-server.listen(port, "127.0.0.1", () => {
+const host = process.env.HOST || "0.0.0.0";
+server.listen(port, host, () => {
   // eslint-disable-next-line no-console
-  console.log(`trade-shelf-agent listening on http://127.0.0.1:${port}`);
+  console.log(`trade-shelf-agent listening on http://${host}:${port}`);
 });
