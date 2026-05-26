@@ -10,7 +10,12 @@ import { createShelfRenderer, renderShelfPreviewHtml } from "./components/shelf.
 import { createDocumentWorkspaceRenderer } from "./components/documentWorkspace.js";
 import { createApprovalCenterRenderer } from "./components/approvalCenter.js";
 
-const API_BASE_URL = window.TRADE_SHELF_API_BASE_URL || "http://127.0.0.1:3000";
+const API_BASE_URL = (() => {
+  const raw = window.TRADE_SHELF_API_BASE_URL;
+  const v = typeof raw === "string" ? raw.trim() : "";
+  if (!v) return "";
+  return v.endsWith("/") ? v.slice(0, -1) : v;
+})();
 
 let serverActivityPollTimer = null;
 let slackStatusPollTimer = null;
