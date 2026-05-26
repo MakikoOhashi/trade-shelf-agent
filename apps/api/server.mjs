@@ -73,6 +73,116 @@ const CLASSIFY_INTENTS = new Set([
   "unknown",
 ]);
 
+function statusKeyFromIngestStatus(status) {
+  const s = String(status || "").toLowerCase();
+  if (s === "ok" || s === "success") return "success";
+  if (s === "warning") return "warning";
+  if (s === "failed" || s === "error") return "failed";
+  return "processing";
+}
+
+function activityTitleJaFromType(rawType, fallback) {
+  switch (String(rawType || "")) {
+    case "raw_input_received":
+      return "依頼受信";
+    case "context_resolved":
+      return "Context判定";
+    case "clarification_waiting":
+      return "不足情報の確認待ち";
+    case "clarification_matched":
+      return "確認返信を紐付け";
+    case "clarification_required":
+      return "追加情報が必要";
+    case "human_selection_required":
+      return "候補選択が必要";
+    case "reminder_planned":
+      return "リマインド予定";
+    case "classified":
+      return "AI分類";
+    case "entity_linked":
+      return "関連紐付け";
+    case "state_transition_candidate_detected":
+      return "状態遷移候補を検出";
+    case "intake_resolved":
+      return "Intake判定";
+    case "action_planned":
+      return "次アクションを判定";
+    case "draft_created":
+      return "下書きを生成";
+    case "approval_required":
+      return "承認待ちへ追加";
+    case "issue_updated":
+      return "Issue更新";
+    case "approved":
+      return "承認済み";
+    case "held":
+      return "保留";
+    case "edited":
+      return "編集済み";
+    case "mock_sent":
+      return "mock送信";
+    case "failed_processing":
+      return "処理失敗";
+    default:
+      return String(fallback || "活動");
+  }
+}
+
+function activityEventToFeedItem(ev, { actorFallback } = {}) {
+  const occurredAt = ev && ev.occurredAt ? String(ev.occurredAt) : "";
+  const rawType = String(ev?.type || "");
+  const type = rawType === "issue_updated" ? "issueUpdated" : rawType || "aiProcessed";
+  const description = String(ev?.description || "");
+  const sequence = typeof ev?.sequence === "number" ? ev.sequence : null;
+  const linkedEntities = Array.isArray(ev?.linkedEntities) ? ev.linkedEntities.filter(Boolean) : [];
+
+  const linkedDeduped = (() => {
+    const seen = new Set();
+    const out = [];
+    for (const l of linkedEntities) {
+      const entityType = String(l?.entityType || "").trim();
+      const entityId = String(l?.entityId || "").trim();
+      if (!entityType || !entityId) continue;
+      const key = `${entityType}::${entityId}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({ entityType, entityId, confidence: l?.confidence });
+    }
+    return out;
+  })();
+
+  const linked = linkedDeduped.map((l) => ({
+    kind: String(l?.entityType || "").toLowerCase(),
+    label: String(l?.entityId || "").trim(),
+  }));
+
+  const activityTitleJa = activityTitleJaFromType(rawType, ev?.title);
+  const title = description ? `${activityTitleJa}：${description}` : activityTitleJa;
+
+  const details = [
+    rawType ? `type: ${activityTitleJa}${rawType ? ` (${rawType})` : ""}` : "",
+    ev?.status ? `状態: ${statusKeyFromIngestStatus(ev.status)} (${String(ev.status)})` : "",
+    typeof sequence === "number" ? `順序: ${String(sequence)}` : "",
+    linkedDeduped.length ? `紐付け: ${linkedDeduped.map((l) => `${l.entityType} ${l.entityId}`).join(", ")}` : "",
+    description && rawType !== "raw_input_received" ? `raw detail: ${description}` : "",
+  ].filter(Boolean);
+
+  return {
+    id: String(ev?.id || `act-${Date.now()}`),
+    type,
+    source: "ai",
+    title,
+    actor: String(ev?.actor || "") || String(actorFallback || "") || "mock ingest",
+    occurredAt: occurredAt || new Date().toISOString(),
+    sequence,
+    summary: description || "",
+    details,
+    statusKey: statusKeyFromIngestStatus(ev?.status),
+    linked,
+    links: [],
+  };
+}
+
 function sendJson(res, statusCode, payload) {
   const body = JSON.stringify(payload, null, 2);
   res.writeHead(statusCode, {
@@ -322,6 +432,14 @@ function sanitizeJsonContent(content) {
   return trimmed;
 }
 
+function hasAzureLlmEnv() {
+  return Boolean(
+    process.env.AZURE_OPENAI_ENDPOINT &&
+      process.env.AZURE_OPENAI_API_KEY &&
+      process.env.AZURE_OPENAI_DEPLOYMENT,
+  );
+}
+
 async function classifyThreadsWithLlm(rawText) {
   const userPrompt = [
     "Classify this input:",
@@ -436,6 +554,27 @@ async function serveStatic(req, res) {
   }
 }
 
+async function ingestWithLlmOrMock({ rawInput, pendingClarifications }) {
+  const pending = Array.isArray(pendingClarifications) ? pendingClarifications : [];
+  if (!hasAzureLlmEnv()) {
+    return runMockIngest(rawInput, { pendingClarifications: pending, sourceLabel: "mock ingest" });
+  }
+
+  const prelim = runIngestPipeline(rawInput, { sourceLabel: "Kimi AI分類", approvalPolicy: "all", pendingClarifications: pending });
+  const contextResolution = prelim?.contextResolution || resolveContext(rawInput, { sourceLabel: "Kimi AI分類", approvalPolicy: "all" });
+  if (contextResolution.status !== "resolved_enough") return prelim;
+
+  const classifyText = prelim && prelim.rawInput && prelim.rawInput.rawText ? String(prelim.rawInput.rawText) : rawInput.rawText;
+  const threads = await classifyThreadsWithLlm(classifyText);
+  const operationalThreads = linkEntitiesByRules(classifyText, threads).map((t) => ({ ...t, rawInputId: rawInput.id }));
+
+  return buildIngestResultFromThreads(rawInput, operationalThreads, {
+    sourceLabel: "Kimi AI分類",
+    approvalPolicy: "all",
+    pendingClarifications: pending,
+  });
+}
+
 const server = http.createServer(async (req, res) => {
   const reqUrl = new URL(req.url || "/", "http://localhost");
   const method = String(req.method || "GET").toUpperCase();
@@ -495,6 +634,10 @@ const server = http.createServer(async (req, res) => {
 
       if (eventType === "event_callback" && body && body.event && body.event.type === "message") {
         const ev = body.event || {};
+        if (ev.subtype) {
+          sendJson(res, 200, { ok: true, ignored: true, subtype: String(ev.subtype) });
+          return;
+        }
         const channelRaw = String(ev.channel || ev.channel_name || "").trim();
         const channel = channelRaw ? (channelRaw.startsWith("#") ? channelRaw : `#${channelRaw}`) : "#unknown";
         const user = String(ev.user || ev.username || "unknown").trim() || "unknown";
@@ -525,12 +668,51 @@ const server = http.createServer(async (req, res) => {
         };
 
         slackState.lastReceivedAt = new Date().toISOString();
-        slackState.activityFeedItems = [item, ...(Array.isArray(slackState.activityFeedItems) ? slackState.activityFeedItems : [])].slice(
-          0,
-          200,
-        );
+        slackState.activityFeedItems = [item, ...(Array.isArray(slackState.activityFeedItems) ? slackState.activityFeedItems : [])].slice(0, 200);
 
-        sendJson(res, 200, { ok: true });
+        // Slack expects a response within ~3 seconds; ingest runs async for demo safety.
+        res.writeHead(200, { "content-type": "text/plain; charset=utf-8" });
+        res.end("ok");
+
+        Promise.resolve()
+          .then(async () => {
+            const rawInput = {
+              id: `slack-${eventId || ts || Date.now()}`,
+              source: "slack",
+              receivedAt: new Date().toISOString(),
+              senderName: user,
+              channel,
+              subject: undefined,
+              rawText: text,
+              attachmentNames: [],
+              status: "received",
+            };
+
+            const result = await ingestWithLlmOrMock({ rawInput, pendingClarifications: [] });
+            const events = Array.isArray(result?.activityEvents) ? result.activityEvents.filter(Boolean) : [];
+            const feedItems = events.map((evv) => activityEventToFeedItem(evv, { actorFallback: hasAzureLlmEnv() ? "Kimi AI分類" : "mock ingest" }));
+
+            if (feedItems.length) {
+              slackState.activityFeedItems = [...feedItems, ...(Array.isArray(slackState.activityFeedItems) ? slackState.activityFeedItems : [])].slice(0, 400);
+            }
+          })
+          .catch((err) => {
+            const message = err && err.message ? String(err.message) : String(err);
+            const failedItem = {
+              id: `slack-ingest-failed:${eventId || ts}:${Date.now()}`,
+              type: "failedProcessing",
+              source: "ai",
+              title: "処理失敗（Slack ingest）",
+              actor: hasAzureLlmEnv() ? "Kimi AI分類" : "mock ingest",
+              occurredAt: new Date().toISOString(),
+              summary: message,
+              details: [message],
+              statusKey: "failed",
+              linked: [],
+              links: [],
+            };
+            slackState.activityFeedItems = [failedItem, ...(Array.isArray(slackState.activityFeedItems) ? slackState.activityFeedItems : [])].slice(0, 400);
+          });
         return;
       }
 

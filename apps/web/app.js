@@ -3176,19 +3176,19 @@ function renderNewTop() {
       { key: "supplierReply", label: "仕入先返信" },
     ];
 
-    const matchesFilter = (it) => {
-      const src = String(it?.source || "").toLowerCase();
-      const t = String(it?.type || "").toLowerCase();
-      const status = String(it?.statusKey || "").toLowerCase();
-      if (filterKey === "teams") return src === "teams";
-      if (filterKey === "email") return src === "email";
-      if (filterKey === "slack") return src === "slack";
-      if (filterKey === "aiProcessed") return t === "aiprocessed" || t === "issueupdated" || t === "issueresolved";
-      if (filterKey === "awaitingApproval") return status === "awaitingapproval" || status === "waitingapproval";
-      if (filterKey === "failed") return status === "failed" || t === "failedprocessing";
-      if (filterKey === "supplierReply") return t === "supplierreply";
-      return true;
-    };
+      const matchesFilter = (it) => {
+        const src = String(it?.source || "").toLowerCase();
+        const t = String(it?.type || "").toLowerCase();
+        const status = String(it?.statusKey || "").toLowerCase();
+        if (filterKey === "teams") return src === "teams";
+        if (filterKey === "email") return src === "email";
+        if (filterKey === "slack") return src === "slack";
+        if (filterKey === "aiProcessed") return src === "ai" || t === "aiprocessed" || t === "issueupdated" || t === "issueresolved";
+        if (filterKey === "awaitingApproval") return status === "awaitingapproval" || status === "waitingapproval";
+        if (filterKey === "failed") return status === "failed" || t === "failedprocessing";
+        if (filterKey === "supplierReply") return t === "supplierreply";
+        return true;
+      };
 
     const filtered = items.filter(matchesFilter);
 
