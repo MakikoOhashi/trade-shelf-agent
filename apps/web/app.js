@@ -12,6 +12,43 @@ import { createApprovalCenterRenderer } from "./components/approvalCenter.js";
 
 const API_BASE_URL = window.TRADE_SHELF_API_BASE_URL || "http://127.0.0.1:3000";
 
+const TOP_TAB_PATHS = {
+  shelf: "/shelf",
+  issues: "/approvals",
+  activity: "/activity",
+  settings: "/settings",
+};
+
+function topTabFromPath(pathname) {
+  const p = String(pathname || "");
+  if (p.startsWith("/approvals")) return "issues";
+  if (p.startsWith("/activity")) return "activity";
+  if (p.startsWith("/settings")) return "settings";
+  return "shelf";
+}
+
+function syncUrlForTopTab(nextTab, { replace = false } = {}) {
+  const tab = String(nextTab || "");
+  const nextPath = TOP_TAB_PATHS[tab] || TOP_TAB_PATHS.shelf;
+  if (!nextPath || typeof history === "undefined") return;
+  if (window.location && window.location.pathname === nextPath) return;
+  if (replace) history.replaceState({ tab }, "", nextPath);
+  else history.pushState({ tab }, "", nextPath);
+}
+
+function setTopActiveTab(nextTab, { push = false, replace = false } = {}) {
+  const tab = TOP_TAB_PATHS[String(nextTab || "")] ? String(nextTab || "") : "shelf";
+  state.topActiveTab = tab;
+  if (tab !== "issues") {
+    state.activeIssueId = null;
+    state.activeMutationId = null;
+    state.isOperationalThreadModalOpen = false;
+  }
+  if (push) syncUrlForTopTab(tab, { replace: false });
+  if (replace) syncUrlForTopTab(tab, { replace: true });
+  renderApp();
+}
+
 const movementShelfDefs = [
   { key: "notArranged", label: "未手配" },
   { key: "preparingShipment", label: "出荷準備中" },
@@ -8353,13 +8390,7 @@ function setupNewTop() {
       e.stopPropagation();
       const key = tabEl.getAttribute("data-nt-tab") || "";
       if (newTopTabs.some((t) => t.key === key)) {
-        state.topActiveTab = key;
-        if (key !== "issues") {
-          state.activeIssueId = null;
-          state.activeMutationId = null;
-        }
-        if (key !== "issues") state.isOperationalThreadModalOpen = false;
-        renderApp();
+        setTopActiveTab(key, { push: true });
       }
       return;
     }
@@ -9507,6 +9538,14 @@ function main() {
   setupWorkspaceModals();
   setupOperationalThreadModal();
   seed();
+  const initialTab = topTabFromPath(window.location && window.location.pathname);
+  state.topActiveTab = initialTab;
+  if (window.location && window.location.pathname === "/") {
+    syncUrlForTopTab(initialTab, { replace: true });
+  }
+  window.addEventListener("popstate", () => {
+    setTopActiveTab(topTabFromPath(window.location && window.location.pathname), { push: false });
+  });
   setupNewTop();
   renderApp();
 }
