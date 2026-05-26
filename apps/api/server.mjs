@@ -354,8 +354,26 @@ async function classifyThreadsWithLlm(rawText) {
 
 async function serveStatic(req, res) {
   const reqUrl = new URL(req.url || "/", "http://localhost");
+  const method = String(req.method || "GET").toUpperCase();
   const pathname = decodeURIComponent(reqUrl.pathname);
   const rel = pathname === "/" ? "/index.html" : pathname;
+
+  const isApiNamespace =
+    pathname === "/ai" ||
+    pathname.startsWith("/ai/") ||
+    pathname === "/api" ||
+    pathname.startsWith("/api/") ||
+    pathname === "/ingest" ||
+    pathname.startsWith("/ingest/") ||
+    pathname === "/teams" ||
+    pathname.startsWith("/teams/");
+
+  // Never serve SPA fallback for API namespaces.
+  if (isApiNamespace) {
+    res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
+    res.end("not found");
+    return;
+  }
 
   // Prevent path traversal.
   const abs = path.resolve(webRoot, "." + rel);
@@ -368,8 +386,23 @@ async function serveStatic(req, res) {
   try {
     const buf = await fs.readFile(abs);
     res.writeHead(200, { "content-type": contentTypeFor(abs) });
-    res.end(buf);
+    res.end(method === "HEAD" ? undefined : buf);
   } catch {
+    const hasExtension = path.extname(pathname).length > 0;
+
+    // SPA fallback for extensionless GET/HEAD routes (e.g. /shelf).
+    if (!hasExtension && (method === "GET" || method === "HEAD")) {
+      const indexPath = path.resolve(webRoot, "index.html");
+      try {
+        const buf = await fs.readFile(indexPath);
+        res.writeHead(200, { "content-type": contentTypeFor(indexPath) });
+        res.end(method === "HEAD" ? undefined : buf);
+        return;
+      } catch {
+        // If the frontend bundle is missing, fall through to 404.
+      }
+    }
+
     res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
     res.end("not found");
   }
