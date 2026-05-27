@@ -820,6 +820,28 @@ function normalizeDemoTradeCaseItem(item) {
   if (!id) return null;
   const next = { ...item };
   next.title = normalizeDemoTitle(next.title);
+
+  // Migration: some demo TradeCases were persisted with SI number only (unknown SI approval flow).
+  // Normalize the persisted title so downstream UIs don't need to guess.
+  const siOnlyTitleRe = /^SI-\d{4}-\d+$/i;
+  const siFromCase = (() => {
+    const candidates = [
+      next?.siNumber,
+      Array.isArray(next?.siNumbers) ? next.siNumbers[0] : "",
+      next?.siEntity?.siNo,
+      siOnlyTitleRe.test(String(next?.title || "").trim()) ? String(next.title).trim() : "",
+    ];
+    for (const c of candidates) {
+      const s = String(c || "").trim().toUpperCase();
+      if (siOnlyTitleRe.test(s)) return s;
+    }
+    return "";
+  })();
+
+  const t = String(next.title || "").trim();
+  if (siFromCase && (t === siFromCase || siOnlyTitleRe.test(t))) {
+    next.title = `ETA変更・納期影響確認（${siFromCase}）`;
+  }
   return next;
 }
 
@@ -990,7 +1012,7 @@ function createDemoTradeCaseFromApproval(approval) {
 
   return {
     id,
-    title: siNumber,
+    title: siNumber ? `ETA変更・納期影響確認（${siNumber}）` : "ETA変更・納期影響確認",
     tradeType: "import",
     siNumbers: [siNumber],
     invoiceNumbers: [],

@@ -115,6 +115,23 @@ export function createApprovalCenterRenderer(deps) {
       return "";
     };
 
+    const normalizeIssueTitle = (titleLike, tc) => {
+      const raw = String(titleLike || "").trim();
+      if (!raw) return raw;
+      const siOnlyTitleRe = /^SI-\d{4}-\d+$/i;
+      if (!siOnlyTitleRe.test(raw)) return raw;
+      const siCandidates = [
+        Array.isArray(tc?.siNumbers) ? tc.siNumbers[0] : "",
+        tc?.siEntity?.siNo,
+        raw,
+      ];
+      for (const c of siCandidates) {
+        const s = String(c || "").trim().toUpperCase();
+        if (siOnlyTitleRe.test(s)) return `ETA変更・納期影響確認（${s}）`;
+      }
+      return raw;
+    };
+
     const buildIssueForCase = (tc) => {
       if (!tc) return null;
       const incidents = Array.isArray(tc?.incidents) ? tc.incidents : detectIncidents(tc);
@@ -128,7 +145,8 @@ export function createApprovalCenterRenderer(deps) {
         ? tc.decisionContext.documentStatus.filter((d) => d && String(d.status || "").toLowerCase().includes("missing"))
         : [];
 
-      const title = tc?.title || tc?.siEntity?.siNo || tc?.shipmentEntity?.id || `Case ${tc.id}`;
+      const titleRaw = tc?.title || tc?.siEntity?.siNo || tc?.shipmentEntity?.id || `Case ${tc.id}`;
+      const title = normalizeIssueTitle(titleRaw, tc);
       const severity = maxSeverity(activeIncidents);
 
       // Status bucket
