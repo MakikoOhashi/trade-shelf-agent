@@ -9,17 +9,23 @@ import {
 
 function renderShelfPreviewHtml(payload, escapeHtml) {
   if (!payload) return "";
-  return `
-      <div class="shelf-book-info__title">${escapeHtml(String(payload.idText || "-"))}</div>
-      <div class="shelf-book-info__line">${escapeHtml(String(payload.partyName || "-"))}</div>
-      <div class="shelf-book-info__line">${escapeHtml(String(payload.dueLabel || "-"))}</div>
-      <div class="shelf-book-info__line">状態: ${escapeHtml(String(payload.stageLabel || "-"))}</div>
+  const notes = Array.isArray(payload.notes) ? payload.notes.filter(Boolean) : [];
+  const notesHtml = notes.length
+    ? `
       <div class="shelf-book-info__section">
-        <div class="shelf-book-info__section-title">Tags</div>
-        ${String(payload.tagsHtml || `<div class="shelf-book-info__tags-empty muted">-</div>`)}
+        <div class="shelf-book-info__section-title">注意点</div>
+        <ul class="shelf-book-info__notes">
+          ${notes.map((n) => `<li>${escapeHtml(String(n))}</li>`).join("")}
+        </ul>
       </div>
-      <div class="shelf-book-info__line">Issue: ${escapeHtml(String(payload.issueLabel || "-"))}</div>
-      <div class="shelf-book-info__hint">クリックでWorkspace</div>
+    `.trim()
+    : "";
+  return `
+      <div class="shelf-book-info__title">${escapeHtml(String(payload.siNo || "-"))}</div>
+      <div class="shelf-book-info__line">取引先：${escapeHtml(String(payload.partyName || "-"))}</div>
+      <div class="shelf-book-info__line">納品予定：${escapeHtml(String(payload.dueYmd || "-"))}</div>
+      <div class="shelf-book-info__line">状態：${escapeHtml(String(payload.stageLabel || "-"))}</div>
+      ${notesHtml}
     `.trim();
 }
 
@@ -48,6 +54,34 @@ function deriveBlockerLabels(tc) {
     uniq.push(k);
   }
   return uniq;
+}
+
+function summarizeTooltipNote(raw) {
+  let s = String(raw || "").trim();
+  if (!s) return "";
+
+  s = s.replace(/^AI推定[:：]?\s*/u, "").trim();
+  s = s.replace(/\s+/g, " ").trim();
+
+  const lower = s.toLowerCase();
+
+  // Common short forms
+  if (s.includes("Packing List未着") || /packing\s*list/.test(lower)) return "PL未着";
+  if ((/\bpl\b/.test(lower) || /^pl\b/.test(lower)) && (/\bmissing\b/.test(lower) || s.includes("未着"))) return "PL未着";
+
+  if (s.includes("INV数量差異") && (s.includes("未確認") || s.includes("理由") || /\breason\b/.test(lower))) return "INV数量差異 未確認";
+  if ((/\binv\b/.test(lower) || /^inv\b/.test(lower)) && /\bneeds\s*fix\b/.test(lower)) return "INV要確認";
+  if ((/\binv\b/.test(lower) || /^inv\b/.test(lower)) && /\bneedsfix\b/.test(lower)) return "INV要確認";
+
+  const remainMatch = s.match(/残\s*([0-9]+)\s*pcs/i);
+  if (remainMatch && (s.includes("次便") || /\bnext\b/.test(lower))) return `残${remainMatch[1]}pcs 次便確認待ち`;
+  if (s.includes("残") && s.includes("pcs") && s.includes("次便")) return s.replace(/の/g, "").replace(/補充確定待ち/g, "次便確認待ち");
+
+  // Generic English -> JP-ish
+  if (/\bmissing\b/.test(lower)) return s.replace(/\bmissing\b/gi, "未着").trim();
+  if (/\bneeds\s*fix\b/.test(lower)) return s.replace(/\bneeds\s*fix\b/gi, "要確認").trim();
+
+  return s;
 }
 
 function formatAiInferenceLabel(raw) {
@@ -191,15 +225,13 @@ function createShelfRenderer({
 
     const previewId = String(tc?.id || "").trim();
     const { siLabel, shipmentLabel } = buildBookSpineLabels(tc);
-    const idText = shipmentLabel ? `${siLabel} / ${shipmentLabel}` : siLabel;
+    const siNo = siLabel;
+    const ariaLabelText = shipmentLabel ? `${siLabel} / ${shipmentLabel}` : siLabel;
 
     const salesCommitments = Array.isArray(tc?.decisionContext?.salesCommitments) ? tc.decisionContext.salesCommitments : [];
     const partyName = String(salesCommitments[0]?.customerName || tc?.customer?.name || tc?.supplier?.name || "Customer");
 
     const dueYmd = String(sh?.eta || si?.requestedDeliveryDate || "");
-    const dueLabel = sh?.eta ? (dueYmd ? `ETA ${dueYmd}` : "ETA未定") : dueYmd ? `delivery ${dueYmd}` : "delivery未定";
-    const sourceRaw = String(sh?.source || tc?.createdFrom || "").trim().toLowerCase();
-    const sourceLabel = sourceRaw ? `Source: ${sourceRaw === "slack" ? "Slack" : sourceRaw}` : "";
 
     const blockers = deriveBlockerLabels(tc);
     const blockerCount = blockers.length;
@@ -215,17 +247,20 @@ function createShelfRenderer({
 
     const riskClass = overdue ? "is-overdue" : blockerCount > 0 ? "is-blocker" : completed ? "is-completed" : "is-normal";
 
-    const issueLabel = resolveIssueLabelForTradeCase(tc);
-
     const focusType = "shipment";
     const focusId = String(sh?.id || "").trim();
     const workspaceAttrs = `data-open-document-workspace="${escapeHtml(tc.id)}" data-focus-type="${escapeHtml(
       focusType,
     )}" data-focus-id="${escapeHtml(focusId || "-")}" data-initial-doc-id="${escapeHtml(focusType)}"`;
 
-    const tagsHtml = blockers.length
-      ? `<ul class="shelf-book-info__tags">${blockers.map((t) => `<li>${escapeHtml(formatAiInferenceLabel(t))}</li>`).join("")}</ul>`
-      : `<div class="shelf-book-info__tags-empty muted">-</div>`;
+    const tooltipNotes = [];
+    for (const b of blockers) {
+      const summary = summarizeTooltipNote(b);
+      if (!summary) continue;
+      if (tooltipNotes.includes(summary)) continue;
+      tooltipNotes.push(summary);
+      if (tooltipNotes.length >= 2) break;
+    }
 
     return {
       stageId,
@@ -235,16 +270,15 @@ function createShelfRenderer({
       __tc: tc,
       previewId,
       previewPayload: {
-        idText,
+        siNo,
         partyName,
-        dueLabel: sourceLabel ? `${dueLabel} · ${sourceLabel}` : dueLabel,
+        dueYmd: dueYmd || "未定",
         stageLabel: getShelfStageById(stageId).label || "-",
-        tagsHtml,
-        issueLabel,
+        notes: tooltipNotes,
       },
       html: `<button class="shelf-book ${riskClass}" type="button" ${workspaceAttrs} data-shelf-preview-id="${escapeHtml(
         previewId,
-      )}" aria-label="${escapeHtml(idText)}">
+      )}" aria-label="${escapeHtml(ariaLabelText)}">
         <span class="shelf-book__title">
           <span class="shelf-book__spine">
             <span class="shelf-book__spine-line">${escapeHtml(siLabel)}</span>
