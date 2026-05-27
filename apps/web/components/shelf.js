@@ -50,6 +50,15 @@ function deriveBlockerLabels(tc) {
   return uniq;
 }
 
+function formatAiInferenceLabel(raw) {
+  const s = String(raw || "").trim();
+  if (!s) return "";
+  if (s.startsWith("AI推定")) return s;
+  if (/^ETA[:\s]/i.test(s)) return `AI推定ETA: ${s.replace(/^ETA[:\s]*/i, "").trim() || "-"}`;
+  if (/\bETA\b/i.test(s) || /入荷予定|到着予定|入港予定|納品予定/.test(s)) return `AI推定ETA: ${s}`;
+  return `AI推定: ${s}`;
+}
+
 function hasHighIssues(tc) {
   const incidents = Array.isArray(tc?.incidents) ? tc.incidents : [];
   for (const i of incidents) {
@@ -131,7 +140,12 @@ function createShelfRenderer({
     const tagList = blockers.slice(0, maxTags);
     const moreCount = Math.max(0, blockerCount - tagList.length);
     const tagsHtml = [
-      ...tagList.map((t) => `<span class="nt-badge is-blocker">${escapeHtml(t)}</span>`),
+      ...tagList.map(
+        (t) =>
+          `<span class="nt-badge is-ai">${escapeHtml("AI推定")}</span><span class="nt-badge is-blocker">${escapeHtml(
+            String(t),
+          )}</span>`,
+      ),
       ...(moreCount > 0 ? [`<span class="nt-badge is-more">+${moreCount} more</span>`] : []),
     ].join("");
 
@@ -210,7 +224,7 @@ function createShelfRenderer({
     )}" data-focus-id="${escapeHtml(focusId || "-")}" data-initial-doc-id="${escapeHtml(focusType)}"`;
 
     const tagsHtml = blockers.length
-      ? `<ul class="shelf-book-info__tags">${blockers.map((t) => `<li>${escapeHtml(t)}</li>`).join("")}</ul>`
+      ? `<ul class="shelf-book-info__tags">${blockers.map((t) => `<li>${escapeHtml(formatAiInferenceLabel(t))}</li>`).join("")}</ul>`
       : `<div class="shelf-book-info__tags-empty muted">-</div>`;
 
     return {

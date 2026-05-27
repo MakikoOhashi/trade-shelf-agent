@@ -1541,6 +1541,12 @@ body {
   color: #24292f;
 }
 
+#app .nt-badge.is-ai {
+  border-color: color-mix(in srgb, #0969da 26%, #d0d7de);
+  background: color-mix(in srgb, #0969da 6%, #ffffff);
+  color: #0550ae;
+}
+
 #app .nt-issue__body {
   margin-top: 8px;
   color: #57606a;

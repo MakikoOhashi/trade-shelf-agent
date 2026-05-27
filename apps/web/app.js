@@ -5355,7 +5355,7 @@ function buildDocumentWorkspaceDocuments(tradeCase, focusType, focusId) {
     mockPages: [
       {
         title: "SHIPMENT OVERVIEW",
-        subtitle: "Mock summary",
+        subtitle: "AI operational summary",
         rows: [
           { k: "Shipment", v: sh?.id || "SHP-2026-009" },
           { k: "Booking", v: sh?.bookingNo || "BK-88201" },
@@ -6687,6 +6687,31 @@ function renderTradeCaseDetail(tradeCase) {
     const cp = tradeCase && tradeCase.caseProgress ? tradeCase.caseProgress : null;
     if (!cp) return "";
 
+    const formatAiInferenceLabel = (raw) => {
+      const s = String(raw || "").trim();
+      if (!s) return "";
+      if (s.startsWith("AI推定")) return s;
+      if (/^ETA[:\s]/i.test(s)) return `AI推定ETA: ${s.replace(/^ETA[:\s]*/i, "").trim() || "-"}`;
+      if (/\bETA\b/i.test(s) || /入荷予定|到着予定|入港予定|納品予定/.test(s)) return `AI推定ETA: ${s}`;
+      return `AI推定: ${s}`;
+    };
+
+    const looksLikeConfirmedEntity = (raw) => {
+      const s = String(raw || "").trim();
+      if (!s) return false;
+      if (/^(SI|SHP|INV|BL|ISS|PLN)-\d{4}[-\d]*/.test(s)) return true;
+      return false;
+    };
+
+    const shouldAiTagProgressItem = (it) => {
+      if (!it) return false;
+      const label = it.label || it.id || "";
+      if (looksLikeConfirmedEntity(label)) return false;
+      const st = String(it.status || "").trim();
+      if (!st) return false;
+      return st === "missing" || st === "needsFix" || st === "blocked";
+    };
+
     const percentRaw = Number(cp.overallPercent);
     const percent = Number.isFinite(percentRaw) ? Math.max(0, Math.min(100, Math.round(percentRaw))) : 0;
     const wfCurrentLabel = (() => {
@@ -6717,11 +6742,13 @@ function renderTradeCaseDetail(tradeCase) {
         .map((it) => {
           if (!it) return "";
           const label = it.label || it.id || "-";
+          const aiBadge = shouldAiTagProgressItem(it) ? `<span class="nt-badge is-ai">AI推定</span>` : "";
           const note = it.note ? `<div class="progress-item__note">${escapeHtml(String(it.note))}</div>` : "";
           const blockingBadge = it.blocking ? `<span class="pill pill--mini pill--high">blocking</span>` : "";
           return `<li class="progress-item ${it.blocking ? "is-blocking" : ""}">
             <div class="progress-item__main">
               <span class="progress-item__icon">${escapeHtml(iconFor(it.status))}</span>
+              ${aiBadge}
               <span class="progress-item__label">${escapeHtml(String(label))}</span>
               ${blockingBadge}
             </div>
@@ -6733,7 +6760,9 @@ function renderTradeCaseDetail(tradeCase) {
 
     const blocking = Array.isArray(cp.blockingSummary) ? cp.blockingSummary : [];
     const blockingHtml = blocking.length
-      ? `<div class="detail-subhead">Blocking Summary</div><ul class="mini-list">${blocking.map((x) => `<li>${escapeHtml(String(x))}</li>`).join("")}</ul>`
+      ? `<div class="detail-subhead">Blocking Summary</div><ul class="mini-list">${blocking
+          .map((x) => `<li>${escapeHtml(formatAiInferenceLabel(x))}</li>`)
+          .join("")}</ul>`
       : "";
 
     return `<section class="detail-section detail-section--progress">
