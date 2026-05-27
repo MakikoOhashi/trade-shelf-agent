@@ -68,6 +68,22 @@ function createShelfRenderer({
   resolveIssueLabelForTradeCase,
   getMockEvidenceArchiveItems,
 }) {
+  const statusLabelEnFromShipmentState = (shipmentState) => {
+    const s = String(shipmentState || "").trim();
+    if (!s) return "-";
+    if (s === "inTransit") return "In Transit";
+    if (s === "exportCustoms") return "Export Customs";
+    if (s === "importCustoms") return "Import Customs";
+    if (s === "customsCleared") return "Customs Cleared";
+    if (s === "arrived") return "Arrived";
+    if (s === "waitingWarehouseReceipt") return "Waiting Warehouse Receipt";
+    if (s === "warehouseReceived") return "Warehouse Received";
+    if (s === "completed") return "Completed";
+    if (s === "shipped") return "Shipped";
+    if (s === "shippingPending") return "Shipping Pending";
+    return s.replace(/([A-Z])/g, " $1").replace(/^./, (c) => c.toUpperCase());
+  };
+
   const resolveShipmentSequence = (tc) => {
     const siNo = String(tc?.siEntity?.siNo || "").trim();
     const shId = String(tc?.shipmentEntity?.id || "").trim();
@@ -99,15 +115,15 @@ function createShelfRenderer({
     const si = tc && tc.siEntity ? tc.siEntity : null;
 
     const { siLabel, shipmentLabel } = buildBookSpineLabels(tc);
-    const idText = shipmentLabel ? `${siLabel} / ${shipmentLabel}` : siLabel;
 
     const salesCommitments = Array.isArray(tc?.decisionContext?.salesCommitments) ? tc.decisionContext.salesCommitments : [];
     const partyName = String(salesCommitments[0]?.customerName || tc?.customer?.name || tc?.supplier?.name || "Customer");
 
     const dueYmd = String(sh?.eta || si?.requestedDeliveryDate || "");
-    const dueLabel = sh?.eta ? `ETA ${dueYmd}` : dueYmd ? `delivery ${dueYmd}` : "delivery未定";
+    const dueLabel = sh?.eta ? `ETA: ${dueYmd || "-"}` : dueYmd ? `delivery: ${dueYmd}` : "delivery未定";
     const sourceRaw = String(sh?.source || tc?.createdFrom || "").trim().toLowerCase();
     const sourceLabel = sourceRaw ? `Source: ${sourceRaw === "slack" ? "Slack" : sourceRaw}` : "";
+    const statusLabel = `Status: ${statusLabelEnFromShipmentState(sh?.shipmentState)}`;
 
     const blockers = deriveBlockerLabels(tc);
     const blockerCount = blockers.length;
@@ -140,10 +156,12 @@ function createShelfRenderer({
     void opts;
     return `<article class="${cardClass}" role="button" tabindex="0" ${openAttr} ${workspaceAttrs}>
       <div class="shelf-card__top">
-        <div class="shelf-card__id">${escapeHtml(idText)}</div>
+        <div class="shelf-card__id">${escapeHtml(siLabel)}</div>
       </div>
+      ${shipmentLabel ? `<div class="shelf-card__meta nt-muted">Shipment: ${escapeHtml(shipmentLabel)}</div>` : ""}
       <div class="shelf-card__party nt-muted">${escapeHtml(partyName)}</div>
       <div class="shelf-card__meta nt-muted">${escapeHtml(dueLabel)}</div>
+      <div class="shelf-card__meta nt-muted">${escapeHtml(statusLabel)}</div>
       ${sourceLabel ? `<div class="shelf-card__meta nt-muted">${escapeHtml(sourceLabel)}</div>` : ""}
       ${tagsHtml ? `<div class="shelf-card__tags">${tagsHtml}</div>` : ""}
       <div class="nt-progress">

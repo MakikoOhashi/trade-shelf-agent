@@ -849,6 +849,29 @@ function appendDemoTradeCase(tc) {
   schedulePersistDemoStores();
 }
 
+function nextInternalShipmentId({ now = new Date(), preferredYear } = {}) {
+  const year = typeof preferredYear === "string" && preferredYear.trim() ? preferredYear.trim() : String(now.getFullYear());
+
+  const candidates = [];
+  const fromMock = Array.isArray(mockTradeCases) ? mockTradeCases : [];
+  const fromDemo = Array.isArray(slackState.demoTradeCases) ? slackState.demoTradeCases : [];
+
+  for (const tc of [...fromMock, ...fromDemo]) {
+    const id = String(tc?.shipmentEntity?.id || "").trim();
+    if (!id) continue;
+    const m = id.match(/^SHP-(\d{4})-(\d+)\b/);
+    if (!m) continue;
+    candidates.push({ year: m[1], num: Number(m[2]) });
+  }
+
+  const maxForYear = candidates
+    .filter((x) => x.year === year && Number.isFinite(x.num))
+    .reduce((acc, x) => (x.num > acc ? x.num : acc), 0);
+
+  const next = maxForYear + 1;
+  return `SHP-${year}-${String(next).padStart(3, "0")}`;
+}
+
 function createDemoTradeCaseFromApproval(approval) {
   const siNumber = String(approval?.metadata?.siNumber || "").trim().toUpperCase();
   const eta = String(approval?.metadata?.eta || "").trim();
@@ -857,6 +880,7 @@ function createDemoTradeCaseFromApproval(approval) {
 
   const idNum = siNumber.replace(/[^0-9]/g, "") || String(Date.now());
   const id = `TC-DEMO-${idNum}`;
+  const shipmentId = nextInternalShipmentId({ now: new Date(), preferredYear: "2026" });
 
   return {
     id,
@@ -867,7 +891,7 @@ function createDemoTradeCaseFromApproval(approval) {
     blNumbers: [],
     shipmentRefs: [],
     shipmentEntity: {
-      id: `SHP-${siNumber}`,
+      id: shipmentId,
       eta: eta || "",
       shipmentState: suggestedStatus || "inTransit",
       source,
@@ -909,7 +933,7 @@ function createDemoTradeCaseFromApproval(approval) {
         id: `TL-${Date.now()}`,
         at: new Date().toISOString(),
         type: "createdFromSlack",
-        message: `Created from Slack approval (${siNumber})`,
+        message: `Created from Slack approval (${siNumber}) / Shipment ${shipmentId}`,
       },
     ],
     nextActions: [],
@@ -982,6 +1006,7 @@ const server = http.createServer(async (req, res) => {
       appendDemoTradeCase(tc);
 
       const siNumber = String(updated?.metadata?.siNumber || "").trim().toUpperCase();
+      const shipmentId = String(tc?.shipmentEntity?.id || "").trim();
       pushActivityItem({
         id: `demo:shelf-added:${siNumber}:${Date.now()}`,
         type: "aiProcessed",
@@ -990,9 +1015,9 @@ const server = http.createServer(async (req, res) => {
         actor: "demo approval",
         occurredAt: new Date().toISOString(),
         summary: `Added ${siNumber}`,
-        details: [`siNumber: ${siNumber}`],
+        details: [`siNumber: ${siNumber}`, shipmentId ? `出荷番号：${shipmentId}` : ""].filter(Boolean),
         statusKey: "success",
-        linked: [{ kind: "si", label: siNumber }],
+        linked: [{ kind: "si", label: siNumber }, ...(shipmentId ? [{ kind: "shipment", label: shipmentId }] : [])],
         links: [],
       });
 
@@ -1006,7 +1031,7 @@ const server = http.createServer(async (req, res) => {
         summary: "state transition",
         details: ["from: shippingPending", "to: inTransit"],
         statusKey: "success",
-        linked: [{ kind: "si", label: siNumber }],
+        linked: [{ kind: "si", label: siNumber }, ...(shipmentId ? [{ kind: "shipment", label: shipmentId }] : [])],
         links: [],
       });
 
