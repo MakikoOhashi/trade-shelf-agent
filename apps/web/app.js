@@ -904,7 +904,15 @@ function normalizeMutationTitle(title) {
   let s = String(title || "").trim();
   if (!s) return "";
   s = normalizeAiApprovalText(s);
+  // Demo data sometimes has legacy prefixes like "【輸入】" / "【三国間】".
+  s = s.replace(/^【[^】]+】\s*/u, "");
   s = s.replace(/\s*:\s*shipment unknown\s*$/i, "");
+  // Avoid showing "SI番号だけ" in Approval Center list.
+  if (/^SI-\d{4}-\d+$/i.test(s)) {
+    const si = s.toUpperCase();
+    if (si === "SI-2026-016") return `ETA変更・納期影響確認（${si}）`;
+    return `要確認（${si}）`;
+  }
   return s.trim();
 }
 

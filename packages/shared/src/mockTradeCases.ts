@@ -5,7 +5,7 @@ import type { TradeCase } from "./domain";
 // - Partial shipments (分納) are represented as multiple TradeCase rows sharing the same SI.
 const baseTc20260001: TradeCase = {
   id: "TC-2026-0001-BASE",
-  title: "【輸入】SI 1000pcs 指図済み / INV 400pcs のみ発行（数量差異）",
+  title: "INV数量差異（SI 1000pcs / INV 400pcs）",
     tradeType: "import",
     siNumbers: ["SI-2026-001"],
     invoiceNumbers: [
@@ -653,7 +653,7 @@ export const mockTradeCases: TradeCase[] = [
   },
   {
     id: "TC-2026-0002",
-    title: "【輸入】出荷済み / ETA 変更（Forwarder メールあり）",
+    title: "ETA変更（Forwarder連絡あり）",
     tradeType: "import",
     siNumbers: ["SI-2026-002"],
     invoiceNumbers: [
@@ -810,7 +810,7 @@ export const mockTradeCases: TradeCase[] = [
   },
   {
     id: "TC-2026-0003",
-    title: "【三国間】通関完了 / 書類完備 / 正常に完了間近",
+    title: "通関完了・書類確認済み",
     tradeType: "triangular",
     siNumbers: ["SI-2026-003"],
     invoiceNumbers: [

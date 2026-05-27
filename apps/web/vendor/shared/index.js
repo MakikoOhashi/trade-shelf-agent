@@ -806,7 +806,7 @@ export const mockTradeCases = [
     },
     {
         id: "TC-2026-0003",
-        title: "輸入通関完了・入荷待ち",
+        title: "通関完了・書類確認済み",
         tradeType: "triangular",
         siNumbers: ["SI-2026-003"],
         invoiceNumbers: [

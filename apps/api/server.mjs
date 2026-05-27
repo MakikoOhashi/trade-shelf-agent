@@ -791,6 +791,38 @@ async function ingestWithLlmOrMock({ rawInput, pendingClarifications }) {
   });
 }
 
+function normalizeDemoTitle(title) {
+  let s = String(title || "").trim();
+  if (!s) return "";
+  // Strip legacy "【輸入】" / "【三国間】" style prefixes.
+  s = s.replace(/^【[^】]+】\s*/u, "");
+
+  // One-off legacy demo titles (kept stable for UI expectations).
+  if (s === "SI 1000pcs 指図済み / INV 400pcs のみ発行（数量差異）") return "INV数量差異（SI 1000pcs / INV 400pcs）";
+  if (s === "出荷済み / ETA 変更（Forwarder メールあり）") return "ETA変更（Forwarder連絡あり）";
+  if (s === "通関完了 / 書類完備 / 正常に完了間近") return "通関完了・書類確認済み";
+
+  return s.trim();
+}
+
+function normalizeDemoApprovalItem(item) {
+  if (!item || typeof item !== "object") return null;
+  const id = String(item.id || "").trim();
+  if (!id) return null;
+  const next = { ...item };
+  next.title = normalizeDemoTitle(next.title);
+  return next;
+}
+
+function normalizeDemoTradeCaseItem(item) {
+  if (!item || typeof item !== "object") return null;
+  const id = String(item.id || "").trim();
+  if (!id) return null;
+  const next = { ...item };
+  next.title = normalizeDemoTitle(next.title);
+  return next;
+}
+
 const persistedActivitySnapshot = await tryLoadPersistedActivitySnapshot();
 if (persistedActivitySnapshot) {
   slackState.activityFeedItems = persistedActivitySnapshot.items;
@@ -798,16 +830,24 @@ if (persistedActivitySnapshot) {
 }
 
 const persistedDemoApprovals = await tryLoadPersistedJsonList(DEMO_APPROVALS_FILE_PATH);
-if (persistedDemoApprovals) slackState.demoApprovals = persistedDemoApprovals;
+if (persistedDemoApprovals) {
+  const normalized = persistedDemoApprovals.map(normalizeDemoApprovalItem).filter(Boolean);
+  const changed = JSON.stringify(normalized) !== JSON.stringify(persistedDemoApprovals);
+  slackState.demoApprovals = normalized;
+  if (changed) persistJsonListSnapshot(DEMO_APPROVALS_FILE_PATH, normalized);
+}
 
 const persistedDemoTradeCases =
   (await tryLoadPersistedJsonList(DEMO_TRADECASES_FILE_PATH)) ||
   (await tryLoadPersistedJsonList(LEGACY_DEMO_TRADECASES_FILE_PATH));
 if (persistedDemoTradeCases) {
+  const normalizedPersisted = persistedDemoTradeCases.map(normalizeDemoTradeCaseItem).filter(Boolean);
   slackState.demoTradeCases = dedupeDemoTradeCases({
     fromMock: mockTradeCases,
-    fromPersisted: persistedDemoTradeCases,
+    fromPersisted: normalizedPersisted,
   });
+  const changed = JSON.stringify(normalizedPersisted) !== JSON.stringify(persistedDemoTradeCases);
+  if (changed) persistJsonListSnapshot(DEMO_TRADECASES_FILE_PATH, normalizedPersisted);
 }
 
 function extractSiNumbersFromText(text) {
