@@ -2,7 +2,7 @@
  * Approval Center is a human decision surface.
  *
  * It should not become a dumping ground for every Incident,
- * internal Issue Candidate, or normal State Transition.
+ * internal work candidates, or normal State Transition.
  *
  * Internal-only state updates may be logged to Activity Log and Workspace.
  * External actions and high-risk decisions require explicit human approval.
@@ -209,10 +209,10 @@ export function createApprovalCenterRenderer(deps) {
           const reason = String(meta.reason || "").trim();
 
           const lines = [
-            source ? `Source: ${source}` : "",
-            status ? `推定ステータス: ${status === "inTransit" ? "In Transit" : status}` : "",
+            source ? `送信元: ${source}` : "",
+            status ? `推定ステータス: ${status === "inTransit" ? "輸送中" : status}` : "",
             eta ? `推定ETA: ${eta}` : "",
-            reason ? `Reason: ${reason}` : "",
+            reason ? `理由: ${reason}` : "",
           ]
             .filter(Boolean)
             .map((l) => `<div class="demo-approval__line">${escapeHtml(l)}</div>`)
@@ -228,14 +228,14 @@ export function createApprovalCenterRenderer(deps) {
             <div class="demo-approval__actions">
               <button class="btn btn--primary btn--small" type="button" data-demo-approval-approve="${escapeHtml(id)}" ${
                 id ? "" : "disabled"
-              }>Approve / 承認</button>
+              }>承認</button>
             </div>
           </div>`;
         })
         .join("");
 
       return `<section class="demo-approvals" aria-label="Demo approvals">
-        <div class="demo-approvals__title">新規案件候補（Slack 未登録SI）</div>
+        <div class="demo-approvals__title">新規案件（要確認 / Slack 未登録SI）</div>
         <div class="demo-approvals__sub muted">Slack から検出された未登録SIです。承認すると Shelf に新規案件を追加します。</div>
         <div class="demo-approvals__list">${rows}</div>
       </section>`;
@@ -245,10 +245,10 @@ export function createApprovalCenterRenderer(deps) {
     const issues = allCases.map(buildIssueForCase).filter(Boolean);
 
     const statusTextByKey = {
-      requiresApproval: "requires approval",
-      blocked: "blocked",
-      waitingExternal: "waiting supplier",
-      completed: "completed",
+      requiresApproval: "要承認",
+      blocked: "停止中",
+      waitingExternal: "回答待ち",
+      completed: "完了",
     };
 
     const statusIcon = (k) => {
@@ -313,8 +313,8 @@ export function createApprovalCenterRenderer(deps) {
     const renderPendingMutations = () => {
       const actionLabel = (a) => {
         const v = String(a || "");
-        if (v === "append_comment") return "既存Issue更新";
-        if (v === "create_issue_candidate") return "新規Issue候補";
+        if (v === "append_comment") return "既存案件の更新";
+        if (v === "create_issue_candidate") return "新規案件（要確認）";
         if (v === "mark_approval_required") return "承認待ち";
         return v || "-";
       };
@@ -700,15 +700,15 @@ export function createApprovalCenterRenderer(deps) {
 
       return `<section class="request-inbox-panel request-inbox-panel--preissue" aria-label="Pre-issue requests">
         <div class="request-inbox-panel__head">
-          <div class="request-inbox-panel__title">Issue作成前案件</div>
+          <div class="request-inbox-panel__title">確認待ち</div>
           <div class="request-inbox-panel__count nt-mono">${escapeHtml(String(totalCount))}</div>
         </div>
-        <div class="request-inbox-panel__sub muted">確認が必要な依頼をここで補完し、Issue候補へ進めます。</div>
+        <div class="request-inbox-panel__sub muted">AIが確認が必要と判断した連絡・更新を表示します。</div>
         <div class="conversation-thread-list">${
           cardsHtml ||
           `<div class="requests-empty">
-            <div class="requests-empty__title">Issue化前の確認案件はありません。</div>
-            <div class="requests-empty__sub">新しい依頼を取り込むと、確認が必要なものだけここに表示されます。</div>
+            <div class="requests-empty__title">現在、確認待ちの案件はありません。</div>
+            <div class="requests-empty__sub">Slack・Email・Teams などの連絡から、人間の判断が必要なものだけ自動でここに表示されます。</div>
           </div>`
         }</div>
       </section>`;
@@ -748,7 +748,7 @@ export function createApprovalCenterRenderer(deps) {
           return `<div class="pending-mutations__item">
             <div class="pending-mutations__top">
               <div class="pending-mutations__title-row">
-                <div class="pending-mutations__title">${escapeHtml("確認返信候補（pending clarification）")}</div>
+                <div class="pending-mutations__title">${escapeHtml("確認返信候補（確認待ち）")}</div>
                 ${pill}
               </div>
               <div class="pending-mutations__sub">
@@ -783,7 +783,7 @@ export function createApprovalCenterRenderer(deps) {
               </div>
               <div class="pending-mutations__sub">
                 <span class="issue-pill">${escapeHtml(approvalStatusLabelJa(approvalStatus))}</span>
-                ${draft ? `<span class="issue-pill">draft: ${escapeHtml(String(draft.channel || "teams"))}</span>` : ""}
+                ${draft ? `<span class="issue-pill">下書き: ${escapeHtml(String(draft.channel || "teams"))}</span>` : ""}
                 ${summaryText ? `<span class="issue-pill is-message">${escapeHtml(summaryText)}</span>` : ""}
               </div>
             </div>
@@ -822,20 +822,20 @@ export function createApprovalCenterRenderer(deps) {
       const bodyText = draft ? String(draft.body || "") : resolution?.status === "status_query" ? String(resolution.statusAnswer || "") : String(resolution?.clarificationQuestion || "");
 
       const linked = threadLinks.length
-        ? `<div class="kv" style="margin-top:6px;"><span class="muted">linked</span> ${escapeHtml(threadLinks.map((l) => `${l.entityType}:${l.entityId}`).join(", "))}</div>`
+        ? `<div class="kv" style="margin-top:6px;"><span class="muted">関連</span> ${escapeHtml(threadLinks.map((l) => `${l.entityType}:${l.entityId}`).join(", "))}</div>`
         : "";
 
-      const draftPreviewHtml = `<section class="detail-section issue-draft-preview" aria-label="Draft Preview">
-        <h3 class="detail-section__title">Draft Preview</h3>
+      const draftPreviewHtml = `<section class="detail-section issue-draft-preview" aria-label="下書きプレビュー">
+        <h3 class="detail-section__title">下書きプレビュー</h3>
         <div class="kv">
-          <span class="muted">channel</span> teams
+          <span class="muted">チャネル</span> teams
         </div>
         <pre class="pre pre--compact">${escapeHtml(bodyText || "")}</pre>
       </section>`;
 
       return `<section class="issue-history-page" aria-label="Reply candidate detail">
         <div class="issue-history-header">
-          <button class="btn btn--small btn--ghost" type="button" data-reply-back="1">← Back</button>
+          <button class="btn btn--small btn--ghost" type="button" data-reply-back="1">← 戻る</button>
           <div class="issue-history-header__title">
             <div class="issue-history-header__h">${escapeHtml(String(plan.title || "確認返信候補"))}</div>
             <div class="issue-history-header__badges">
@@ -847,11 +847,11 @@ export function createApprovalCenterRenderer(deps) {
         ${
           shouldShowApprovalActionButtons(approvalStatus)
             ? `<div class="issue-current-actions" aria-label="Next actions" style="margin: 12px 0;">
-          ${availableActions.approve ? `<button class="btn btn--primary btn--small" type="button" data-reply-approve="${escapeHtml(apId)}">Approve</button>` : ""}
-          ${availableActions.edit ? `<button class="btn btn--small" type="button" data-reply-edit="${escapeHtml(apId)}">Edit draft</button>` : ""}
-          ${availableActions.hold ? `<button class="btn btn--small" type="button" data-reply-hold="${escapeHtml(apId)}">Hold</button>` : ""}
-          ${availableActions.resume ? `<button class="btn btn--small" type="button" data-reply-resume="${escapeHtml(apId)}">Resume</button>` : ""}
-          ${availableActions.mock_send ? `<button class="btn btn--small" type="button" data-reply-mock-send="${escapeHtml(apId)}">Mock send</button>` : ""}
+          ${availableActions.approve ? `<button class="btn btn--primary btn--small" type="button" data-reply-approve="${escapeHtml(apId)}">承認</button>` : ""}
+          ${availableActions.edit ? `<button class="btn btn--small" type="button" data-reply-edit="${escapeHtml(apId)}">下書きを編集</button>` : ""}
+          ${availableActions.hold ? `<button class="btn btn--small" type="button" data-reply-hold="${escapeHtml(apId)}">保留</button>` : ""}
+          ${availableActions.resume ? `<button class="btn btn--small" type="button" data-reply-resume="${escapeHtml(apId)}">再開</button>` : ""}
+          ${availableActions.mock_send ? `<button class="btn btn--small" type="button" data-reply-mock-send="${escapeHtml(apId)}">送信（モック）</button>` : ""}
         </div>`
             : `<div class="issue-current-actions" aria-label="Next actions" style="margin: 12px 0;">
           <span class="issue-pill">${escapeHtml(approvalStatusLabelJa(approvalStatus) || approvalStatus)}</span>
@@ -874,7 +874,7 @@ export function createApprovalCenterRenderer(deps) {
           if (ub !== ua) return ub > ua ? 1 : -1;
           return String(a?.issueNo || "").localeCompare(String(b?.issueNo || ""));
         });
-      const body = sorted.length ? sorted.map(issueRow).join("") : `<div class="nt-muted">No items</div>`;
+      const body = sorted.length ? sorted.map(issueRow).join("") : `<div class="nt-muted">表示できる案件がありません。</div>`;
 
       const renderIssueListLane = () => {
         const plans = Array.isArray(state.latestIngestResult?.actionPlans) ? state.latestIngestResult.actionPlans.filter(Boolean) : [];
@@ -943,11 +943,11 @@ export function createApprovalCenterRenderer(deps) {
         const hasAny = Boolean(runtimeRows) || sorted.length > 0;
         const sampleHeading = sorted.length ? `<div class="issue-list__subheading">サンプル案件</div>` : "";
         const sampleBody = sorted.length ? body : "";
-        const empty = !hasAny ? `<div class="nt-muted" style="padding: 12px;">No items</div>` : "";
+        const empty = !hasAny ? `<div class="nt-muted" style="padding: 12px;">表示できる案件がありません。</div>` : "";
 
         return `<section class="issue-list" aria-label="Issue list">
           <div class="issue-list__section-title">案件一覧</div>
-          <div class="issue-list__section-sub muted">Issue化された案件です。対応待ち・対応済みをまとめて確認できます。</div>
+          <div class="issue-list__section-sub muted">AIが整理した案件の状況を一覧できます。対応判断が必要なものが上に表示されます。</div>
           ${runtimeRows || ""}
           ${sampleHeading}
           ${sampleBody}
@@ -983,7 +983,7 @@ export function createApprovalCenterRenderer(deps) {
 
     const renderIssueHistoryTimeline = (items) => {
       const list = Array.isArray(items) ? items.filter(Boolean) : [];
-      if (!list.length) return `<div class="nt-muted">No history</div>`;
+      if (!list.length) return `<div class="nt-muted">履歴はありません。</div>`;
 
       const rows = list
         .map((it, idx) => {
@@ -1045,7 +1045,7 @@ export function createApprovalCenterRenderer(deps) {
 	                undefined,
 	              relatedConversationId: String(plan.relatedConversationId || "").trim(),
 	              action: "mark_approval_required",
-	              title: String(plan.title || "Issue candidate"),
+	              title: String(plan.title || "案件（要確認）"),
 	              body: String(plan.description || ""),
 	              sourceRawInputId: String(plan.sourceRawInputId || ""),
 	              linkedEntities: Array.isArray(plan.linkedEntities) ? plan.linkedEntities : [],
@@ -1066,7 +1066,7 @@ export function createApprovalCenterRenderer(deps) {
       const sev = String(issueLike.severity || "low").toLowerCase();
       const sevClass = sev === "critical" || sev === "high" ? "is-high" : sev === "medium" ? "is-medium" : "is-low";
 
-      const statusText = issueLike.statusText || "requires approval";
+      const statusText = issueLike.statusText || "要承認";
       const cs = issueLike.currentStatus || {};
 
       const conversationThreads = computeConversationThreadsFromRawRequests(state.rawRequests);
@@ -1125,27 +1125,27 @@ export function createApprovalCenterRenderer(deps) {
         const parts = [];
         if (availableActions.approve)
           parts.push(
-            `<button class="btn btn--primary btn--small" type="button" data-mutation-approve="${escapeHtml(actionKey)}">Approve</button>`,
+            `<button class="btn btn--primary btn--small" type="button" data-mutation-approve="${escapeHtml(actionKey)}">承認</button>`,
           );
         if (availableActions.edit)
           parts.push(
-            `<button class="btn btn--small" type="button" data-mutation-edit="${escapeHtml(actionKey)}">Edit draft</button>`,
+            `<button class="btn btn--small" type="button" data-mutation-edit="${escapeHtml(actionKey)}">下書きを編集</button>`,
           );
         if (availableActions.hold)
-          parts.push(`<button class="btn btn--small" type="button" data-mutation-hold="${escapeHtml(actionKey)}">Hold</button>`);
+          parts.push(`<button class="btn btn--small" type="button" data-mutation-hold="${escapeHtml(actionKey)}">保留</button>`);
         if (availableActions.resume)
-          parts.push(`<button class="btn btn--small" type="button" data-mutation-resume="${escapeHtml(actionKey)}">Resume</button>`);
+          parts.push(`<button class="btn btn--small" type="button" data-mutation-resume="${escapeHtml(actionKey)}">再開</button>`);
         if (availableActions.mock_send)
           parts.push(
-            `<button class="btn btn--small" type="button" data-mutation-mock-send="${escapeHtml(actionKey)}">Mock send</button>`,
+            `<button class="btn btn--small" type="button" data-mutation-mock-send="${escapeHtml(actionKey)}">送信（モック）</button>`,
           );
         return parts.join("");
       })();
 
       const currentStatusHtml = `<section class="issue-current-status ${sevClass}" aria-label="Current Status">
-        <div class="issue-current-title">Current Status</div>
+        <div class="issue-current-title">現在の状況</div>
         <div class="issue-current-rows">
-          <div class="issue-current-row"><span class="k">Current Status</span><span class="v">${escapeHtml(approvalStatusLabelJa(approvalStatus) || String(cs.status || "人間承認待ち"))}</span></div>
+          <div class="issue-current-row"><span class="k">ステータス</span><span class="v">${escapeHtml(approvalStatusLabelJa(approvalStatus) || String(cs.status || "人間承認待ち"))}</span></div>
           <div class="issue-current-row issue-current-row--pending"><span class="k">承認待ち</span><span class="v">${escapeHtml(String(nextActionFromPlans || cs.nextAction || "AI提案内容の確認"))}</span></div>
           <div class="issue-current-row"><span class="k">AI提案</span><span class="v">${escapeHtml(String(cs.aiProposal || "-"))}</span></div>
         </div>
@@ -1169,14 +1169,14 @@ export function createApprovalCenterRenderer(deps) {
 
         const stepDefs = [
           { key: "request", label: "依頼受信", done: hasRaw },
-          { key: "tagger", label: "Tagger", done: threads.length > 0 },
-          { key: "splitter", label: "Thread Splitter", done: threads.length > 0 },
-          { key: "linker", label: "Entity Linker", done: links.length > 0 },
-          { key: "intake", label: "Intake Resolver", done: intake.length > 0 },
-          { key: "issue", label: "Issue Planner", done: muts.length > 0 },
-          { key: "action", label: "Action Planner", done: plans.length > 0 },
-          { key: "draft", label: "Draft Writer", done: drafts.length > 0 },
-          { key: "approval", label: "Approval", done: approvalStatus !== "pending_approval" && Boolean(approvalStatus) },
+          { key: "tagger", label: "AI分類", done: threads.length > 0 },
+          { key: "splitter", label: "会話整理", done: threads.length > 0 },
+          { key: "linker", label: "関連付け", done: links.length > 0 },
+          { key: "intake", label: "要確認の抽出", done: intake.length > 0 },
+          { key: "issue", label: "案件整理", done: muts.length > 0 },
+          { key: "action", label: "対応案の作成", done: plans.length > 0 },
+          { key: "draft", label: "文面作成", done: drafts.length > 0 },
+          { key: "approval", label: "人間確認", done: approvalStatus !== "pending_approval" && Boolean(approvalStatus) },
         ];
 
         const currentKey = (() => {
@@ -1200,10 +1200,10 @@ export function createApprovalCenterRenderer(deps) {
         };
 
         const statusText = (cls) => {
-          if (cls === "done") return "done";
-          if (cls === "current") return "current";
-          if (cls === "failed") return "failed";
-          return "pending";
+          if (cls === "done") return "完了";
+          if (cls === "current") return "進行中";
+          if (cls === "failed") return "失敗";
+          return "待機";
         };
 
         const stepsHtml = stepDefs
@@ -1222,19 +1222,19 @@ export function createApprovalCenterRenderer(deps) {
           })
           .join("");
 
-        return `<section class="detail-section processor-flow" aria-label="Processor Flow">
-          <h3 class="detail-section__title">Processor Flow</h3>
+        return `<section class="detail-section processor-flow" aria-label="処理フロー">
+          <h3 class="detail-section__title">処理フロー</h3>
           <ul class="processor-flow__steps">${stepsHtml}</ul>
         </section>`;
       })();
 
       const draftPreviewHtml = draftPreview
-        ? `<section class="detail-section issue-draft-preview" aria-label="Draft Preview">
-            <h3 class="detail-section__title">Draft Preview</h3>
+        ? `<section class="detail-section issue-draft-preview" aria-label="下書きプレビュー">
+            <h3 class="detail-section__title">下書きプレビュー</h3>
             <div class="kv">
-              <span class="muted">channel</span> ${escapeHtml(String(draftPreview.channel || "-"))}
-              <span class="muted">to</span> ${escapeHtml((Array.isArray(draftPreview.to) ? draftPreview.to : []).join(", ") || "-")}
-              ${draftPreview.subject ? `<span class="muted">subject</span> ${escapeHtml(String(draftPreview.subject))}` : ""}
+              <span class="muted">チャネル</span> ${escapeHtml(String(draftPreview.channel || "-"))}
+              <span class="muted">宛先</span> ${escapeHtml((Array.isArray(draftPreview.to) ? draftPreview.to : []).join(", ") || "-")}
+              ${draftPreview.subject ? `<span class="muted">件名</span> ${escapeHtml(String(draftPreview.subject))}` : ""}
             </div>
             <pre class="pre pre--compact">${escapeHtml(String(draftPreview.body || ""))}</pre>
           </section>`
@@ -1242,17 +1242,17 @@ export function createApprovalCenterRenderer(deps) {
 
       const emailDraftHtml = `<div class="issue-email-draft">
         <div class="kv">
-          <span class="muted">channel</span> ${escapeHtml(String(issueLike.draft?.channel || "-"))}
-          <span class="muted">to</span> ${escapeHtml((issueLike.draft?.to || []).join(", ") || "-")}
-          ${issueLike.draft?.subject ? `<span class="muted">subject</span> ${escapeHtml(String(issueLike.draft.subject))}` : ""}
+          <span class="muted">チャネル</span> ${escapeHtml(String(issueLike.draft?.channel || "-"))}
+          <span class="muted">宛先</span> ${escapeHtml((issueLike.draft?.to || []).join(", ") || "-")}
+          ${issueLike.draft?.subject ? `<span class="muted">件名</span> ${escapeHtml(String(issueLike.draft.subject))}` : ""}
         </div>
         <pre class="pre pre--compact">${escapeHtml(String(issueLike.draft?.body || ""))}</pre>
         <div class="issue-actions">
           <button class="btn btn--primary btn--small" type="button" data-mutation-mock-send="${escapeHtml(actionKey)}" ${
             canMockSend ? "" : "disabled"
-          }>Mock send</button>
-          <button class="btn btn--small" type="button" data-mutation-edit="${escapeHtml(actionKey)}" ${canEdit ? "" : "disabled"}>Edit draft</button>
-          <button class="btn btn--small" type="button" data-mutation-hold="${escapeHtml(actionKey)}" ${canHold ? "" : "disabled"}>Hold</button>
+          }>送信（モック）</button>
+          <button class="btn btn--small" type="button" data-mutation-edit="${escapeHtml(actionKey)}" ${canEdit ? "" : "disabled"}>下書きを編集</button>
+          <button class="btn btn--small" type="button" data-mutation-hold="${escapeHtml(actionKey)}" ${canHold ? "" : "disabled"}>保留</button>
         </div>
       </div>`;
 
@@ -1262,13 +1262,13 @@ export function createApprovalCenterRenderer(deps) {
         id: `email:${issueLike.issueNo}`,
         at: draftAt,
         type: "emailDraft",
-        label: "Email draft",
+        label: "送信下書き",
         actor: "trade-shelf-agent",
         bodyHtml: emailDraftHtml,
       });
 
       timeline.sort((a, b) => String(a?.at || "").localeCompare(String(b?.at || "")));
-      const timelineHtml = timeline.length ? timeline.map(renderTimelineItem).join("") : `<div class="nt-muted">No timeline yet</div>`;
+      const timelineHtml = timeline.length ? timeline.map(renderTimelineItem).join("") : `<div class="nt-muted">履歴はまだありません。</div>`;
 
       const sidebarRows = [];
       if (cs.classification && cs.classification !== "-") {
@@ -1305,22 +1305,22 @@ export function createApprovalCenterRenderer(deps) {
               <div class="issue-action-card__title">AIが仕入先確認メールを作成しました。</div>
               <div class="issue-draft-preview">
                 <div class="kv">
-                  <span class="muted">channel</span> ${escapeHtml(String(draftPreview.channel || "-"))}
-                  <span class="muted">to</span> ${escapeHtml((Array.isArray(draftPreview.to) ? draftPreview.to : []).join(", ") || "-")}
-                  ${draftPreview.subject ? `<span class="muted">subject</span> ${escapeHtml(String(draftPreview.subject))}` : ""}
+                  <span class="muted">チャネル</span> ${escapeHtml(String(draftPreview.channel || "-"))}
+                  <span class="muted">宛先</span> ${escapeHtml((Array.isArray(draftPreview.to) ? draftPreview.to : []).join(", ") || "-")}
+                  ${draftPreview.subject ? `<span class="muted">件名</span> ${escapeHtml(String(draftPreview.subject))}` : ""}
                 </div>
                 <pre class="pre pre--compact">${escapeHtml(String(draftPreview.body || ""))}</pre>
               </div>
               <div class="issue-action-buttons">
                 ${
                   shouldShowApprovalActionButtons(approvalStatus)
-                    ? `${availableActions.approve ? `<button class="btn btn--primary btn--small" type="button" data-mutation-approve="${escapeHtml(actionKey)}">Approve</button>` : ""}${
-                        availableActions.edit ? `<button class="btn btn--small" type="button" data-mutation-edit="${escapeHtml(actionKey)}">Edit</button>` : ""
-                      }${availableActions.hold ? `<button class="btn btn--small" type="button" data-mutation-hold="${escapeHtml(actionKey)}">Hold</button>` : ""}${
-                        availableActions.resume ? `<button class="btn btn--small" type="button" data-mutation-resume="${escapeHtml(actionKey)}">Resume</button>` : ""
+                    ? `${availableActions.approve ? `<button class="btn btn--primary btn--small" type="button" data-mutation-approve="${escapeHtml(actionKey)}">承認</button>` : ""}${
+                        availableActions.edit ? `<button class="btn btn--small" type="button" data-mutation-edit="${escapeHtml(actionKey)}">下書きを編集</button>` : ""
+                      }${availableActions.hold ? `<button class="btn btn--small" type="button" data-mutation-hold="${escapeHtml(actionKey)}">保留</button>` : ""}${
+                        availableActions.resume ? `<button class="btn btn--small" type="button" data-mutation-resume="${escapeHtml(actionKey)}">再開</button>` : ""
                       }${
                         availableActions.mock_send
-                          ? `<button class="btn btn--small" type="button" data-mutation-mock-send="${escapeHtml(actionKey)}">Mock send</button>`
+                          ? `<button class="btn btn--small" type="button" data-mutation-mock-send="${escapeHtml(actionKey)}">送信（モック）</button>`
                           : ""
                       }`
                     : `<span class="issue-pill">${escapeHtml(approvalStatusLabelJa(approvalStatus) || approvalStatus)}</span>`
@@ -1399,7 +1399,7 @@ export function createApprovalCenterRenderer(deps) {
     const renderIssueDetail = (tradeCaseId) => {
 	      const tc = tradeCaseId ? getTradeCaseById(tradeCaseId) : null;
 	      const it = issues.find((x) => x && x.tradeCaseId === tradeCaseId) || null;
-	      if (!tc || !it) return `<div class="nt-muted">Issue not found</div>`;
+	      if (!tc || !it) return `<div class="nt-muted">案件が見つかりません。</div>`;
 
 	      const statusText = statusTextByKey[it.statusKey] || it.statusKey;
 	      const statusJaByKey = {
@@ -1418,9 +1418,9 @@ export function createApprovalCenterRenderer(deps) {
 	        id: `ai-class:${tradeCaseId}`,
 	        at: it.updatedAt || nowIso(),
         type: "aiClassification",
-        label: "AI comment",
+        label: "AIメモ",
         actor: "trade-shelf-agent",
-        message: it.why || "classified",
+        message: it.why || "分類しました。",
       });
 
 	      if (it.statusKey === "requiresApproval" && it.draft && it.draft.body) {
@@ -1429,27 +1429,27 @@ export function createApprovalCenterRenderer(deps) {
 	          id: `draft-prop:${tradeCaseId}`,
 	          at: derivedAt,
 	          type: "draftProposal",
-	          label: "Draft proposal",
+	          label: "下書き提案",
 	          actor: "trade-shelf-agent",
-	          message: it.aiProposal || "Draft proposal ready.",
+	          message: it.aiProposal || "下書き案を用意しました。",
 	        });
 	        derived.push({
 	          id: `email-draft:${tradeCaseId}`,
 	          at: derivedAt,
 	          type: "emailDraft",
-	          label: "Email draft",
+	          label: "送信下書き",
 	          actor: "trade-shelf-agent",
 	          bodyHtml: `<div class="issue-email-draft">
 	            <div class="kv">
-              <span class="muted">channel</span> ${escapeHtml(String(it.draft.channel || "-"))}
-              <span class="muted">to</span> ${escapeHtml((it.draft.to || []).join(", ") || "-")}
-              ${it.draft.subject ? `<span class="muted">subject</span> ${escapeHtml(String(it.draft.subject))}` : ""}
+              <span class="muted">チャネル</span> ${escapeHtml(String(it.draft.channel || "-"))}
+              <span class="muted">宛先</span> ${escapeHtml((it.draft.to || []).join(", ") || "-")}
+              ${it.draft.subject ? `<span class="muted">件名</span> ${escapeHtml(String(it.draft.subject))}` : ""}
             </div>
             <pre class="pre pre--compact">${escapeHtml(String(it.draft.body || ""))}</pre>
             <div class="issue-actions">
-              <button class="btn btn--primary btn--small" type="button" data-issue-approve="${escapeHtml(it.tradeCaseId)}">Approve send</button>
-              <button class="btn btn--small" type="button" data-issue-edit="${escapeHtml(it.tradeCaseId)}">Edit draft</button>
-              <button class="btn btn--small" type="button" data-issue-hold="${escapeHtml(it.tradeCaseId)}">Hold</button>
+              <button class="btn btn--primary btn--small" type="button" data-issue-approve="${escapeHtml(it.tradeCaseId)}">送信を承認</button>
+              <button class="btn btn--small" type="button" data-issue-edit="${escapeHtml(it.tradeCaseId)}">下書きを編集</button>
+              <button class="btn btn--small" type="button" data-issue-hold="${escapeHtml(it.tradeCaseId)}">保留</button>
             </div>
           </div>`,
         });
@@ -1467,7 +1467,7 @@ export function createApprovalCenterRenderer(deps) {
       );
 
 	      allTimeline.sort((a, b) => String(a?.at || "").localeCompare(String(b?.at || "")));
-	      const timelineHtml = allTimeline.length ? allTimeline.map(renderTimelineItem).join("") : `<div class="nt-muted">No timeline yet</div>`;
+	      const timelineHtml = allTimeline.length ? allTimeline.map(renderTimelineItem).join("") : `<div class="nt-muted">履歴はまだありません。</div>`;
 
 	      const lastAtRaw = allTimeline.length ? String(allTimeline[allTimeline.length - 1]?.at || "") : "";
 	      const lastAtText = lastAtRaw ? formatLocalTime(lastAtRaw) : it.updatedAt ? formatLocalTime(it.updatedAt) : "-";
@@ -1476,21 +1476,21 @@ export function createApprovalCenterRenderer(deps) {
 	      const incs = Array.isArray(tc.incidents) ? tc.incidents : [];
 	      for (const i of incs) {
 	        const type = String(i?.type || "");
-        if (type === "invoiceQuantityMismatch") labels.push("quantity mismatch");
-        if (type === "missingDocument") labels.push("missing document");
-        if (type === "deliveryRisk") labels.push("delivery risk");
+        if (type === "invoiceQuantityMismatch") labels.push("数量差異");
+        if (type === "missingDocument") labels.push("書類未着");
+        if (type === "deliveryRisk") labels.push("納期リスク");
       }
       const labelHtml = labels.length ? labels.slice(0, 5).map((x) => `<span class="issue-label">${escapeHtml(x)}</span>`).join("") : `<span class="nt-muted">-</span>`;
 
-	      const assignee = it.statusKey === "waitingExternal" ? "Supplier waiting" : it.statusKey === "requiresApproval" ? "Ops user" : "AI Agent";
+	      const assignee = it.statusKey === "waitingExternal" ? "取引先（回答待ち）" : it.statusKey === "requiresApproval" ? "担当者（確認）" : "AI";
 
 	      const dueDate = tc?.siEntity?.requestedDeliveryDate ? String(tc.siEntity.requestedDeliveryDate) : "";
 	      const overdue = dueDate && new Date(dueDate).getTime() < new Date().setHours(0, 0, 0, 0);
       const dueHtml = dueDate
-        ? `<div class="issue-sidebar-row"><div class="issue-sidebar__k">Deadline / SLA</div><div class="issue-sidebar__v">${escapeHtml(dueDate)} ${
-            overdue ? `<span class="issue-overdue">OVERDUE</span>` : ""
+        ? `<div class="issue-sidebar-row"><div class="issue-sidebar__k">期限 / SLA</div><div class="issue-sidebar__v">${escapeHtml(dueDate)} ${
+            overdue ? `<span class="issue-overdue">期限超過</span>` : ""
           }</div></div>`
-        : `<div class="issue-sidebar-row"><div class="issue-sidebar__k">Deadline / SLA</div><div class="issue-sidebar__v">-</div></div>`;
+        : `<div class="issue-sidebar-row"><div class="issue-sidebar__k">期限 / SLA</div><div class="issue-sidebar__v">-</div></div>`;
 
       const siNo = String(tc?.siEntity?.siNo || (Array.isArray(tc?.siNumbers) ? tc.siNumbers[0] : "") || "SI-2026-001");
       const shipmentId = String(tc?.shipmentEntity?.id || (Array.isArray(tc?.shipmentRefs) ? tc.shipmentRefs[0] : "") || "SHP-2026-009");
@@ -1499,45 +1499,45 @@ export function createApprovalCenterRenderer(deps) {
       const relatedItems = [
         {
           key: "siWorkspace",
-          label: "SI Workspace",
+          label: "SIワークスペース",
           badge: "SI",
           newUrl: `/mock/workspace/si/${encodeURIComponent(siNo)}`,
           hereDataAttr: `data-issue-open-si="${escapeHtml(it.tradeCaseId)}"`,
         },
         {
           key: "shipmentWorkspace",
-          label: "Shipment Workspace",
+          label: "出荷ワークスペース",
           badge: "SHP",
           newUrl: `/mock/workspace/shipment/${encodeURIComponent(shipmentId)}`,
           hereDataAttr: `data-issue-open-shipment="${escapeHtml(it.tradeCaseId)}"`,
         },
         {
           key: "salesInventoryBalance",
-          label: "Sales / Inventory Balance",
+          label: "販売 / 在庫バランス",
           badge: "BI",
           newUrl: `/mock/sales-inventory-balance/${encodeURIComponent(siNo)}`,
         },
         {
           key: "inboundSchedule",
-          label: "Inbound Schedule",
+          label: "入荷予定",
           badge: "SHP",
           newUrl: `/mock/inbound-schedule/${encodeURIComponent(shipmentId)}`,
         },
         {
           key: "relatedInvoice",
-          label: "Related Invoice",
+          label: "関連請求書",
           badge: "INV",
           newUrl: `/mock/documents/invoice/${encodeURIComponent(invoiceNo)}`,
         },
         {
           key: "relatedDocuments",
-          label: "Related Documents",
+          label: "関連書類",
           badge: "DOC",
           newUrl: `/mock/documents?shipment=${encodeURIComponent(shipmentId)}`,
         },
         {
           key: "caseDetail",
-          label: "Case detail",
+          label: "案件詳細",
           badge: "CASE",
           newUrl: `/mock/case/${encodeURIComponent(it.tradeCaseId)}`,
           hereDataAttr: `data-issue-open-case="${escapeHtml(it.tradeCaseId)}"`,
@@ -1545,16 +1545,16 @@ export function createApprovalCenterRenderer(deps) {
       ];
 
       const relatedLinksHtml = `<div class="issue-sidebar-row">
-        <div class="issue-sidebar__k">Related links</div>
+        <div class="issue-sidebar__k">関連リンク</div>
         <div class="issue-sidebar__v issue-sidebar-links issue-related-links">
           ${relatedItems
             .map((x) => {
               const badge = x.badge ? `<span class="issue-related-badge">${escapeHtml(x.badge)}</span>` : "";
               const openHere = x.hereDataAttr
-                ? `<button class="issue-related-here" type="button" ${x.hereDataAttr} aria-label="Open here (modal)">Open here</button>`
+                ? `<button class="issue-related-here" type="button" ${x.hereDataAttr} aria-label="ここで開く">ここで開く</button>`
                 : "";
               return `<div class="issue-related-row">
-                <button class="issue-related-item" type="button" data-issue-open-new="${escapeHtml(x.newUrl)}" aria-label="Open in new tab">
+                <button class="issue-related-item" type="button" data-issue-open-new="${escapeHtml(x.newUrl)}" aria-label="新しいタブで開く">
                   <span class="issue-related-label">${escapeHtml(x.label)}</span>
                   ${badge}
                   <span class="issue-related-ext" aria-hidden="true">↗</span>
@@ -1566,7 +1566,7 @@ export function createApprovalCenterRenderer(deps) {
         </div>
       </div>`;
 
-	      const externalStatus = it.statusKey === "waitingExternal" ? "waiting supplier" : it.statusKey === "requiresApproval" ? "email draft" : "—";
+	      const externalStatus = it.statusKey === "waitingExternal" ? "回答待ち" : it.statusKey === "requiresApproval" ? "送信下書き" : "—";
 
 	      const statusJa = statusJaByKey[it.statusKey] || String(statusText || it.statusKey || "-");
 	      const canAct = it.statusKey === "requiresApproval" && it.draft && it.draft.body;
@@ -1578,7 +1578,7 @@ export function createApprovalCenterRenderer(deps) {
 	      const currentProposalText = it.aiProposal || "-";
 	      const nextActionText =
 	        it.statusKey === "requiresApproval"
-	          ? "Approve / Edit / Hold"
+	          ? "承認 / 編集 / 保留"
 	          : it.statusKey === "waitingExternal"
 	            ? "待機（外部回答）"
 	            : it.statusKey === "blocked"
@@ -1586,24 +1586,24 @@ export function createApprovalCenterRenderer(deps) {
 	              : "—";
 
 	      const currentStatusHtml = `<section class="issue-current-status ${sevClass}" aria-label="Current Status">
-	        <div class="issue-current-title">Current Status</div>
+	        <div class="issue-current-title">現在の状況</div>
 	        <div class="issue-current-rows">
-	          <div class="issue-current-row"><span class="k">Status</span><span class="v">${escapeHtml(statusJa)}</span></div>
-	          <div class="issue-current-row issue-current-row--pending"><span class="k">Pending approval</span><span class="v">${escapeHtml(pendingApprovalText)}</span></div>
-	          <div class="issue-current-row"><span class="k">AI proposal</span><span class="v">${escapeHtml(currentProposalText)}</span></div>
+	          <div class="issue-current-row"><span class="k">ステータス</span><span class="v">${escapeHtml(statusJa)}</span></div>
+	          <div class="issue-current-row issue-current-row--pending"><span class="k">承認待ち</span><span class="v">${escapeHtml(pendingApprovalText)}</span></div>
+	          <div class="issue-current-row"><span class="k">AI提案</span><span class="v">${escapeHtml(currentProposalText)}</span></div>
 	        </div>
 	        <div class="issue-current-actions" aria-label="Next actions">
-	          <button class="btn btn--primary btn--small" type="button" data-issue-approve="${escapeHtml(it.tradeCaseId)}" ${canAct ? "" : "disabled"}>Approve</button>
-	          <button class="btn btn--small" type="button" data-issue-edit="${escapeHtml(it.tradeCaseId)}" ${canAct ? "" : "disabled"}>Edit draft</button>
-	          <button class="btn btn--small" type="button" data-issue-hold="${escapeHtml(it.tradeCaseId)}">Hold</button>
+	          <button class="btn btn--primary btn--small" type="button" data-issue-approve="${escapeHtml(it.tradeCaseId)}" ${canAct ? "" : "disabled"}>承認</button>
+	          <button class="btn btn--small" type="button" data-issue-edit="${escapeHtml(it.tradeCaseId)}" ${canAct ? "" : "disabled"}>下書きを編集</button>
+	          <button class="btn btn--small" type="button" data-issue-hold="${escapeHtml(it.tradeCaseId)}">保留</button>
 	        </div>
 	      </section>`;
 
 	      const metaPanelHtml = `<aside class="issue-meta-panel issue-meta-panel--sticky" aria-label="Meta Panel">
-          <div class="issue-sidebar-row"><div class="issue-sidebar__k">Assignee / Owner</div><div class="issue-sidebar__v">${escapeHtml(assignee)}</div></div>
-          <div class="issue-sidebar-row"><div class="issue-sidebar__k">Labels</div><div class="issue-sidebar__v">${labelHtml}</div></div>
+          <div class="issue-sidebar-row"><div class="issue-sidebar__k">担当 / オーナー</div><div class="issue-sidebar__v">${escapeHtml(assignee)}</div></div>
+          <div class="issue-sidebar-row"><div class="issue-sidebar__k">ラベル</div><div class="issue-sidebar__v">${labelHtml}</div></div>
           ${relatedLinksHtml}
-          <div class="issue-sidebar-row"><div class="issue-sidebar__k">External status</div><div class="issue-sidebar__v">${escapeHtml(externalStatus)}</div></div>
+          <div class="issue-sidebar-row"><div class="issue-sidebar__k">外部状況</div><div class="issue-sidebar__v">${escapeHtml(externalStatus)}</div></div>
           ${dueHtml}
         </aside>`;
 
@@ -1613,17 +1613,17 @@ export function createApprovalCenterRenderer(deps) {
 	              <div class="issue-action-card__title">AIが仕入先確認メールを作成しました。</div>
 	              <div class="issue-draft-preview">
 	                <div class="kv">
-	                  <span class="muted">channel</span> ${escapeHtml(String(it.draft.channel || "-"))}
-	                  <span class="muted">to</span> ${escapeHtml((it.draft.to || []).join(", ") || "-")}
-	                  ${it.draft.subject ? `<span class="muted">subject</span> ${escapeHtml(String(it.draft.subject))}` : ""}
+	                  <span class="muted">チャネル</span> ${escapeHtml(String(it.draft.channel || "-"))}
+	                  <span class="muted">宛先</span> ${escapeHtml((it.draft.to || []).join(", ") || "-")}
+	                  ${it.draft.subject ? `<span class="muted">件名</span> ${escapeHtml(String(it.draft.subject))}` : ""}
 	                </div>
 	                <pre class="pre pre--compact">${escapeHtml(String(it.draft.body || ""))}</pre>
 	              </div>
 	              <div class="issue-action-buttons">
-	                <button class="btn btn--primary btn--small" type="button" data-issue-approve="${escapeHtml(it.tradeCaseId)}" ${canAct ? "" : "disabled"}>Approve</button>
-	                <button class="btn btn--small" type="button" data-issue-edit="${escapeHtml(it.tradeCaseId)}" ${canAct ? "" : "disabled"}>Edit</button>
-	                <button class="btn btn--small" type="button" data-issue-hold="${escapeHtml(it.tradeCaseId)}">Hold</button>
-	                <button class="btn btn--small" type="button" disabled>Mock send</button>
+	                <button class="btn btn--primary btn--small" type="button" data-issue-approve="${escapeHtml(it.tradeCaseId)}" ${canAct ? "" : "disabled"}>承認</button>
+	                <button class="btn btn--small" type="button" data-issue-edit="${escapeHtml(it.tradeCaseId)}" ${canAct ? "" : "disabled"}>下書きを編集</button>
+	                <button class="btn btn--small" type="button" data-issue-hold="${escapeHtml(it.tradeCaseId)}">保留</button>
+	                <button class="btn btn--small" type="button" disabled>送信（モック）</button>
 	              </div>
 	            </div>`
 	          : "";

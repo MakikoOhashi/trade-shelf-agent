@@ -1578,8 +1578,8 @@ function recordApprovalActivityEventDetailed(actionPlanId, { action, nextStatus,
     id: `act:${shortId()}`,
     type,
     title: (() => {
-      if (type === "edited") return "Edit draft";
-      if (type === "mock_sent") return "mock_sent";
+      if (type === "edited") return "下書きを編集";
+      if (type === "mock_sent") return "送信（モック）";
       return type;
     })(),
     occurredAt: nowIso(),
@@ -2071,11 +2071,11 @@ function displayConversationStatusLabel(status) {
     case "awaiting_clarification":
       return "確認中";
     case "matched":
-      return "Issue候補整理済";
+      return "整理済";
     case "reflected_to_approvals":
       return "承認待ちへ反映済";
     case "issue_linked":
-      return "既存Issueへ関連付け済";
+      return "既存案件へ関連付け済";
     case "resolved":
     case "closed":
       return "完了";
@@ -2685,26 +2685,26 @@ function renderOperationalThreadTimeline(thr) {
 
     return `<div class="proposed-action-card" data-proposed-action-card="1">
       <div class="proposed-action-card__head">
-        <div class="proposed-action-card__title">${escapeHtml(String(pa.label || "Proposed action"))}</div>
+        <div class="proposed-action-card__title">${escapeHtml(String(pa.label || "対応案"))}</div>
         <div class="proposed-action-card__meta muted">${escapeHtml(String(pa.type || ""))}</div>
       </div>
       ${draftHtml}
       <div class="proposed-action-card__actions">
         <button class="btn btn--primary btn--small" type="button" data-op-thread-action="approve" data-op-thread-id="${escapeHtml(
           String(thr.id || ""),
-        )}" data-op-message-id="${escapeHtml(String(m.id || ""))}" ${isDone ? "disabled" : ""}>Approve send</button>
+        )}" data-op-message-id="${escapeHtml(String(m.id || ""))}" ${isDone ? "disabled" : ""}>送信を承認</button>
         <button class="btn btn--ghost btn--small" type="button" data-op-thread-action="edit" data-op-thread-id="${escapeHtml(
           String(thr.id || ""),
-        )}" data-op-message-id="${escapeHtml(String(m.id || ""))}">Edit draft</button>
+        )}" data-op-message-id="${escapeHtml(String(m.id || ""))}">下書きを編集</button>
         <button class="btn btn--ghost btn--small" type="button" data-op-thread-action="hold" data-op-thread-id="${escapeHtml(
           String(thr.id || ""),
-        )}" data-op-message-id="${escapeHtml(String(m.id || ""))}">Hold</button>
+        )}" data-op-message-id="${escapeHtml(String(m.id || ""))}">保留</button>
       </div>
       ${footHtml}
     </div>`;
   };
 
-  if (!messages.length) return `<div class="nt-muted">No conversation yet</div>`;
+  if (!messages.length) return `<div class="nt-muted">会話がまだありません。</div>`;
   return messages
     .map((m, idx) => {
       const role = String(m.role || "");
@@ -2777,7 +2777,7 @@ function renderOperationalThreadModalBody(thr) {
         )}">SI Workspace</button>
         <button class="btn btn--ghost btn--small" type="button" data-req-action="openIssue" data-req-thread="${escapeHtml(
           String(thr.id || ""),
-        )}">Open related Issue</button>
+        )}">関連案件を見る</button>
       </aside>
     </div>
 
@@ -2785,21 +2785,21 @@ function renderOperationalThreadModalBody(thr) {
       <div class="op-thread-modal__actions-left">
         <button class="btn btn--primary btn--small ${hasProposed ? "" : "is-disabled"}" type="button" data-op-thread-action="approve" data-op-thread-id="${escapeHtml(
           String(thr.id || ""),
-        )}" data-op-message-id="${escapeHtml(String((msg && msg.id) || ""))}" ${hasProposed ? "" : "aria-disabled=\"true\""}>Approve send</button>
+        )}" data-op-message-id="${escapeHtml(String((msg && msg.id) || ""))}" ${hasProposed ? "" : "aria-disabled=\"true\""}>送信を承認</button>
         <button class="btn btn--ghost btn--small ${hasProposed ? "" : "is-disabled"}" type="button" data-op-thread-action="edit" data-op-thread-id="${escapeHtml(
           String(thr.id || ""),
-        )}" data-op-message-id="${escapeHtml(String((msg && msg.id) || ""))}" ${hasProposed ? "" : "aria-disabled=\"true\""}>Edit draft</button>
+        )}" data-op-message-id="${escapeHtml(String((msg && msg.id) || ""))}" ${hasProposed ? "" : "aria-disabled=\"true\""}>下書きを編集</button>
         <button class="btn btn--ghost btn--small ${hasProposed ? "" : "is-disabled"}" type="button" data-op-thread-action="hold" data-op-thread-id="${escapeHtml(
           String(thr.id || ""),
-        )}" data-op-message-id="${escapeHtml(String((msg && msg.id) || ""))}" ${hasProposed ? "" : "aria-disabled=\"true\""}>Hold</button>
+        )}" data-op-message-id="${escapeHtml(String((msg && msg.id) || ""))}" ${hasProposed ? "" : "aria-disabled=\"true\""}>保留</button>
       </div>
       <div class="op-thread-modal__actions-right">
         <button class="btn btn--primary btn--small" type="button" data-req-action="addComment" data-req-thread="${escapeHtml(
           String(thr.id || ""),
-        )}">Add to Issue</button>
+        )}">案件に追加</button>
         <button class="btn btn--ghost btn--small" type="button" data-req-action="openIssue" data-req-thread="${escapeHtml(
           String(thr.id || ""),
-        )}">Open related Issue</button>
+        )}">関連案件を見る</button>
       </div>
     </div>
   </div>`;
@@ -2865,13 +2865,13 @@ function agentRunApproveSend(tradeCaseId) {
     id: shortId(),
     at: nowIso,
     type: "statusChange",
-    label: "Status change",
-    message: "Status: requires approval → waiting supplier reply",
+    label: "ステータス変更",
+    message: "ステータス: 要承認 → 取引先回答待ち",
   });
 
   recordHumanIntervention(tradeCaseId, {
     actionType: "agentRunApproveSend",
-    label: "Agent Run: Approve & Send",
+    label: "送信を承認",
     note: `step:${current.id}`,
   });
   log(`送信（mock）: ${current.id}`);
@@ -2891,15 +2891,15 @@ function agentRunHold(tradeCaseId) {
     id: shortId(),
     at: nowIso(),
     type: "statusChange",
-    label: "Status change",
-    message: "Status: requires approval → on hold",
+    label: "ステータス変更",
+    message: "ステータス: 要承認 → 保留",
   });
   run.nextHumanAction = {
     label: "保留を解除して承認",
     description: "保留中です。内容を確認し、送信する場合は承認してください。",
     actionType: current.actionType || "humanApproval",
   };
-  recordHumanIntervention(tradeCaseId, { actionType: "agentRunHold", label: "Agent Run: Hold", note: `step:${current.id}` });
+  recordHumanIntervention(tradeCaseId, { actionType: "agentRunHold", label: "保留", note: `step:${current.id}` });
   log(`保留: ${current.id}`);
   return true;
 }
@@ -2912,16 +2912,16 @@ function agentRunEdit(tradeCaseId) {
   const current = steps.find((s) => s && s.id === run.currentStepId) || null;
   const msg = current && current.proposedMessage ? current.proposedMessage : null;
   if (!current || !msg) return false;
-  const nextBody = window.prompt("Edit message body（mock）", String(msg.body || ""));
+  const nextBody = window.prompt("本文を編集（mock）", String(msg.body || ""));
   if (typeof nextBody === "string") msg.body = nextBody;
   recordTimelineEvent(tradeCaseId, {
     id: shortId(),
     at: nowIso(),
     type: "draftEdit",
-    label: "Draft updated",
-    message: "Draft was edited (mock).",
+    label: "下書き更新",
+    message: "下書きを編集しました（mock）。",
   });
-  recordHumanIntervention(tradeCaseId, { actionType: "agentRunEdit", label: "Agent Run: Edit", note: `step:${current.id}` });
+  recordHumanIntervention(tradeCaseId, { actionType: "agentRunEdit", label: "下書きを編集", note: `step:${current.id}` });
   log(`修正（mock）: ${current.id}`);
   return true;
 }
@@ -3715,7 +3715,7 @@ function renderNewTop() {
           ? ""
           : `<div class="req-title">
               <div class="req-title__h">変更・確認依頼</div>
-              <div class="req-title__sub">Teams/Email由来の依頼をAIが整理し、Issue化前の確認・補完を行います（mock）。</div>
+              <div class="req-title__sub">Teams/Email由来の連絡をAIが整理し、人間の判断が必要なものを集約します（mock）。</div>
             </div>`
       }
 
@@ -3768,10 +3768,10 @@ function renderNewTop() {
           : `<div class="requests-inbox-layout" aria-label="Inbox / Conversation hub">
         <div class="request-inbox-panel" aria-label="Issue intake candidates">
           <div class="request-inbox-panel__head">
-            <div class="request-inbox-panel__title">Issue作成前案件</div>
+            <div class="request-inbox-panel__title">確認待ち</div>
             <div class="request-inbox-panel__count nt-mono">${escapeHtml(String(intakeCandidates.length))}</div>
           </div>
-          <div class="request-inbox-panel__sub muted">Teams/Email由来の依頼をAIが整理し、Issue化前の確認・補完を行います。</div>
+          <div class="request-inbox-panel__sub muted">AIが確認が必要と判断した連絡・更新を表示します。</div>
           <div class="requests-manual-add" aria-label="Manual add">
             <textarea class="requests-manual-add__input" rows="1" placeholder="＋ 手入力で追加（例: PLまだ？）" data-requests-input="1"></textarea>
             <button class="btn btn--ghost btn--small" type="button" data-requests-add="1">追加</button>
@@ -3779,8 +3779,8 @@ function renderNewTop() {
           <div class="conversation-thread-list">${
             cardsHtml ||
             `<div class="requests-empty">
-              <div class="requests-empty__title">Issue化前の確認案件はありません。</div>
-              <div class="requests-empty__sub">新しい依頼を取り込むと、確認が必要なものだけここに表示されます。</div>
+              <div class="requests-empty__title">現在、確認待ちの案件はありません。</div>
+              <div class="requests-empty__sub">Slack・Email・Teams などの連絡から、人間の判断が必要なものだけ自動でここに表示されます。</div>
             </div>`
           }</div>
         </div>
@@ -3888,13 +3888,13 @@ function handleOperationalThreadAction({ action, threadId, messageId }) {
   };
 
   if (!thr || !msg || !msg.proposedAction) {
-    window.alert("(mock) Proposed action not found.");
+    window.alert("(mock) 対応案が見つかりません。");
     return;
   }
 
   if (action === "edit") {
     const current = String(msg.proposedAction.draftBody || "");
-    const next = window.prompt("Edit draft（mock）", current);
+    const next = window.prompt("下書きを編集（mock）", current);
     if (typeof next === "string") {
       msg.proposedAction.draftBody = next;
       msg.proposedActionState = "edited";
@@ -7185,16 +7185,16 @@ function renderTradeCaseDetail(tradeCase) {
           <span class="muted">channel</span> ${escapeHtml(String(msg.channel || "-"))}
           <span class="muted">status</span> <span class="pill pill--mini">${escapeHtml(statusText)}</span>
         </div>
-        <div class="kv" style="margin-top:6px;"><span class="muted">to</span> ${escapeHtml((Array.isArray(msg.to) ? msg.to : []).join(", ") || "-")}</div>
-        ${msg.subject ? `<div class="kv" style="margin-top:6px;"><span class="muted">subject</span> ${escapeHtml(String(msg.subject))}</div>` : ""}
-        <div class="detail-subhead" style="margin-top:10px;">body</div>
+        <div class="kv" style="margin-top:6px;"><span class="muted">宛先</span> ${escapeHtml((Array.isArray(msg.to) ? msg.to : []).join(", ") || "-")}</div>
+        ${msg.subject ? `<div class="kv" style="margin-top:6px;"><span class="muted">件名</span> ${escapeHtml(String(msg.subject))}</div>` : ""}
+        <div class="detail-subhead" style="margin-top:10px;">本文</div>
         <pre class="pre proposed-message-preview__body">${escapeHtml(String(msg.body || ""))}</pre>
-        ${evidenceHtml ? `<div class="detail-subhead" style="margin-top:10px;">evidence</div>${evidenceHtml}` : ""}
+        ${evidenceHtml ? `<div class="detail-subhead" style="margin-top:10px;">根拠</div>${evidenceHtml}` : ""}
       </div>
       <div class="approval-actions">
-        <button class="btn btn--primary" type="button" data-agent-run-approve="1" ${canApprove ? "" : "disabled"}>Approve / 承認して送信</button>
-        <button class="btn" type="button" data-agent-run-edit="1">Edit / 修正</button>
-        <button class="btn" type="button" data-agent-run-hold="1">Hold / 保留</button>
+        <button class="btn btn--primary" type="button" data-agent-run-approve="1" ${canApprove ? "" : "disabled"}>承認して送信</button>
+        <button class="btn" type="button" data-agent-run-edit="1">修正</button>
+        <button class="btn" type="button" data-agent-run-hold="1">保留</button>
       </div>
     </section>`;
   }
