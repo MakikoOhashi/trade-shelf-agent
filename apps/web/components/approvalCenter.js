@@ -941,15 +941,13 @@ export function createApprovalCenterRenderer(deps) {
           .join("");
 
         const hasAny = Boolean(runtimeRows) || sorted.length > 0;
-        const sampleHeading = sorted.length ? `<div class="issue-list__subheading">サンプル案件</div>` : "";
         const sampleBody = sorted.length ? body : "";
         const empty = !hasAny ? `<div class="nt-muted" style="padding: 12px;">表示できる案件がありません。</div>` : "";
 
         return `<section class="issue-list" aria-label="Issue list">
           <div class="issue-list__section-title">案件一覧</div>
-          <div class="issue-list__section-sub muted">AIが整理した案件の状況を一覧できます。対応判断が必要なものが上に表示されます。</div>
+          <div class="issue-list__section-sub muted">AIが整理した輸入案件の状況を一覧できます。確認・対応が必要な案件が上に表示されます。</div>
           ${runtimeRows || ""}
-          ${sampleHeading}
           ${sampleBody}
           ${empty}
         </section>`;
