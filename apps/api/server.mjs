@@ -5,7 +5,13 @@ import path from "node:path";
 import url from "node:url";
 
 import OpenAI from "openai";
-import { buildIngestResultFromThreads, resolveContext, runIngestPipeline, runMockIngest } from "../web/vendor/shared/index.js";
+import {
+  buildIngestResultFromThreads,
+  mockTradeCases,
+  resolveContext,
+  runIngestPipeline,
+  runMockIngest,
+} from "../web/vendor/shared/index.js";
 
 const __dirname = path.dirname(url.fileURLToPath(import.meta.url));
 const webRoot = path.resolve(__dirname, "..", "web");
@@ -216,10 +222,39 @@ const slackState = {
   activityFeedItems: [],
   processedEventIds: new Set(),
   lastReceivedAt: null,
+  /**
+   * Hackathon demo approvals (unknown SI -> add to Shelf)
+   * @type {Array<{
+   *  id: string,
+   *  type: "unknown_si_add_to_shelf",
+   *  status: "pending" | "approved" | "rejected",
+   *  createdAt: string,
+   *  updatedAt: string,
+   *  title: string,
+   *  description: string,
+   *  metadata: {
+   *    siNumber: string,
+   *    source: string,
+   *    suggestedStatus: string,
+   *    eta?: string,
+   *    reason: string,
+   *    originalMessage: string
+   *  }
+   * }>}
+   */
+  demoApprovals: [],
+  /**
+   * Hackathon demo created TradeCases (in-memory; optionally file-backed)
+   * @type {Array<any>}
+   */
+  demoTradeCases: [],
 };
 
-const TRADE_SHELF_DATA_DIR = process.env.TRADE_SHELF_DATA_DIR || "/home/data";
+const TRADE_SHELF_DATA_DIR =
+  process.env.TRADE_SHELF_DATA_DIR || path.resolve(__dirname, "..", "..", ".data");
 const ACTIVITY_EVENTS_FILE_PATH = path.join(TRADE_SHELF_DATA_DIR, "activity-events.json");
+const DEMO_APPROVALS_FILE_PATH = path.join(TRADE_SHELF_DATA_DIR, "demo-approvals.json");
+const DEMO_TRADECASES_FILE_PATH = path.join(TRADE_SHELF_DATA_DIR, "demo-tradecases.json");
 
 function normalizePersistedActivitySnapshot(snapshot) {
   if (Array.isArray(snapshot)) {
@@ -237,6 +272,68 @@ function normalizePersistedActivitySnapshot(snapshot) {
       : null;
 
   return { items, lastReceivedAt };
+}
+
+function normalizePersistedJsonListSnapshot(snapshot) {
+  if (!snapshot) return null;
+  if (Array.isArray(snapshot)) return snapshot;
+  if (snapshot && typeof snapshot === "object" && Array.isArray(snapshot.items)) return snapshot.items;
+  return null;
+}
+
+async function tryLoadPersistedJsonList(filePath) {
+  try {
+    await fs.mkdir(TRADE_SHELF_DATA_DIR, { recursive: true });
+  } catch (error) {
+    console.warn("[demo-store] failed to create data dir:", String(error));
+  }
+
+  try {
+    const raw = await fs.readFile(filePath, "utf8");
+    const parsed = JSON.parse(raw);
+    const normalized = normalizePersistedJsonListSnapshot(parsed);
+    if (!normalized) throw new Error("invalid persisted shape");
+    return normalized;
+  } catch (error) {
+    if (error && (error.code === "ENOENT" || error.code === "ENOTDIR")) return null;
+    console.warn("[demo-store] failed to load persisted list; using defaults:", String(error));
+    return null;
+  }
+}
+
+let demoPersistChain = Promise.resolve();
+function schedulePersistDemoStores() {
+  const approvalsSnapshot = Array.isArray(slackState.demoApprovals) ? slackState.demoApprovals : [];
+  const tradeCasesSnapshot = Array.isArray(slackState.demoTradeCases) ? slackState.demoTradeCases : [];
+
+  demoPersistChain = demoPersistChain
+    .then(async () => {
+      await persistJsonListSnapshot(DEMO_APPROVALS_FILE_PATH, approvalsSnapshot);
+      await persistJsonListSnapshot(DEMO_TRADECASES_FILE_PATH, tradeCasesSnapshot);
+    })
+    .catch(() => {});
+}
+
+async function persistJsonListSnapshot(filePath, items) {
+  try {
+    await fs.mkdir(TRADE_SHELF_DATA_DIR, { recursive: true });
+  } catch (error) {
+    console.warn("[demo-store] failed to create data dir:", String(error));
+  }
+
+  const tempPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+  try {
+    const json = JSON.stringify({ items: Array.isArray(items) ? items : [] }, null, 2);
+    await fs.writeFile(tempPath, json, "utf8");
+    await fs.rename(tempPath, filePath);
+  } catch (error) {
+    console.warn("[demo-store] failed to persist snapshot:", String(error));
+    try {
+      await fs.unlink(tempPath);
+    } catch {
+      // ignore cleanup failures
+    }
+  }
 }
 
 async function tryLoadPersistedActivitySnapshot() {
@@ -657,6 +754,172 @@ if (persistedActivitySnapshot) {
   slackState.lastReceivedAt = persistedActivitySnapshot.lastReceivedAt;
 }
 
+const persistedDemoApprovals = await tryLoadPersistedJsonList(DEMO_APPROVALS_FILE_PATH);
+if (persistedDemoApprovals) slackState.demoApprovals = persistedDemoApprovals;
+
+const persistedDemoTradeCases = await tryLoadPersistedJsonList(DEMO_TRADECASES_FILE_PATH);
+if (persistedDemoTradeCases) slackState.demoTradeCases = persistedDemoTradeCases;
+
+function extractSiNumbersFromText(text) {
+  const t = String(text || "");
+  const now = new Date();
+  // Avoid partial matches like "SI-2026" from "SI-2026-001".
+  const siFull = Array.from(t.matchAll(/\bSI-\d{4}-\d+\b/gi)).map((m) => normalizeSiId(m[0], now));
+  const siSimple = Array.from(t.matchAll(/\bSI[-\s]?(\d+)\b(?!-\d)/gi)).map((m) => normalizeSiId(`SI-${m[1]}`, now));
+  return uniqueStrings([...siFull, ...siSimple]);
+}
+
+function extractEtaLabelFromSlackText(text) {
+  const t = String(text || "");
+  const m = t.match(/\bETA\b[\s\S]{0,60}\bto\b\s+([A-Za-z]{3,9}\s+\d{1,2})\b/i);
+  if (m && m[1]) return String(m[1]).trim();
+  const m2 = t.match(/\bETA\b\s*[:：]?\s*([A-Za-z]{3,9}\s+\d{1,2})\b/i);
+  if (m2 && m2[1]) return String(m2[1]).trim();
+  return "";
+}
+
+function extractReasonFromSlackText(text) {
+  const lines = String(text || "")
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+  const candidates = lines.filter((l) => /\b(eta|departure|departed|shipped|cargo)\b/i.test(l));
+  const picked = (candidates.length ? candidates : lines).slice(0, 2).join(" / ");
+  return picked || "Slack message indicates shipment update.";
+}
+
+function buildExistingSiNumberSet() {
+  const out = new Set();
+  const fromMock = Array.isArray(mockTradeCases) ? mockTradeCases : [];
+  for (const tc of fromMock) {
+    const siList = Array.isArray(tc?.siNumbers) ? tc.siNumbers : [];
+    for (const si of siList) {
+      const s = String(si || "").trim().toUpperCase();
+      if (s) out.add(s);
+    }
+    const siEntityNo = String(tc?.siEntity?.siNo || "").trim().toUpperCase();
+    if (siEntityNo) out.add(siEntityNo);
+  }
+  const fromDemo = Array.isArray(slackState.demoTradeCases) ? slackState.demoTradeCases : [];
+  for (const tc of fromDemo) {
+    const siList = Array.isArray(tc?.siNumbers) ? tc.siNumbers : [];
+    for (const si of siList) {
+      const s = String(si || "").trim().toUpperCase();
+      if (s) out.add(s);
+    }
+    const siEntityNo = String(tc?.siEntity?.siNo || "").trim().toUpperCase();
+    if (siEntityNo) out.add(siEntityNo);
+  }
+  return out;
+}
+
+function findDemoApprovalBySiNumber(siNumber) {
+  const si = String(siNumber || "").trim().toUpperCase();
+  if (!si) return null;
+  const list = Array.isArray(slackState.demoApprovals) ? slackState.demoApprovals : [];
+  return list.find((x) => String(x?.metadata?.siNumber || "").trim().toUpperCase() === si) || null;
+}
+
+function pushActivityItem(item) {
+  slackState.activityFeedItems = [item, ...(Array.isArray(slackState.activityFeedItems) ? slackState.activityFeedItems : [])].slice(0, 500);
+  slackState.lastReceivedAt = new Date().toISOString();
+  schedulePersistActivitySnapshot();
+}
+
+function upsertDemoApproval(approval) {
+  const list = Array.isArray(slackState.demoApprovals) ? slackState.demoApprovals : [];
+  const id = String(approval?.id || "").trim();
+  if (!id) return;
+  const idx = list.findIndex((x) => String(x?.id || "") === id);
+  if (idx === -1) slackState.demoApprovals = [approval, ...list].slice(0, 200);
+  else {
+    const next = list.slice();
+    next[idx] = approval;
+    slackState.demoApprovals = next;
+  }
+  schedulePersistDemoStores();
+}
+
+function appendDemoTradeCase(tc) {
+  const list = Array.isArray(slackState.demoTradeCases) ? slackState.demoTradeCases : [];
+  const id = String(tc?.id || "").trim();
+  if (!id) return;
+  if (list.some((x) => String(x?.id || "") === id)) return;
+  slackState.demoTradeCases = [tc, ...list].slice(0, 200);
+  schedulePersistDemoStores();
+}
+
+function createDemoTradeCaseFromApproval(approval) {
+  const siNumber = String(approval?.metadata?.siNumber || "").trim().toUpperCase();
+  const eta = String(approval?.metadata?.eta || "").trim();
+  const source = String(approval?.metadata?.source || "slack").trim();
+  const suggestedStatus = String(approval?.metadata?.suggestedStatus || "inTransit").trim();
+
+  const idNum = siNumber.replace(/[^0-9]/g, "") || String(Date.now());
+  const id = `TC-DEMO-${idNum}`;
+
+  return {
+    id,
+    title: siNumber,
+    tradeType: "import",
+    siNumbers: [siNumber],
+    invoiceNumbers: [],
+    blNumbers: [],
+    shipmentRefs: [],
+    shipmentEntity: {
+      id: `SHP-${siNumber}`,
+      eta: eta || "",
+      shipmentState: suggestedStatus || "inTransit",
+      source,
+      updatedAt: new Date().toISOString(),
+      createdAt: new Date().toISOString(),
+    },
+    siEntity: {
+      id: `SIE-DEMO-${idNum}`,
+      siNo: siNumber,
+      requestedDeliveryDate: "",
+      relatedShipmentIds: [],
+      relatedInvoiceNos: [],
+      salesOwners: [],
+    },
+    supplierIds: [],
+    supplier: {
+      id: "SUP-DEMO",
+      name: "Supplier (from Slack)",
+      country: "",
+      contactEmail: "",
+    },
+    customer: {
+      id: "CUS-DEMO",
+      name: "Customer",
+      country: "",
+      contactEmail: "",
+    },
+    caseProgress: {
+      caseId: id,
+      overallPercent: 0,
+      currentStatusLabel: "Slackから新規作成",
+      blockingSummary: [],
+      documents: [],
+      bookingSchedule: [],
+      resolution: [],
+    },
+    timeline: [
+      {
+        id: `TL-${Date.now()}`,
+        at: new Date().toISOString(),
+        type: "createdFromSlack",
+        message: `Created from Slack approval (${siNumber})`,
+      },
+    ],
+    nextActions: [],
+    updatedAt: new Date().toISOString(),
+    createdAt: new Date().toISOString(),
+    createdFrom: "slack",
+    createdBy: "ai_agent",
+  };
+}
+
 const server = http.createServer(async (req, res) => {
   const reqUrl = new URL(req.url || "/", "http://localhost");
   const method = String(req.method || "GET").toUpperCase();
@@ -679,6 +942,80 @@ const server = http.createServer(async (req, res) => {
       lastReceivedAt: slackState.lastReceivedAt,
     });
     return;
+  }
+
+  if (method === "GET" && reqUrl.pathname === "/api/demo/approvals") {
+    sendJson(res, 200, {
+      ok: true,
+      items: Array.isArray(slackState.demoApprovals) ? slackState.demoApprovals : [],
+    });
+    return;
+  }
+
+  if (method === "POST" && reqUrl.pathname === "/api/demo/approvals/approve") {
+    try {
+      const body = await readJsonBody(req);
+      const id = typeof body.id === "string" ? body.id.trim() : "";
+      if (!id) {
+        sendJson(res, 400, { ok: false, error: "id is required" });
+        return;
+      }
+      const list = Array.isArray(slackState.demoApprovals) ? slackState.demoApprovals : [];
+      const approval = list.find((x) => String(x?.id || "") === id) || null;
+      if (!approval) {
+        sendJson(res, 404, { ok: false, error: "approval not found" });
+        return;
+      }
+      if (String(approval.status) !== "pending") {
+        sendJson(res, 200, { ok: true, already: true, approval });
+        return;
+      }
+
+      const updated = {
+        ...approval,
+        status: "approved",
+        updatedAt: new Date().toISOString(),
+      };
+      upsertDemoApproval(updated);
+
+      const tc = createDemoTradeCaseFromApproval(updated);
+      appendDemoTradeCase(tc);
+
+      const siNumber = String(updated?.metadata?.siNumber || "").trim().toUpperCase();
+      pushActivityItem({
+        id: `demo:shelf-added:${siNumber}:${Date.now()}`,
+        type: "aiProcessed",
+        source: "ai",
+        title: `Shelf追加：${siNumber} を新規案件として追加しました`,
+        actor: "demo approval",
+        occurredAt: new Date().toISOString(),
+        summary: `Added ${siNumber}`,
+        details: [`siNumber: ${siNumber}`],
+        statusKey: "success",
+        linked: [{ kind: "si", label: siNumber }],
+        links: [],
+      });
+
+      pushActivityItem({
+        id: `demo:state-transition:${siNumber}:${Date.now()}`,
+        type: "aiProcessed",
+        source: "ai",
+        title: `状態更新：${siNumber} shippingPending → inTransit`,
+        actor: "demo approval",
+        occurredAt: new Date().toISOString(),
+        summary: "state transition",
+        details: ["from: shippingPending", "to: inTransit"],
+        statusKey: "success",
+        linked: [{ kind: "si", label: siNumber }],
+        links: [],
+      });
+
+      sendJson(res, 200, { ok: true, approval: updated, tradeCase: tc });
+      return;
+    } catch (e) {
+      sendJson(res, 400, { ok: false, error: "invalid request body" });
+      return;
+    }
   }
 
   if (method === "GET" && reqUrl.pathname === "/api/slack/status") {
@@ -752,6 +1089,76 @@ const server = http.createServer(async (req, res) => {
         slackState.lastReceivedAt = new Date().toISOString();
         slackState.activityFeedItems = [item, ...(Array.isArray(slackState.activityFeedItems) ? slackState.activityFeedItems : [])].slice(0, 200);
         schedulePersistActivitySnapshot();
+
+        // Hackathon demo: detect unknown SI -> enqueue approval + activity entries.
+        try {
+          const siNumbers = extractSiNumbersFromText(text);
+          if (siNumbers.length) {
+            const existing = buildExistingSiNumberSet();
+            for (const siNumberRaw of siNumbers) {
+              const siNumber = String(siNumberRaw || "").trim().toUpperCase();
+              if (!siNumber) continue;
+
+              if (existing.has(siNumber)) continue;
+
+              const already = findDemoApprovalBySiNumber(siNumber);
+              if (already) continue;
+
+              const eta = extractEtaLabelFromSlackText(text);
+              const reason = extractReasonFromSlackText(text);
+
+              const approval = {
+                id: `APR-DEMO-${siNumber.replace(/[^A-Z0-9]/g, "")}-${Date.now()}`,
+                type: "unknown_si_add_to_shelf",
+                status: "pending",
+                createdAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString(),
+                title: "新規案件候補",
+                description: `${siNumber} を新規案件として Shelf に追加しますか？`,
+                metadata: {
+                  siNumber,
+                  source: "slack",
+                  suggestedStatus: "inTransit",
+                  eta: eta || "",
+                  reason,
+                  originalMessage: text,
+                },
+              };
+
+              upsertDemoApproval(approval);
+
+              pushActivityItem({
+                id: `demo:unknown-si:${siNumber}:${Date.now()}`,
+                type: "aiProcessed",
+                source: "ai",
+                title: `未登録SIを検出：${siNumber} は Shelf に存在しません`,
+                actor: "demo detector",
+                occurredAt: new Date().toISOString(),
+                summary: reason,
+                details: [reason],
+                statusKey: "awaitingApproval",
+                linked: [{ kind: "si", label: siNumber }],
+                links: [],
+              });
+
+              pushActivityItem({
+                id: `demo:approval-required:${siNumber}:${Date.now()}`,
+                type: "aiProcessed",
+                source: "ai",
+                title: `承認待ち：${siNumber} を新規案件として登録できます`,
+                actor: "demo detector",
+                occurredAt: new Date().toISOString(),
+                summary: approval.description,
+                details: [`approvalId: ${approval.id}`, `eta: ${eta || "-"}`],
+                statusKey: "awaitingApproval",
+                linked: [{ kind: "si", label: siNumber }],
+                links: [],
+              });
+            }
+          }
+        } catch (e) {
+          console.warn("[demo] failed to enqueue unknown SI approval:", String(e));
+        }
 
         // Slack expects a response within ~3 seconds; ingest runs async for demo safety.
         res.writeHead(200, { "content-type": "text/plain; charset=utf-8" });

@@ -191,6 +191,56 @@ export function createApprovalCenterRenderer(deps) {
       };
     };
 
+    const renderDemoApprovalsLane = () => {
+      const listRaw = Array.isArray(state?.demoApprovals) ? state.demoApprovals.filter(Boolean) : [];
+      const pending = listRaw.filter((x) => String(x?.status || "") === "pending");
+      if (!pending.length) return "";
+
+      const rows = pending
+        .map((ap) => {
+          const id = String(ap?.id || "").trim();
+          const title = String(ap?.title || "新規案件候補");
+          const desc = String(ap?.description || "");
+          const meta = ap?.metadata && typeof ap.metadata === "object" ? ap.metadata : {};
+          const siNumber = String(meta.siNumber || "").trim();
+          const eta = String(meta.eta || "").trim();
+          const status = String(meta.suggestedStatus || "").trim();
+          const source = String(meta.source || "").trim();
+          const reason = String(meta.reason || "").trim();
+
+          const lines = [
+            source ? `Source: ${source}` : "",
+            status ? `推定ステータス: ${status === "inTransit" ? "In Transit" : status}` : "",
+            eta ? `推定ETA: ${eta}` : "",
+            reason ? `Reason: ${reason}` : "",
+          ]
+            .filter(Boolean)
+            .map((l) => `<div class="demo-approval__line">${escapeHtml(l)}</div>`)
+            .join("");
+
+          return `<div class="demo-approval" aria-label="Demo approval item">
+            <div class="demo-approval__head">
+              <div class="demo-approval__title">${escapeHtml(title)}</div>
+              <div class="demo-approval__si nt-mono">${escapeHtml(siNumber || "-")}</div>
+            </div>
+            <div class="demo-approval__desc">${escapeHtml(desc)}</div>
+            ${lines ? `<div class="demo-approval__meta">${lines}</div>` : ""}
+            <div class="demo-approval__actions">
+              <button class="btn btn--primary btn--small" type="button" data-demo-approval-approve="${escapeHtml(id)}" ${
+                id ? "" : "disabled"
+              }>Approve / 承認</button>
+            </div>
+          </div>`;
+        })
+        .join("");
+
+      return `<section class="demo-approvals" aria-label="Demo approvals">
+        <div class="demo-approvals__title">新規案件候補（Slack 未登録SI）</div>
+        <div class="demo-approvals__sub muted">Slack から検出された未登録SIです。承認すると Shelf に新規案件を追加します。</div>
+        <div class="demo-approvals__list">${rows}</div>
+      </section>`;
+    };
+
     const allCases = Array.isArray(state.tradeCases) ? state.tradeCases.filter(Boolean) : [];
     const issues = allCases.map(buildIssueForCase).filter(Boolean);
 
@@ -906,6 +956,7 @@ export function createApprovalCenterRenderer(deps) {
       };
 
       return `<div class="operations-main-column" aria-label="Operations main column">
+        ${renderDemoApprovalsLane()}
         ${renderPreIssueThreads()}
         ${renderIssueListLane()}
       </div>`;

@@ -106,6 +106,8 @@ function createShelfRenderer({
 
     const dueYmd = String(sh?.eta || si?.requestedDeliveryDate || "");
     const dueLabel = sh?.eta ? `ETA ${dueYmd}` : dueYmd ? `delivery ${dueYmd}` : "delivery未定";
+    const sourceRaw = String(sh?.source || tc?.createdFrom || "").trim().toLowerCase();
+    const sourceLabel = sourceRaw ? `Source: ${sourceRaw === "slack" ? "Slack" : sourceRaw}` : "";
 
     const blockers = deriveBlockerLabels(tc);
     const blockerCount = blockers.length;
@@ -142,6 +144,7 @@ function createShelfRenderer({
       </div>
       <div class="shelf-card__party nt-muted">${escapeHtml(partyName)}</div>
       <div class="shelf-card__meta nt-muted">${escapeHtml(dueLabel)}</div>
+      ${sourceLabel ? `<div class="shelf-card__meta nt-muted">${escapeHtml(sourceLabel)}</div>` : ""}
       ${tagsHtml ? `<div class="shelf-card__tags">${tagsHtml}</div>` : ""}
       <div class="nt-progress">
         <div class="nt-progress__bar" aria-hidden="true"><div class="nt-progress__fill" style="width:${percent}%"></div></div>
@@ -163,6 +166,8 @@ function createShelfRenderer({
 
     const dueYmd = String(sh?.eta || si?.requestedDeliveryDate || "");
     const dueLabel = sh?.eta ? (dueYmd ? `ETA ${dueYmd}` : "ETA未定") : dueYmd ? `delivery ${dueYmd}` : "delivery未定";
+    const sourceRaw = String(sh?.source || tc?.createdFrom || "").trim().toLowerCase();
+    const sourceLabel = sourceRaw ? `Source: ${sourceRaw === "slack" ? "Slack" : sourceRaw}` : "";
 
     const blockers = deriveBlockerLabels(tc);
     const blockerCount = blockers.length;
@@ -200,7 +205,7 @@ function createShelfRenderer({
       previewPayload: {
         idText,
         partyName,
-        dueLabel,
+        dueLabel: sourceLabel ? `${dueLabel} · ${sourceLabel}` : dueLabel,
         stageLabel: getShelfStageById(stageId).label || "-",
         tagsHtml,
         issueLabel,

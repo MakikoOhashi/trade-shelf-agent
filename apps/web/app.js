@@ -19,6 +19,7 @@ const API_BASE_URL = (() => {
 
 let serverActivityPollTimer = null;
 let slackStatusPollTimer = null;
+let demoApprovalsPollTimer = null;
 
 const DEBUG_UI_LOGS = Boolean(window && window.TRADE_SHELF_DEBUG_UI_LOGS);
 
@@ -59,6 +60,7 @@ function setTopActiveTab(nextTab, { push = false, replace = false } = {}) {
   renderApp();
   scheduleServerActivityPoll();
   scheduleSlackStatusPoll();
+  scheduleDemoApprovalsPoll();
 }
 
 const movementShelfDefs = [
@@ -240,6 +242,11 @@ const state = {
    * @type {{ status: "connected" | "unknown", lastReceivedAt: string | null } | null}
    */
   slackIntegrationStatus: null,
+  /**
+   * Hackathon demo approvals pushed from server (unknown SI -> add to Shelf)
+   * @type {Array<any>}
+   */
+  demoApprovals: [],
   /**
    * Resolution Decision Tree の branch 選択状態（branch.value）
    * @type {string | null}
@@ -586,6 +593,120 @@ async function fetchSlackIntegrationStatus() {
     renderApp();
   } catch {
     // ignore (demo)
+  }
+}
+
+function normalizeServerDemoApprovalItem(item) {
+  const it = item && typeof item === "object" ? item : {};
+  const id = String(it.id || "").trim();
+  if (!id) return null;
+  const status = String(it.status || "").trim() || "pending";
+  const title = String(it.title || "").trim();
+  const description = String(it.description || "").trim();
+  const metadata = it.metadata && typeof it.metadata === "object" ? it.metadata : {};
+  return {
+    ...it,
+    id,
+    status,
+    title,
+    description,
+    metadata: {
+      siNumber: String(metadata.siNumber || "").trim(),
+      source: String(metadata.source || "").trim(),
+      suggestedStatus: String(metadata.suggestedStatus || "").trim(),
+      eta: String(metadata.eta || "").trim(),
+      reason: String(metadata.reason || "").trim(),
+      originalMessage: String(metadata.originalMessage || "").trim(),
+    },
+  };
+}
+
+async function fetchServerDemoApprovals() {
+  try {
+    const response = await fetchWithTimeout(`${API_BASE_URL}/api/demo/approvals`, { method: "GET" }, 12000);
+    if (!response.ok) return;
+    const json = await response.json();
+    const itemsRaw = Array.isArray(json?.items) ? json.items : [];
+    const normalized = itemsRaw.map(normalizeServerDemoApprovalItem).filter(Boolean);
+    state.demoApprovals = normalized;
+    renderApp();
+  } catch {
+    // ignore (demo)
+  }
+}
+
+function scheduleDemoApprovalsPoll() {
+  if (demoApprovalsPollTimer) {
+    window.clearTimeout(demoApprovalsPollTimer);
+    demoApprovalsPollTimer = null;
+  }
+  if (state.topActiveTab !== "issues") return;
+  const tick = async () => {
+    await fetchServerDemoApprovals();
+    if (state.topActiveTab !== "issues") return;
+    demoApprovalsPollTimer = window.setTimeout(tick, 5000);
+  };
+  demoApprovalsPollTimer = window.setTimeout(tick, 150);
+}
+
+function recomputeIssueSeqByTradeCaseId() {
+  const sortedIds = (Array.isArray(state.tradeCases) ? state.tradeCases : [])
+    .map((c) => (c && c.id ? c.id : ""))
+    .filter(Boolean)
+    .slice()
+    .sort((a, b) => String(a).localeCompare(String(b)));
+  state.issueSeqByTradeCaseId = {};
+  for (let i = 0; i < sortedIds.length; i++) state.issueSeqByTradeCaseId[sortedIds[i]] = i + 1;
+}
+
+function mergeTradeCaseIntoState(tradeCase) {
+  if (!tradeCase || typeof tradeCase !== "object") return;
+  const id = String(tradeCase.id || "").trim();
+  if (!id) return;
+  const incidents = detectIncidents(tradeCase);
+  const proposals = proposeActions(tradeCase, incidents);
+  const normalized = { ...tradeCase, incidents, nextActions: proposals };
+
+  const list = Array.isArray(state.tradeCases) ? state.tradeCases.filter(Boolean) : [];
+  const idx = list.findIndex((x) => String(x?.id || "") === id);
+  if (idx === -1) state.tradeCases = [normalized, ...list];
+  else {
+    const next = list.slice();
+    next[idx] = { ...next[idx], ...normalized };
+    state.tradeCases = next;
+  }
+  recomputeIssueSeqByTradeCaseId();
+}
+
+async function approveDemoApprovalItem(approvalId) {
+  const id = String(approvalId || "").trim();
+  if (!id) return;
+  try {
+    const response = await fetchWithTimeout(
+      `${API_BASE_URL}/api/demo/approvals/approve`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id }),
+      },
+      15000,
+    );
+    if (!response.ok) {
+      const text = await response.text();
+      window.alert(text || "(demo) approve failed");
+      return;
+    }
+    const json = await response.json();
+    const approval = normalizeServerDemoApprovalItem(json?.approval);
+    if (approval) {
+      const list = Array.isArray(state.demoApprovals) ? state.demoApprovals.filter(Boolean) : [];
+      const next = list.map((x) => (String(x?.id || "") === approval.id ? approval : x));
+      state.demoApprovals = next;
+    }
+    if (json?.tradeCase) mergeTradeCaseIntoState(json.tradeCase);
+    renderApp();
+  } catch {
+    window.alert("(demo) approve failed");
   }
 }
 
@@ -8994,6 +9115,15 @@ function setupNewTop() {
     if (openIssueEl) {
       // (legacy) keep backward compatibility
       openShipmentWorkspace(openIssueEl.getAttribute("data-open-issue") || "");
+      return;
+    }
+
+    const demoApprovalApproveEl = target.closest && target.closest("[data-demo-approval-approve]");
+    if (demoApprovalApproveEl) {
+      e.preventDefault();
+      e.stopPropagation();
+      const id = demoApprovalApproveEl.getAttribute("data-demo-approval-approve") || "";
+      approveDemoApprovalItem(id);
       return;
     }
 
