@@ -635,6 +635,25 @@ async function fetchServerDemoApprovals() {
   }
 }
 
+function normalizeServerDemoTradeCase(item) {
+  if (!item || typeof item !== "object") return null;
+  const id = String(item.id || "").trim();
+  if (!id) return null;
+  return { ...item, id };
+}
+
+async function fetchServerDemoTradeCases() {
+  try {
+    const response = await fetchWithTimeout(`${API_BASE_URL}/api/demo/tradecases`, { method: "GET" }, 12000);
+    if (!response.ok) return [];
+    const json = await response.json();
+    const itemsRaw = Array.isArray(json?.items) ? json.items : [];
+    return itemsRaw.map(normalizeServerDemoTradeCase).filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
 function scheduleDemoApprovalsPoll() {
   if (demoApprovalsPollTimer) {
     window.clearTimeout(demoApprovalsPollTimer);
@@ -8120,6 +8139,12 @@ function seed() {
   seedActivityFeedMock();
   seedHumanMemosMock();
   renderApp();
+
+  // Hackathon demo: re-hydrate demo-created TradeCases from server-side JSON store.
+  fetchServerDemoTradeCases().then((tradeCases) => {
+    for (const tc of tradeCases) mergeTradeCaseIntoState(tc);
+    renderApp();
+  });
 }
 
 function seedRequestsMock() {

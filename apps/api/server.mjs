@@ -251,10 +251,53 @@ const slackState = {
 };
 
 const TRADE_SHELF_DATA_DIR =
-  process.env.TRADE_SHELF_DATA_DIR || path.resolve(__dirname, "..", "..", ".data");
+  process.env.TRADE_SHELF_DATA_DIR || "/home/data";
 const ACTIVITY_EVENTS_FILE_PATH = path.join(TRADE_SHELF_DATA_DIR, "activity-events.json");
 const DEMO_APPROVALS_FILE_PATH = path.join(TRADE_SHELF_DATA_DIR, "demo-approvals.json");
-const DEMO_TRADECASES_FILE_PATH = path.join(TRADE_SHELF_DATA_DIR, "demo-tradecases.json");
+const DEMO_TRADECASES_FILE_PATH = path.join(TRADE_SHELF_DATA_DIR, "demo-trade-cases.json");
+const LEGACY_DEMO_TRADECASES_FILE_PATH = path.join(TRADE_SHELF_DATA_DIR, "demo-tradecases.json");
+
+function demoTradeCaseKeys(tc) {
+  const id = String(tc?.id || "").trim();
+  const siNumber = (() => {
+    const fromSiNumbers = Array.isArray(tc?.siNumbers) ? tc.siNumbers : [];
+    const picked = fromSiNumbers.find((x) => String(x ?? "").trim()) || tc?.siEntity?.siNo || "";
+    return String(picked || "").trim().toUpperCase();
+  })();
+  const shipmentNumber = String(tc?.shipmentEntity?.id || "").trim().toUpperCase();
+  return { id, siNumber, shipmentNumber };
+}
+
+function dedupeDemoTradeCases({ fromMock, fromPersisted }) {
+  const mockList = Array.isArray(fromMock) ? fromMock : [];
+  const persistedList = Array.isArray(fromPersisted) ? fromPersisted : [];
+
+  const seenIds = new Set();
+  const seenSiNumbers = new Set();
+  const seenShipmentNumbers = new Set();
+
+  for (const tc of mockList) {
+    const { id, siNumber, shipmentNumber } = demoTradeCaseKeys(tc);
+    if (id) seenIds.add(id);
+    if (siNumber) seenSiNumbers.add(siNumber);
+    if (shipmentNumber) seenShipmentNumbers.add(shipmentNumber);
+  }
+
+  const out = [];
+  for (const tc of persistedList) {
+    const { id, siNumber, shipmentNumber } = demoTradeCaseKeys(tc);
+    if (!id) continue;
+    if (seenIds.has(id)) continue;
+    if (siNumber && seenSiNumbers.has(siNumber)) continue;
+    if (shipmentNumber && seenShipmentNumbers.has(shipmentNumber)) continue;
+    seenIds.add(id);
+    if (siNumber) seenSiNumbers.add(siNumber);
+    if (shipmentNumber) seenShipmentNumbers.add(shipmentNumber);
+    out.push(tc);
+  }
+
+  return out;
+}
 
 function normalizePersistedActivitySnapshot(snapshot) {
   if (Array.isArray(snapshot)) {
@@ -757,8 +800,15 @@ if (persistedActivitySnapshot) {
 const persistedDemoApprovals = await tryLoadPersistedJsonList(DEMO_APPROVALS_FILE_PATH);
 if (persistedDemoApprovals) slackState.demoApprovals = persistedDemoApprovals;
 
-const persistedDemoTradeCases = await tryLoadPersistedJsonList(DEMO_TRADECASES_FILE_PATH);
-if (persistedDemoTradeCases) slackState.demoTradeCases = persistedDemoTradeCases;
+const persistedDemoTradeCases =
+  (await tryLoadPersistedJsonList(DEMO_TRADECASES_FILE_PATH)) ||
+  (await tryLoadPersistedJsonList(LEGACY_DEMO_TRADECASES_FILE_PATH));
+if (persistedDemoTradeCases) {
+  slackState.demoTradeCases = dedupeDemoTradeCases({
+    fromMock: mockTradeCases,
+    fromPersisted: persistedDemoTradeCases,
+  });
+}
 
 function extractSiNumbersFromText(text) {
   const t = String(text || "");
@@ -842,9 +892,25 @@ function upsertDemoApproval(approval) {
 
 function appendDemoTradeCase(tc) {
   const list = Array.isArray(slackState.demoTradeCases) ? slackState.demoTradeCases : [];
-  const id = String(tc?.id || "").trim();
+  const { id, siNumber, shipmentNumber } = demoTradeCaseKeys(tc);
   if (!id) return;
-  if (list.some((x) => String(x?.id || "") === id)) return;
+  if (list.some((x) => String(x?.id || "").trim() === id)) return;
+  if (
+    siNumber &&
+    list.some((x) => {
+      const keys = demoTradeCaseKeys(x);
+      return keys.siNumber === siNumber;
+    })
+  )
+    return;
+  if (
+    shipmentNumber &&
+    list.some((x) => {
+      const keys = demoTradeCaseKeys(x);
+      return keys.shipmentNumber === shipmentNumber;
+    })
+  )
+    return;
   slackState.demoTradeCases = [tc, ...list].slice(0, 200);
   schedulePersistDemoStores();
 }
@@ -972,6 +1038,14 @@ const server = http.createServer(async (req, res) => {
     sendJson(res, 200, {
       ok: true,
       items: Array.isArray(slackState.demoApprovals) ? slackState.demoApprovals : [],
+    });
+    return;
+  }
+
+  if (method === "GET" && reqUrl.pathname === "/api/demo/tradecases") {
+    sendJson(res, 200, {
+      ok: true,
+      items: Array.isArray(slackState.demoTradeCases) ? slackState.demoTradeCases : [],
     });
     return;
   }

@@ -116,7 +116,7 @@ docs/           # 要件、画面設計、シナリオ、アーキメモ
 
 ## デモ用永続化について
 
-現在の Trade Shelf Agent デモでは、Activity event をサーバー側 JSON ファイルへ保存しています。
+現在の Trade Shelf Agent デモでは、Hackathon 用に DB を追加せず、サーバー側の JSON file-backed store へデータを保存しています。
 
 保存対象：
 
@@ -125,10 +125,12 @@ docs/           # 要件、画面設計、シナリオ、アーキメモ
 - entity linking event
 - state transition candidate event
 - approval / failure event
+- 未知SI承認後に追加された demo-created TradeCase（Shelf item）
 
 保存先：
 
-`/home/data/activity-events.json`
+- Activity events: `/home/data/activity-events.json`
+- Demo-created TradeCases: `/home/data/demo-trade-cases.json`
 
 Azure App Service 上で server restart が発生しても、Activity timeline が維持されるようにしています。
 
