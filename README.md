@@ -111,6 +111,57 @@ docs/           # 要件、画面設計、シナリオ、アーキメモ
 - `apps/web` → Azure Container Apps
 - `apps/api` → Azure Container Apps
 
+## デモ用永続化について
+
+現在の Trade Shelf Agent デモでは、Activity event をサーバー側 JSON ファイルへ保存しています。
+
+保存対象：
+
+- Slack event
+- AI processing event
+- entity linking event
+- state transition candidate event
+- approval / failure event
+
+保存先：
+
+`/home/data/activity-events.json`
+
+Azure App Service 上で server restart が発生しても、Activity timeline が維持されるようにしています。
+
+Hackathon フェーズでは、DB 構築よりも
+
+- communication ingest
+- AI structuring
+- operational timeline
+- approval workflow
+
+の実証を優先しています。
+
+## 将来的な本番構成
+
+本番構成では、現在の file-backed store を Azure Cosmos DB に置き換える予定です。
+
+想定 persistent entities：
+
+- TradeCase
+- IncidentLog
+- DecisionLog
+- SupplierBehavior
+- TimelineEvent
+- ApprovalEvent
+
+現在の実装は、
+
+communication input
+→ AI structuring
+→ entity linking
+→ state transition proposal
+→ human approval
+→ operational timeline update
+
+という Agent workflow の実証に集中するため、軽量な persistence 構成を採用しています。
+
 ## 将来構想
 
 最終的には Shopify App として、商品・在庫・入荷予定・貿易書類・仕入先対応をつなぐ業務レイヤへ発展させます。

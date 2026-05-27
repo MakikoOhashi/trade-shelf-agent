@@ -218,6 +218,82 @@ const slackState = {
   lastReceivedAt: null,
 };
 
+const TRADE_SHELF_DATA_DIR = process.env.TRADE_SHELF_DATA_DIR || "/home/data";
+const ACTIVITY_EVENTS_FILE_PATH = path.join(TRADE_SHELF_DATA_DIR, "activity-events.json");
+
+function normalizePersistedActivitySnapshot(snapshot) {
+  if (Array.isArray(snapshot)) {
+    return { items: snapshot, lastReceivedAt: null };
+  }
+
+  if (!snapshot || typeof snapshot !== "object") return null;
+
+  const items = Array.isArray(snapshot.items) ? snapshot.items : null;
+  if (!items) return null;
+
+  const lastReceivedAt =
+    typeof snapshot.lastReceivedAt === "string" && snapshot.lastReceivedAt.trim()
+      ? snapshot.lastReceivedAt.trim()
+      : null;
+
+  return { items, lastReceivedAt };
+}
+
+async function tryLoadPersistedActivitySnapshot() {
+  try {
+    await fs.mkdir(TRADE_SHELF_DATA_DIR, { recursive: true });
+  } catch (error) {
+    console.warn("[activity-store] failed to create data dir:", String(error));
+  }
+
+  try {
+    const raw = await fs.readFile(ACTIVITY_EVENTS_FILE_PATH, "utf8");
+    const parsed = JSON.parse(raw);
+    const normalized = normalizePersistedActivitySnapshot(parsed);
+    if (!normalized) throw new Error("invalid persisted shape");
+    return normalized;
+  } catch (error) {
+    if (error && (error.code === "ENOENT" || error.code === "ENOTDIR")) return null;
+    console.warn("[activity-store] failed to load persisted activity; using defaults:", String(error));
+    return null;
+  }
+}
+
+let activityPersistChain = Promise.resolve();
+function schedulePersistActivitySnapshot() {
+  const snapshot = {
+    items: Array.isArray(slackState.activityFeedItems) ? slackState.activityFeedItems : [],
+    lastReceivedAt: slackState.lastReceivedAt,
+  };
+
+  activityPersistChain = activityPersistChain
+    .then(() => persistActivitySnapshot(snapshot))
+    .catch(() => {});
+}
+
+async function persistActivitySnapshot(snapshot) {
+  try {
+    await fs.mkdir(TRADE_SHELF_DATA_DIR, { recursive: true });
+  } catch (error) {
+    console.warn("[activity-store] failed to create data dir:", String(error));
+  }
+
+  const tempPath = `${ACTIVITY_EVENTS_FILE_PATH}.${process.pid}.${Date.now()}.tmp`;
+
+  try {
+    const json = JSON.stringify(snapshot, null, 2);
+    await fs.writeFile(tempPath, json, "utf8");
+    await fs.rename(tempPath, ACTIVITY_EVENTS_FILE_PATH);
+  } catch (error) {
+    console.warn("[activity-store] failed to persist activity snapshot:", String(error));
+    try {
+      await fs.unlink(tempPath);
+    } catch {
+      // ignore cleanup failures
+    }
+  }
+}
+
 function readJsonBody(req) {
   return new Promise((resolve, reject) => {
     let raw = "";
@@ -575,6 +651,12 @@ async function ingestWithLlmOrMock({ rawInput, pendingClarifications }) {
   });
 }
 
+const persistedActivitySnapshot = await tryLoadPersistedActivitySnapshot();
+if (persistedActivitySnapshot) {
+  slackState.activityFeedItems = persistedActivitySnapshot.items;
+  slackState.lastReceivedAt = persistedActivitySnapshot.lastReceivedAt;
+}
+
 const server = http.createServer(async (req, res) => {
   const reqUrl = new URL(req.url || "/", "http://localhost");
   const method = String(req.method || "GET").toUpperCase();
@@ -669,6 +751,7 @@ const server = http.createServer(async (req, res) => {
 
         slackState.lastReceivedAt = new Date().toISOString();
         slackState.activityFeedItems = [item, ...(Array.isArray(slackState.activityFeedItems) ? slackState.activityFeedItems : [])].slice(0, 200);
+        schedulePersistActivitySnapshot();
 
         // Slack expects a response within ~3 seconds; ingest runs async for demo safety.
         res.writeHead(200, { "content-type": "text/plain; charset=utf-8" });
@@ -694,6 +777,7 @@ const server = http.createServer(async (req, res) => {
 
             if (feedItems.length) {
               slackState.activityFeedItems = [...feedItems, ...(Array.isArray(slackState.activityFeedItems) ? slackState.activityFeedItems : [])].slice(0, 400);
+              schedulePersistActivitySnapshot();
             }
           })
           .catch((err) => {
@@ -712,6 +796,7 @@ const server = http.createServer(async (req, res) => {
               links: [],
             };
             slackState.activityFeedItems = [failedItem, ...(Array.isArray(slackState.activityFeedItems) ? slackState.activityFeedItems : [])].slice(0, 400);
+            schedulePersistActivitySnapshot();
           });
         return;
       }
