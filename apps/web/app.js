@@ -81,6 +81,10 @@ const shelfLabelByKey = Object.fromEntries(movementShelfDefs.map((d) => [d.key, 
 const movementStageOrder = movementShelfDefs.map((d) => d.key);
 const movementStageRank = Object.fromEntries(movementStageOrder.map((k, i) => [k, i]));
 
+const DEMO_DOCUMENTS = {
+  "SI-2026-001": "/demo-docs/SI-2026-001.png",
+};
+
 const state = {
   inboxItems: [],
   tradeCases: [],
@@ -4980,6 +4984,26 @@ function renderDocumentViewer(documents, { modalId, viewerKey }) {
   const activeDoc = docs.find((d) => d && d.id === ui.activeDocId) || docs[0] || null;
   const activeDocId = activeDoc ? activeDoc.id : null;
 
+  if (!docs.length) {
+    return `
+      <div class="document-viewer" data-doc-viewer="${escapeHtml(String(viewerKey || ""))}">
+        <div class="document-stage" role="region" aria-label="Document stage">
+          <div class="paper-viewport">
+            <div class="paper-document paper-document--empty" role="document" aria-label="Document placeholder">
+              <div class="paper-page paper-page--placeholder">
+                <div class="paper-page__title">書類待ち</div>
+                <div class="paper-page__sub">この案件には、まだ関連書類が登録されていません。</div>
+                <div class="paper-page__block">
+                  <div class="muted">Slack / Email / Upload から書類が追加されると、ここに表示されます。</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
   const pageCount = activeDoc && Array.isArray(activeDoc.mockPages) ? activeDoc.mockPages.length : 1;
   const activePageIdxRaw = activeDocId ? ui.activePageByDocId[activeDocId] : 0;
   const activePageIdx = clamp(typeof activePageIdxRaw === "number" ? activePageIdxRaw : 0, 0, Math.max(0, pageCount - 1));
@@ -5211,20 +5235,28 @@ function buildSiWorkspaceDocuments(tradeCase) {
   const si = tradeCase && tradeCase.siEntity ? tradeCase.siEntity : null;
   const salesCommitments = Array.isArray(tradeCase?.decisionContext?.salesCommitments) ? tradeCase.decisionContext.salesCommitments : [];
   const first = salesCommitments[0] || null;
+  const siNo = String(si?.siNo || "").trim();
+  const previewImageSrc = siNo ? DEMO_DOCUMENTS[siNo] : "";
+  if (!previewImageSrc) return [];
+  const normalizedSiId = String(siNo || "si").toLowerCase().replace(/[^a-z0-9]+/g, "-");
 
   return [
     {
-      id: "si-2026-001",
-      label: "SI-2026-001",
+      id: normalizedSiId.startsWith("si-") ? normalizedSiId : `si-${normalizedSiId}`,
+      label: siNo || "SI",
       type: "Shipping Instruction",
       title: "Shipping Instruction",
-      previewImageSrc: "/demo-docs/instruction_demo.png",
+      previewImageSrc,
+      previewMarkers: [
+        { kind: "pin", x: 18, y: 22, text: "Delivery date" },
+        { kind: "note", x: 66, y: 70, text: "Split shipment?" },
+      ],
       mockPages: [
         {
           title: "SHIPPING INSTRUCTION",
           subtitle: "Mock / paper view",
           rows: [
-            { k: "SI No", v: si?.siNo || "SI-2026-001" },
+            { k: "SI No", v: siNo || "SI-" },
             { k: "Requested delivery", v: si?.requestedDeliveryDate || "2026-05-20" },
             { k: "Customer", v: first?.customerName || "Example Customer" },
             { k: "SKU", v: first?.sku || "UC-1M-BK" },
@@ -5285,6 +5317,7 @@ function buildDocumentWorkspaceDocuments(tradeCase, focusType, focusId) {
   const focusKey = String(focusId || "").trim();
 
   const base = buildSiWorkspaceDocuments(tc);
+  if (type === "si" && !base.length) return [];
   const siDoc = base.find((d) => String(d?.id || "").startsWith("si-")) || null;
   const salesResponseDoc = base.find((d) => String(d?.id || "") === "sales-response") || null;
   const salesCommitmentDoc = base.find((d) => String(d?.id || "") === "sales-commitment") || null;

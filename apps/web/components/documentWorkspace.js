@@ -1021,7 +1021,17 @@ export function createDocumentWorkspaceRenderer(deps) {
     })();
 
     const docCheckResults = buildDocumentCheckResults(tc, type, id);
-    const docCheckHtml = renderDocumentCheckResults(docCheckResults);
+    const docCheckHtml = documents.length
+      ? renderDocumentCheckResults(docCheckResults)
+      : `
+        <div class="doc-check-empty">
+          <div class="doc-check-empty__title">関連書類未登録</div>
+          <div class="doc-check-empty__body">
+            Slack / Email / Upload から<br />
+            書類が追加されると自動解析されます。
+          </div>
+        </div>
+      `;
 
     const relationshipTree = buildWorkspaceRelationshipTree(tc, type, id);
     const relationshipTreeHtml = renderWorkspaceRelationshipTree(relationshipTree);
