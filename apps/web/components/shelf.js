@@ -39,8 +39,8 @@ function deriveBlockerLabels(tc) {
     if (!d || !d.blocking) continue;
     const label = String(d.label || d.id || "doc");
     const status = String(d.status || "");
-    if (status.includes("missing")) out.push(`${label} missing`);
-    else if (status.includes("needsFix")) out.push(`${label} needs fix`);
+    if (status.includes("missing")) out.push(`${label} 書類待ち`);
+    else if (status.includes("needsFix")) out.push(`${label} 要確認`);
     else if (status) out.push(`${label} ${status}`);
     else out.push(label);
   }

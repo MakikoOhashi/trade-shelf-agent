@@ -123,7 +123,7 @@ export function createDocumentWorkspaceRenderer(deps) {
     ]).filter(Boolean);
 
     const blNo = String(sh?.blNo || (Array.isArray(tc?.blNumbers) ? tc.blNumbers[0] : "") || "").trim() || "-";
-    const plLabel = "PL missing";
+    const plLabel = "PL書類待ち";
     const shipmentId = String(sh?.id || "-");
     const siNo = String(si?.siNo || "-");
 
@@ -433,7 +433,12 @@ export function createDocumentWorkspaceRenderer(deps) {
       if (type === "shipment") {
         return { key: "shipment", label: "Shipmentチェック", status: "warning", summary: "ETA/Booking確認中" };
       }
-      return { key: "shipment", label: "Shipmentチェック", status: hasShipment ? "ok" : "warning", summary: hasShipment ? `${shipmentId || "Shipment"} linked` : "missing" };
+      return {
+        key: "shipment",
+        label: "Shipmentチェック",
+        status: hasShipment ? "ok" : "warning",
+        summary: hasShipment ? `${shipmentId || "Shipment"} linked` : "未登録",
+      };
     };
 
     const checksBase = [

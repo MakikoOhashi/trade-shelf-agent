@@ -4983,6 +4983,7 @@ function renderDocumentViewer(documents, { modalId, viewerKey }) {
   const ui = ensureWorkspaceUiDefaults(modalId, docs);
   const activeDoc = docs.find((d) => d && d.id === ui.activeDocId) || docs[0] || null;
   const activeDocId = activeDoc ? activeDoc.id : null;
+  const isActiveDocMissing = Boolean(activeDoc && activeDoc.status === "missing");
 
   if (!docs.length) {
     return `
@@ -5014,10 +5015,11 @@ function renderDocumentViewer(documents, { modalId, viewerKey }) {
   if (activeDocId) ui.zoomByDocId[activeDocId] = zoom;
 
   const showMarkers = ui.showMarkers !== false;
+  const canRenderMarkers = showMarkers && !isActiveDocMissing;
 
   const renderMarkersHtml = (markers) => {
     const list = Array.isArray(markers) ? markers.filter(Boolean) : [];
-    if (!showMarkers || !list.length) return "";
+    if (!canRenderMarkers || !list.length) return "";
     return list
       .map((m) => {
         const kind = m && m.kind ? String(m.kind) : "note";
@@ -5049,23 +5051,23 @@ function renderDocumentViewer(documents, { modalId, viewerKey }) {
         </div>
       `;
     } else if (activeDoc.status === "missing") {
-      const missingMarkers = [
-        { kind: "warn", x: 72, y: 18, text: "⚠ PL missing" },
-        { kind: "note", x: 14, y: 66, text: "Supplier follow-up" },
-      ];
-      const overlay = renderMarkersHtml(missingMarkers);
+      const docLabel = String(activeDoc?.label || activeDoc?.type || activeDoc?.id || "書類").trim() || "書類";
       pagesHtml = `
-        <div class="paper-page">
+        <div class="paper-page paper-page--placeholder">
           <div class="paper-page__page-no">1 / 1</div>
-          <div class="paper-page__title">PACKING LIST</div>
-          <div class="paper-page__sub">Status: <span class="pill pill--mini pill--warn">Missing</span></div>
+          <div class="paper-page__title">${escapeHtml(docLabel)}</div>
+          <div class="paper-page__sub">状態：書類待ち</div>
           <div class="paper-page__block">
             <div class="paper-annotation">
-              <div class="paper-annotation__title">AI Note</div>
-              <div class="paper-annotation__body">Packing List has not been received. Customs preparation may be blocked.</div>
+              <div class="paper-annotation__title">AIメモ</div>
+              <div class="paper-annotation__body">${escapeHtml(
+                `${docLabel} 未着のため、通関準備に影響する可能性があります。`,
+              )}</div>
             </div>
+            <div class="muted" style="margin-top:10px">${escapeHtml(
+              `${docLabel} はまだ登録されていません。Slack / Email / Upload から書類が追加されると、ここに表示されます。`,
+            )}</div>
           </div>
-          ${overlay ? `<div class="paper-overlay" aria-hidden="true">${overlay}</div>` : ""}
         </div>
       `;
     } else {
@@ -5116,7 +5118,11 @@ function renderDocumentViewer(documents, { modalId, viewerKey }) {
       <button class="btn btn--ghost btn--tiny" type="button" data-doc-zoom="-10" data-workspace-viewer="${escapeHtml(viewerKey)}" aria-label="Zoom out">−</button>
       <div class="document-tools__zoom">${zoom}%</div>
       <button class="btn btn--ghost btn--tiny" type="button" data-doc-zoom="10" data-workspace-viewer="${escapeHtml(viewerKey)}" aria-label="Zoom in">＋</button>
-      <button class="btn btn--ghost btn--tiny" type="button" data-doc-marker-toggle="1" data-workspace-viewer="${escapeHtml(viewerKey)}" aria-label="Toggle annotations">Annotations</button>
+      ${
+        isActiveDocMissing
+          ? ""
+          : `<button class="btn btn--ghost btn--tiny" type="button" data-doc-marker-toggle="1" data-workspace-viewer="${escapeHtml(viewerKey)}" aria-label="Toggle annotations">Annotations</button>`
+      }
     </div>
   `;
 
@@ -5154,7 +5160,7 @@ function renderDocumentTabs(documents, { activeDocId, viewerKey } = {}) {
             aria-selected="${isActive ? "true" : "false"}"
             data-doc-tab="${escapeHtml(docId)}"
             data-workspace-viewer="${escapeHtml(vKey)}"
-          >${escapeHtml(label)}${isMissing ? ` <span class="pill pill--mini pill--warn">missing</span>` : ""}${isMismatch ? ` <span class="pill pill--mini pill--danger">mismatch</span>` : ""}</button>`;
+          >${escapeHtml(label)}${isMissing ? ` <span class="pill pill--mini pill--warn">書類待ち</span>` : ""}${isMismatch ? ` <span class="pill pill--mini pill--danger">mismatch</span>` : ""}</button>`;
         })
         .filter(Boolean)
         .join("")}
