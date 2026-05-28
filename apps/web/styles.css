@@ -3553,6 +3553,19 @@ body {
     radial-gradient(900px 420px at 30% 10%, rgba(255, 255, 255, 0.25), rgba(255, 255, 255, 0));
 }
 
+.paper-page--image {
+  padding: 0;
+  min-height: 0;
+  overflow: hidden;
+  background-image: none;
+}
+
+.paper-doc-image {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
 .paper-page + .paper-page {
   margin-top: 14px;
 }

@@ -5009,7 +5009,22 @@ function renderDocumentViewer(documents, { modalId, viewerKey }) {
 
   let pagesHtml = `<div class="paper-page"><div class="muted">No document</div></div>`;
   if (activeDoc) {
-    if (activeDoc.status === "missing") {
+    const previewImageSrc = String(activeDoc?.previewImageSrc || "").trim();
+    if (previewImageSrc) {
+      const title = String(activeDoc?.title || activeDoc?.type || activeDoc?.label || activeDoc?.id || "Document");
+      const demoMarkers = [
+        { kind: "pin", x: 23, y: 22, text: "SI番号を検出（OK）" },
+        { kind: "note", x: 68, y: 45, text: "B/L Type: Surrender（要確認）" },
+      ];
+      const overlay = renderMarkersHtml(Array.isArray(activeDoc?.previewMarkers) ? activeDoc.previewMarkers : demoMarkers);
+      pagesHtml = `
+        <div class="paper-page paper-page--image">
+          <div class="paper-page__page-no">1 / 1</div>
+          <img class="paper-doc-image" src="${escapeHtml(previewImageSrc)}" alt="${escapeHtml(title)}" loading="lazy" />
+          ${overlay ? `<div class="paper-overlay" aria-hidden="true">${overlay}</div>` : ""}
+        </div>
+      `;
+    } else if (activeDoc.status === "missing") {
       const missingMarkers = [
         { kind: "warn", x: 72, y: 18, text: "⚠ PL missing" },
         { kind: "note", x: 14, y: 66, text: "Supplier follow-up" },
@@ -5203,6 +5218,7 @@ function buildSiWorkspaceDocuments(tradeCase) {
       label: "SI-2026-001",
       type: "Shipping Instruction",
       title: "Shipping Instruction",
+      previewImageSrc: "/demo-docs/instruction_demo.png",
       mockPages: [
         {
           title: "SHIPPING INSTRUCTION",
