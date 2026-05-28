@@ -253,7 +253,7 @@ export function createDocumentWorkspaceRenderer(deps) {
             label: "取引先",
             items: [
               { type: "entity", label: `Supplier: ${String(supplier?.name || "ACME Components")}` },
-              { type: "entity", label: `Customer: ${String(customer?.name || "AAA Company")}` },
+              { type: "entity", label: `Customer: ${String(customer?.name || "AAA Company")}（国内売約先）` },
             ],
           },
           { label: "入荷予定", items: [{ type: "date", label: `倉庫入荷予定: ${warehouseEta}` }] },
