@@ -15,6 +15,7 @@ import {
 
 const __dirname = path.dirname(url.fileURLToPath(import.meta.url));
 const webRoot = path.resolve(__dirname, "..", "web");
+const webPublicRoot = path.resolve(webRoot, "public");
 
 const aiClient = new OpenAI({
   baseURL: process.env.AZURE_OPENAI_ENDPOINT,
@@ -737,18 +738,26 @@ async function serveStatic(req, res) {
     return;
   }
 
-  // Prevent path traversal.
-  const abs = path.resolve(webRoot, "." + rel);
-  if (!abs.startsWith(webRoot + path.sep)) {
-    res.writeHead(400, { "content-type": "text/plain; charset=utf-8" });
-    res.end("bad request");
-    return;
-  }
-
   try {
-    const buf = await fs.readFile(abs);
-    res.writeHead(200, { "content-type": contentTypeFor(abs) });
-    res.end(method === "HEAD" ? undefined : buf);
+    const roots = [webPublicRoot, webRoot];
+    let found = null;
+
+    for (const root of roots) {
+      const abs = path.resolve(root, "." + rel);
+      if (!abs.startsWith(root + path.sep)) continue;
+      try {
+        const buf = await fs.readFile(abs);
+        found = { abs, buf };
+        break;
+      } catch {
+        // Try the next root.
+      }
+    }
+
+    if (!found) throw new Error("not found");
+
+    res.writeHead(200, { "content-type": contentTypeFor(found.abs) });
+    res.end(method === "HEAD" ? undefined : found.buf);
   } catch {
     const hasExtension = path.extname(pathname).length > 0;
 
