@@ -4984,6 +4984,12 @@ function renderDocumentViewer(documents, { modalId, viewerKey }) {
   const activeDoc = docs.find((d) => d && d.id === ui.activeDocId) || docs[0] || null;
   const activeDocId = activeDoc ? activeDoc.id : null;
   const isActiveDocMissing = Boolean(activeDoc && activeDoc.status === "missing");
+  const isBaselineShippingInstruction =
+    String(viewerKey || "").trim() === "si" &&
+    activeDoc &&
+    (String(activeDoc?.type || "").trim() === "Shipping Instruction" || String(activeDoc?.id || "").startsWith("si-"));
+
+  if (isBaselineShippingInstruction) ui.showMarkers = false;
 
   if (!docs.length) {
     return `
@@ -5014,7 +5020,7 @@ function renderDocumentViewer(documents, { modalId, viewerKey }) {
   const zoom = clamp(typeof zoomRaw === "number" ? zoomRaw : 100, 80, 160);
   if (activeDocId) ui.zoomByDocId[activeDocId] = zoom;
 
-  const showMarkers = ui.showMarkers !== false;
+  const showMarkers = ui.showMarkers !== false && !isBaselineShippingInstruction;
   const canRenderMarkers = showMarkers && !isActiveDocMissing;
 
   const renderMarkersHtml = (markers) => {
@@ -5042,7 +5048,9 @@ function renderDocumentViewer(documents, { modalId, viewerKey }) {
         { kind: "pin", x: 23, y: 22, text: "SI番号を検出（OK）" },
         { kind: "note", x: 68, y: 45, text: "B/L Type: Surrender（要確認）" },
       ];
-      const overlay = renderMarkersHtml(Array.isArray(activeDoc?.previewMarkers) ? activeDoc.previewMarkers : demoMarkers);
+      const overlay = renderMarkersHtml(
+        isBaselineShippingInstruction ? [] : Array.isArray(activeDoc?.previewMarkers) ? activeDoc.previewMarkers : demoMarkers,
+      );
       pagesHtml = `
         <div class="paper-page paper-page--image">
           <div class="paper-page__page-no">1 / 1</div>
@@ -5075,7 +5083,7 @@ function renderDocumentViewer(documents, { modalId, viewerKey }) {
       pagesHtml = pages
         .map((p, idx) => {
           const rows = Array.isArray(p?.rows) ? p.rows : [];
-          const overlay = renderMarkersHtml(p?.markers);
+          const overlay = renderMarkersHtml(isBaselineShippingInstruction ? [] : p?.markers);
           const pageNo = `${idx + 1} / ${pages.length}`;
           return `
             <div class="paper-page">
@@ -5098,7 +5106,7 @@ function renderDocumentViewer(documents, { modalId, viewerKey }) {
                   .join("")}
               </div>
               ${
-                p?.annotation
+                !isBaselineShippingInstruction && p?.annotation
                   ? `<div class="paper-annotation">
                       <div class="paper-annotation__title">Annotation</div>
                       <div class="paper-annotation__body">${escapeHtml(String(p.annotation))}</div>
@@ -5119,7 +5127,7 @@ function renderDocumentViewer(documents, { modalId, viewerKey }) {
       <div class="document-tools__zoom">${zoom}%</div>
       <button class="btn btn--ghost btn--tiny" type="button" data-doc-zoom="10" data-workspace-viewer="${escapeHtml(viewerKey)}" aria-label="Zoom in">＋</button>
       ${
-        isActiveDocMissing
+        isActiveDocMissing || isBaselineShippingInstruction
           ? ""
           : `<button class="btn btn--ghost btn--tiny" type="button" data-doc-marker-toggle="1" data-workspace-viewer="${escapeHtml(viewerKey)}" aria-label="Toggle annotations">Annotations</button>`
       }
@@ -5253,10 +5261,6 @@ function buildSiWorkspaceDocuments(tradeCase) {
       type: "Shipping Instruction",
       title: "Shipping Instruction",
       previewImageSrc,
-      previewMarkers: [
-        { kind: "pin", x: 18, y: 22, text: "Delivery date" },
-        { kind: "note", x: 66, y: 70, text: "Split shipment?" },
-      ],
       mockPages: [
         {
           title: "SHIPPING INSTRUCTION",
@@ -5268,10 +5272,7 @@ function buildSiWorkspaceDocuments(tradeCase) {
             { k: "SKU", v: first?.sku || "UC-1M-BK" },
             { k: "Qty", v: first?.committedQty != null ? `${first.committedQty} pcs` : "1000 pcs" },
           ],
-          markers: [
-            { kind: "pin", x: 18, y: 26, text: "Customer delivery date" },
-            { kind: "note", x: 66, y: 72, text: "Split shipment decision" },
-          ],
+          markers: [],
         },
       ],
     },
@@ -5620,18 +5621,10 @@ function renderSiWorkspace(tradeCase) {
   const documents = buildSiWorkspaceDocuments(tradeCase);
   const viewerHtml = renderDocumentViewer(documents, { modalId: "si-workspace-modal", viewerKey: "si" });
 
-  const incidents = detectIncidents(tradeCase).filter((i) => i && i.status !== "resolved");
-
-  const aiNotes = [
-    si?.requestedDeliveryDate ? `顧客納期: ${si.requestedDeliveryDate}` : null,
-    relatedShipments.length ? "関連Shipmentを確認してください" : null,
-    relatedInvoices.length ? "関連INVを照合してください" : null,
-  ].filter(Boolean);
-
-  const riskNotes = [
-    incidents.some((i) => i.type === "invoiceQuantityMismatch") ? "⚠ 数量差異あり（INV/SI）" : null,
-    "⚠ 顧客納期回答が未確定（mock）",
-  ].filter(Boolean);
+  const baselineTitle = "基準書類：Shipping Instruction";
+  const baselineBody = "このSIを基準に、後続の Invoice / Packing List / B/L の内容を照合します。";
+  const confirmPoints = ["SI番号", "数量", "納期", "出荷条件"];
+  const followUpExamples = ["INV数量がSIと違う", "PL未着", "BL type確認", "ETA変更"];
 
   return `
     <div class="workspace-layout">
@@ -5678,16 +5671,19 @@ function renderSiWorkspace(tradeCase) {
 
       <aside class="workspace-pane workspace-pane--right" aria-label="Decision helper">
         <div class="workspace-section">
-          <div class="workspace-section__title">AIの気づき</div>
-          ${aiNotes.length ? `<ul class="list">${aiNotes.map((x) => `<li>${escapeHtml(x)}</li>`).join("")}</ul>` : `<div class="muted">-</div>`}
+          <div class="workspace-section__title">AIの書類チェック</div>
+          <div class="muted" style="margin-bottom:6px;">${escapeHtml(baselineTitle)}</div>
+          <div style="margin-bottom:10px;">${escapeHtml(baselineBody)}</div>
+          <div class="muted" style="margin-bottom:6px;">確認ポイント</div>
+          <ul class="list">${confirmPoints.map((x) => `<li>${escapeHtml(x)}</li>`).join("")}</ul>
         </div>
         <div class="workspace-section">
           <div class="workspace-section__title">人間メモ</div>
           <div class="muted">（mock）営業コメントは短く。長文は Case detail に集約。</div>
         </div>
         <div class="workspace-section">
-          <div class="workspace-section__title">納期・物流リスク</div>
-          ${riskNotes.length ? `<ul class="list">${riskNotes.map((x) => `<li>${escapeHtml(x)}</li>`).join("")}</ul>` : `<div class="muted">-</div>`}
+          <div class="workspace-section__title">後続書類での照合（例）</div>
+          <ul class="list">${followUpExamples.map((x) => `<li>${escapeHtml(x)}</li>`).join("")}</ul>
         </div>
       </aside>
     </div>
