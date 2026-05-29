@@ -1018,6 +1018,15 @@ export function createDocumentWorkspaceRenderer(deps) {
 
     const activeDoc = documents.find((d) => d && d.id === uiForTabs.activeDocId) || documents[0] || null;
     const isBaselineShippingInstruction = Boolean(isShippingInstructionDocument?.(activeDoc, "document"));
+    const isInvoiceDocument = (() => {
+      const d = activeDoc && typeof activeDoc === "object" ? activeDoc : null;
+      if (!d) return false;
+      const vk = String(d.viewerKey || "").trim().toLowerCase();
+      if (vk === "invoice") return true;
+      const idNorm = String(d.id || "").trim().toLowerCase();
+      if (idNorm.startsWith("inv-")) return true;
+      return false;
+    })();
 
     const executionTimelineRisk = buildExecutionTimelineRisk(tc, type, id);
     ensureExecutionTimelineIssueCandidateSynced(executionTimelineRisk);
@@ -1051,6 +1060,41 @@ export function createDocumentWorkspaceRenderer(deps) {
             <li>納期</li>
             <li>出荷条件</li>
           </ul>
+        `
+        : isInvoiceDocument
+          ? `
+          <div class="doc-check-list" data-focus-type="invoice" data-focus-id="INV-1122">
+            <div class="doc-check doc-check--ok" data-check-key="invoice_no" data-status="ok">
+              <div class="doc-check__header">
+                <div class="doc-check__label">Invoice番号チェック</div>
+                <div class="doc-check__status doc-check__status--ok">✓ OK</div>
+              </div>
+            </div>
+            <div class="doc-check doc-check--ok" data-check-key="si_no" data-status="ok">
+              <div class="doc-check__header">
+                <div class="doc-check__label">SI番号チェック</div>
+                <div class="doc-check__status doc-check__status--ok">✓ OK</div>
+              </div>
+            </div>
+            <div class="doc-check doc-check--warning" data-check-key="quantity" data-status="warning">
+              <div class="doc-check__header">
+                <div class="doc-check__label">数量チェック</div>
+                <div class="doc-check__status doc-check__status--warning">⚠ 要確認</div>
+              </div>
+              <div class="doc-check__summary">
+                <div class="doc-check__line">数量差異を検出しました。</div>
+                <div class="doc-check__line">SI指図数量 1000pcs に対して、</div>
+                <div class="doc-check__line">INV-1122 は 400pcs のみ記載されています。</div>
+                <div class="doc-check__line">分納または未発行INVの可能性があります。</div>
+              </div>
+            </div>
+            <div class="doc-check doc-check--ok" data-check-key="amount" data-status="ok">
+              <div class="doc-check__header">
+                <div class="doc-check__label">金額チェック</div>
+                <div class="doc-check__status doc-check__status--ok">✓ OK</div>
+              </div>
+            </div>
+          </div>
         `
         : renderDocumentCheckResults(docCheckResults);
 

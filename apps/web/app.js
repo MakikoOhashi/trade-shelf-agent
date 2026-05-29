@@ -5342,10 +5342,6 @@ function buildDocumentWorkspaceDocuments(tradeCase, focusType, focusId) {
   const base = buildSiWorkspaceDocuments(tc);
   if (type === "si" && !base.length) return [];
   const siDoc = base.find((d) => String(d?.id || "").startsWith("si-")) || null;
-  const salesResponseDoc = base.find((d) => String(d?.id || "") === "sales-response") || null;
-  const salesCommitmentDoc = base.find((d) => String(d?.id || "") === "sales-commitment") || null;
-  const salesResponseDocForTabs = salesResponseDoc ? { ...salesResponseDoc, label: "Sales response" } : null;
-  const salesCommitmentDocForTabs = salesCommitmentDoc ? { ...salesCommitmentDoc, label: "売約" } : null;
 
   const invoiceRefs = Array.isArray(tc.invoiceNumbers) ? tc.invoiceNumbers.filter(Boolean) : [];
   const invoiceNos = uniqStrings([
@@ -5378,6 +5374,27 @@ function buildDocumentWorkspaceDocuments(tradeCase, focusType, focusId) {
     const supplierName = String(ref?.supplier || tc?.supplier?.name || "ACME Components (Shenzhen)");
     const blNo = String(sh?.blNo || "BL-SZX-7781");
     const isQtyMismatch = siQty != null && qty != null && siQty !== qty;
+
+    // Demo: INV-1122 is backed by a real image in /public/demo-docs.
+    if (invNo === "INV-1122") {
+      return {
+        id: "inv-1122",
+        viewerKey: "invoice",
+        label: "Commercial Invoice",
+        type: "Invoice",
+        title: "Commercial Invoice",
+        fileName: "INV-1122",
+        previewImageSrc: "/demo-docs/INV-1122.png",
+        status: isQtyMismatch ? "mismatch" : undefined,
+        // Hardcoded annotation overlay (INV only; baseline SI should not show any).
+        previewMarkers: [
+          { kind: "pin", x: 18, y: 10, text: "INV-1122 を検出" },
+          { kind: "warn", x: 66, y: 54, text: "数量差異（SI: 1000pcs / INV: 400pcs）" },
+          { kind: "note", x: 68, y: 70, text: "部分出荷の可能性" },
+        ],
+      };
+    }
+
     return {
       id: id || `inv-${String(invNo || "").toLowerCase().replace(/[^a-z0-9]+/g, "-")}`,
       label: invNo,
@@ -5401,79 +5418,26 @@ function buildDocumentWorkspaceDocuments(tradeCase, focusType, focusId) {
             },
             { k: "Amount", v: "USD 12,800.00" },
           ],
-          annotation: isQtyMismatch ? "⚠ Quantity mismatch detected" : "",
+          annotation: isQtyMismatch ? "数量差異を検出（SI: 1000pcs / INV: 400pcs）" : "",
           markers:
             isQtyMismatch
               ? [
-                  { kind: "warn", x: 72, y: 34, text: "⚠ Qty mismatch" },
-                  { kind: "note", x: 16, y: 72, text: "Confirm split shipment?" },
+                  { kind: "warn", x: 72, y: 34, text: "数量差異" },
+                  { kind: "note", x: 16, y: 72, text: "部分出荷の可能性" },
                 ]
-              : [{ kind: "note", x: 16, y: 72, text: "Check customer impact" }],
+              : [{ kind: "note", x: 16, y: 72, text: "取引影響を確認" }],
         },
       ],
     };
   });
 
-  const hasAnyPlMissing = true;
-  const plDoc = {
-    id: "pl-missing",
-    label: "PL missing",
-    type: "Packing List",
-    status: hasAnyPlMissing ? "missing" : undefined,
-  };
-
-  const blNo = String(sh?.blNo || tc?.blNumbers?.[0] || "BL-SZX-7781");
-  const blId = blNo ? blNo.toLowerCase().replace(/^bl-/, "bl-") : "bl";
-  const blDoc = {
-    id: blId,
-    label: blNo,
-    type: "B/L",
-    title: "Bill of Lading",
-    mockPages: [
-      {
-        title: "BILL OF LADING",
-        subtitle: "Mock / paper view",
-        rows: [
-          { k: "B/L No", v: blNo || "BL-SZX-7781" },
-          { k: "Booking No", v: sh?.bookingNo || "BK-44521" },
-          { k: "Container", v: sh?.containerNo || "TCLU1234567" },
-          { k: "ETD", v: sh?.etd || "2026-05-03" },
-          { k: "ETA", v: sh?.eta || "2026-05-10" },
-          { k: "POL → POD", v: "Shenzhen → Tokyo" },
-        ],
-        markers: [{ kind: "pin", x: 18, y: 18, text: "Vessel schedule" }],
-      },
-    ],
-  };
-
-  const shipmentDoc = {
-    id: "shipment",
-    label: "Shipment",
-    type: "Shipment",
-    title: "Shipment Overview",
-    mockPages: [
-      {
-        title: "SHIPMENT OVERVIEW",
-        subtitle: "AI operational summary",
-        rows: [
-          { k: "Shipment", v: sh?.id || "SHP-2026-009" },
-          { k: "Booking", v: sh?.bookingNo || "BK-88201" },
-          { k: "Container", v: sh?.containerNo || "TCLU-998877" },
-          { k: "ETA", v: sh?.eta || "2026-05-12" },
-          { k: "Status", v: shipmentStateLabelJa(sh?.shipmentState || tc?.shipmentState || "") || "-" },
-        ],
-      },
-    ],
-  };
-
+  // Workspace role split:
+  // - Shipping Instruction: baseline (no annotation)
+  // - Commercial Invoice: comparison target (annotation)
   const out = [];
-  if (siDoc) out.push(siDoc);
-  if (salesResponseDocForTabs) out.push(salesResponseDocForTabs);
-  if (salesCommitmentDocForTabs) out.push(salesCommitmentDocForTabs);
-  out.push(...invDocs);
-  out.push(plDoc);
-  out.push(blDoc);
-  out.push(shipmentDoc);
+  if (siDoc) out.push({ ...siDoc, viewerKey: "si", label: "Shipping Instruction" });
+  const inv1122 = invDocs.find((d) => String(d?.id || "") === "inv-1122") || null;
+  if (inv1122) out.push(inv1122);
 
   const docs = out.filter(Boolean);
   const focusDocId = resolveFocusDocId({ focusType: type, focusId: focusKey, documents: docs });
