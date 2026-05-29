@@ -641,6 +641,8 @@ async function fetchServerActivityFeed() {
           type: String(it.type || ""),
           description: String(it.summary || it.title || ""),
           threadId: String(it.threadId || "").trim(),
+          demoApprovalId: String(it.demoApprovalId || "").trim(),
+          origin: "serverActivity",
         });
       }
     }
@@ -2141,10 +2143,13 @@ function enqueueAgentStreamToastFromActivityEvent(ev) {
   const approvalContext = (() => {
     // "latest 1 item only": when an approval-like event arrives, show a CTA in toast.
     if (rawType === "approval_required" || rawType === "approval_added") {
-      const apId = String(e.threadId || "").trim();
-      if (apId) return { kind: "actionPlan", id: apId };
       const demoApprovalId = String(e.demoApprovalId || "").trim();
       if (demoApprovalId) return { kind: "demoApproval", id: demoApprovalId };
+      // Server Activity feed may not carry enough local state to drive ActionPlan approval.
+      // Avoid showing a broken CTA when we can't resolve an ActionPlan locally.
+      if (rawType === "approval_required" && String(e.origin || "") === "serverActivity") return null;
+      const apId = String(e.threadId || "").trim();
+      if (apId) return { kind: "actionPlan", id: apId };
       return null;
     }
     if (rawType === "state_transition_candidate_detected") {

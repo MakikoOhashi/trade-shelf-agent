@@ -142,6 +142,9 @@ function activityEventToFeedItem(ev, { actorFallback } = {}) {
   const description = String(ev?.description || "");
   const sequence = typeof ev?.sequence === "number" ? ev.sequence : null;
   const linkedEntities = Array.isArray(ev?.linkedEntities) ? ev.linkedEntities.filter(Boolean) : [];
+  const threadId = String(ev?.threadId || "").trim();
+  const issueId = String(ev?.issueId || "").trim();
+  const demoApprovalId = String(ev?.demoApprovalId || "").trim();
 
   const linkedDeduped = (() => {
     const seen = new Set();
@@ -187,6 +190,9 @@ function activityEventToFeedItem(ev, { actorFallback } = {}) {
     statusKey: statusKeyFromIngestStatus(ev?.status),
     linked,
     links: [],
+    ...(threadId ? { threadId } : {}),
+    ...(issueId ? { issueId } : {}),
+    ...(demoApprovalId ? { demoApprovalId } : {}),
   };
 }
 
@@ -1508,7 +1514,6 @@ const server = http.createServer(async (req, res) => {
 
             const result = await ingestWithLlmOrMock({ rawInput, pendingClarifications: [] });
             const events = Array.isArray(result?.activityEvents) ? result.activityEvents.filter(Boolean) : [];
-            const feedItems = events.map((evv) => activityEventToFeedItem(evv, { actorFallback: hasAzureLlmEnv() ? "Kimi AI分類" : "mock ingest" }));
 
             // If approval_required was generated, also register a pending demo approval item
             // so Approval Center + Agent Toast can surface it.
@@ -1516,6 +1521,12 @@ const server = http.createServer(async (req, res) => {
               for (const evv of events) {
                 const created = maybeEnqueueDemoApprovalFromApprovalRequiredEvent({ event: evv, rawText: text });
                 if (!created || !created.id) continue;
+                // Attach for downstream UI surfaces (Activity -> Toast CTA).
+                try {
+                  evv.demoApprovalId = created.id;
+                } catch {
+                  // ignore (non-extensible event object)
+                }
                 const siNumber = String(created?.metadata?.siNumber || "").trim().toUpperCase();
                 if (!siNumber) continue;
                 pushActivityItem({
@@ -1536,6 +1547,9 @@ const server = http.createServer(async (req, res) => {
               console.warn("[demo] failed to create state_update demo approval:", String(e));
             }
 
+            const feedItems = events.map((evv) =>
+              activityEventToFeedItem(evv, { actorFallback: hasAzureLlmEnv() ? "Kimi AI分類" : "mock ingest" }),
+            );
             if (feedItems.length) {
               slackState.activityFeedItems = [...feedItems, ...(Array.isArray(slackState.activityFeedItems) ? slackState.activityFeedItems : [])].slice(0, 400);
               schedulePersistActivitySnapshot();
