@@ -3740,23 +3740,6 @@ function renderNewTop() {
       <div class="activity-head__sub nt-muted">AI・Teams・Email・Slack の更新を時系列で表示します。</div>
     </header>`;
 
-    const queueCounts = buildActivityProcessingSummary(state);
-
-    const railHtml = `<aside class="activity-rail" aria-label="System rail">
-      <section class="activity-rail__section" aria-label="AI処理状況">
-        <div class="activity-rail__h">AI処理状況</div>
-        <div class="activity-rail__kv"><span class="k">未整理連絡</span><span class="v nt-mono">${escapeHtml(
-          String(queueCounts.awaitingClassification),
-        )}</span></div>
-        <div class="activity-rail__kv"><span class="k">確認待ち</span><span class="v nt-mono">${escapeHtml(
-          String(queueCounts.awaitingApproval),
-        )}</span></div>
-        <div class="activity-rail__kv"><span class="k">要確認</span><span class="v nt-mono">${escapeHtml(
-          String(queueCounts.failedProcessing),
-        )}</span></div>
-      </section>
-    </aside>`;
-
     return `<section class="activity-page" aria-label="Activity Feed page">
       <div class="activity-layout" aria-label="Activity layout">
         <div class="activity-feed" aria-label="Feed">
@@ -3764,7 +3747,6 @@ function renderNewTop() {
           ${filterBarHtml}
           <div class="activity-stream" aria-label="Activity stream">${feedHtml}</div>
         </div>
-        ${railHtml}
       </div>
     </section>`;
   };
