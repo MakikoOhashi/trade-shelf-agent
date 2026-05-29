@@ -480,6 +480,50 @@ export function createDocumentWorkspaceRenderer(deps) {
     return { title: "AIの書類チェック", focusType: type, focusId: id || "-", checks };
   }
 
+  function buildBaselineSiProgressCheckResults(tc) {
+    const tradeCase = tc || null;
+    if (!tradeCase) return { title: "AIの書類チェック", focusType: "si", focusId: "-", checks: [] };
+
+    const sh = tradeCase?.shipmentEntity || null;
+    const si = tradeCase?.siEntity || null;
+
+    const siNo = String(si?.siNo || tradeCase?.siNumbers?.[0] || "").trim();
+    const shipmentState = String(sh?.shipmentState || tradeCase?.shipmentState || "").trim();
+
+    // Use SI context documents so "missing" placeholders (e.g., PL) are represented consistently.
+    const documents = buildDocumentWorkspaceDocuments(tradeCase, "si", siNo || "-");
+    const anyDocPresent = (pred) => documents.some((d) => pred(d) && String(d?.status || "") !== "missing");
+
+    const hasPl = anyDocPresent((d) => String(d?.type || "").toLowerCase().includes("packing"));
+    const hasBl = Boolean(String(sh?.blNo || (Array.isArray(tradeCase?.blNumbers) ? tradeCase.blNumbers[0] : "") || "").trim());
+
+    const shipmentStatus = (() => {
+      // For SI (baseline) view, we want an operational "next stuck point" feeling.
+      if (!shipmentState || shipmentState === "notArranged" || shipmentState === "shippingPending") {
+        return { status: "warning", summary: "ETD確認待ち" };
+      }
+      if (shipmentState === "inTransit" || shipmentState === "arrived" || shipmentState === "importCustoms" || shipmentState === "customsCleared") {
+        return { status: "ok", summary: "ETD/ETA確定" };
+      }
+      return { status: "warning", summary: "ETD確認待ち" };
+    })();
+
+    const checks = [
+      { key: "si_no", label: "SI番号チェック", status: siNo ? "ok" : "warning", summary: siNo ? "OK" : "未検出" },
+      { key: "product", label: "品番チェック", status: "ok", summary: "OK" },
+      { key: "quantity", label: "数量チェック", status: "ok", summary: "OK" },
+      { key: "pl", label: "PLチェック", status: hasPl ? "ok" : "warning", summary: hasPl ? "OK" : "PL未着" },
+      { key: "bl", label: "BLチェック", status: hasBl ? "ok" : "warning", summary: hasBl ? "OK" : "未着" },
+      { key: "shipment", label: "Shipmentチェック", status: shipmentStatus.status, summary: shipmentStatus.summary },
+    ];
+
+    const order = ["si_no", "product", "quantity", "pl", "bl", "shipment"];
+    const rank = new Map(order.map((k, i) => [k, i]));
+    checks.sort((a, b) => (rank.get(a.key) ?? 999) - (rank.get(b.key) ?? 999));
+
+    return { title: "AIの書類チェック", focusType: "si", focusId: siNo || "-", checks };
+  }
+
   function renderDocumentCheckResults(checkResults) {
     const r = checkResults && typeof checkResults === "object" ? checkResults : null;
     const checks = Array.isArray(r?.checks) ? r.checks.filter(Boolean) : [];
@@ -1039,20 +1083,10 @@ export function createDocumentWorkspaceRenderer(deps) {
             Slack / Email / Upload から<br />
             書類が追加されると自動解析されます。
           </div>
-        </div>
+          </div>
       `
       : isBaselineShippingInstruction
-        ? `
-          <div class="muted" style="margin-bottom:6px;">基準書類：Shipping Instruction</div>
-          <div style="margin-bottom:10px;">このSIを基準に、後続の Invoice / Packing List / B/L の内容を照合します。</div>
-          <div class="muted" style="margin-bottom:6px;">確認ポイント</div>
-          <ul class="list">
-            <li>SI番号</li>
-            <li>数量</li>
-            <li>納期</li>
-            <li>出荷条件</li>
-          </ul>
-        `
+        ? renderDocumentCheckResults(buildBaselineSiProgressCheckResults(tc))
         : renderDocumentCheckResults(docCheckResults);
 
     const relationshipTree = buildWorkspaceRelationshipTree(tc, type, id);

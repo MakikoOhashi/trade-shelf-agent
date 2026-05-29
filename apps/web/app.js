@@ -5612,10 +5612,55 @@ function renderSiWorkspace(tradeCase) {
   const documents = buildSiWorkspaceDocuments(tradeCase);
   const viewerHtml = renderDocumentViewer(documents, { modalId: "si-workspace-modal", viewerKey: "si" });
 
-  const baselineTitle = "基準書類：Shipping Instruction";
-  const baselineBody = "このSIを基準に、後続の Invoice / Packing List / B/L の内容を照合します。";
-  const confirmPoints = ["SI番号", "数量", "納期", "出荷条件"];
-  const followUpExamples = ["INV数量がSIと違う", "PL未着", "BL type確認", "ETA変更"];
+  const renderBaselineProgressChecks = () => {
+    const siNo = String(si?.siNo || tradeCase?.siNumbers?.[0] || "").trim();
+    const sh = tradeCase?.shipmentEntity || null;
+    const shipmentState = String(sh?.shipmentState || tradeCase?.shipmentState || "").trim();
+
+    const hasBl = Boolean(String(sh?.blNo || (Array.isArray(tradeCase?.blNumbers) ? tradeCase.blNumbers[0] : "") || "").trim());
+    // NOTE: mock env always starts with PL missing; treat as operational status.
+    const hasPl = false;
+
+    const icon = (status) => (status === "warning" ? "⚠" : "✓");
+    const statusText = (status) => (status === "warning" ? "要確認" : "OK");
+
+    const shipmentStatus = (() => {
+      if (!shipmentState || shipmentState === "notArranged" || shipmentState === "shippingPending") return { status: "warning", summary: "ETD確認待ち" };
+      if (shipmentState === "inTransit" || shipmentState === "arrived" || shipmentState === "importCustoms" || shipmentState === "customsCleared") {
+        return { status: "ok", summary: "ETD/ETA確定" };
+      }
+      return { status: "warning", summary: "ETD確認待ち" };
+    })();
+
+    const checks = [
+      { key: "si_no", label: "SI番号チェック", status: siNo ? "ok" : "warning", summary: siNo ? "OK" : "未検出" },
+      { key: "product", label: "品番チェック", status: "ok", summary: "OK" },
+      { key: "quantity", label: "数量チェック", status: "ok", summary: "OK" },
+      { key: "pl", label: "PLチェック", status: hasPl ? "ok" : "warning", summary: hasPl ? "OK" : "PL未着" },
+      { key: "bl", label: "BLチェック", status: hasBl ? "ok" : "warning", summary: hasBl ? "OK" : "未着" },
+      { key: "shipment", label: "Shipmentチェック", status: shipmentStatus.status, summary: shipmentStatus.summary },
+    ];
+
+    return `
+      <div class="doc-check-list" data-focus-type="si" data-focus-id="${escapeHtml(siNo || "-")}">
+        ${checks
+          .map((c) => {
+            const st = String(c.status || "ok");
+            const hideSummary = st === "ok";
+            return `
+              <div class="doc-check doc-check--${escapeHtml(st)}" data-check-key="${escapeHtml(String(c.key || ""))}" data-status="${escapeHtml(st)}">
+                <div class="doc-check__header">
+                  <div class="doc-check__label">${escapeHtml(String(c.label || ""))}</div>
+                  <div class="doc-check__status doc-check__status--${escapeHtml(st)}">${escapeHtml(`${icon(st)} ${statusText(st)}`)}</div>
+                </div>
+                ${hideSummary ? "" : `<div class="doc-check__summary"><div class="doc-check__line">${escapeHtml(String(c.summary || ""))}</div></div>`}
+              </div>
+            `;
+          })
+          .join("")}
+      </div>
+    `;
+  };
 
   return `
     <div class="workspace-layout">
@@ -5663,18 +5708,17 @@ function renderSiWorkspace(tradeCase) {
       <aside class="workspace-pane workspace-pane--right" aria-label="Decision helper">
         <div class="workspace-section">
           <div class="workspace-section__title">AIの書類チェック</div>
-          <div class="muted" style="margin-bottom:6px;">${escapeHtml(baselineTitle)}</div>
-          <div style="margin-bottom:10px;">${escapeHtml(baselineBody)}</div>
-          <div class="muted" style="margin-bottom:6px;">確認ポイント</div>
-          <ul class="list">${confirmPoints.map((x) => `<li>${escapeHtml(x)}</li>`).join("")}</ul>
+          ${renderBaselineProgressChecks()}
         </div>
         <div class="workspace-section">
           <div class="workspace-section__title">人間メモ</div>
           <div class="muted">（mock）営業コメントは短く。長文は Case detail に集約。</div>
         </div>
         <div class="workspace-section">
-          <div class="workspace-section__title">後続書類での照合（例）</div>
-          <ul class="list">${followUpExamples.map((x) => `<li>${escapeHtml(x)}</li>`).join("")}</ul>
+          <div class="workspace-section__title">補足</div>
+          <div class="muted">
+            SIを基準にした後続書類の進捗・整合を表示します（SI画像上のannotationは出しません）。
+          </div>
         </div>
       </aside>
     </div>
