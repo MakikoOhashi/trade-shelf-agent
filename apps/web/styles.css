@@ -226,7 +226,8 @@ body {
   right: 14px;
   width: 320px;
   max-width: calc(100vw - 28px);
-  z-index: 10000;
+  /* Above normal UI, but below modals (>= 1400) */
+  z-index: 1300;
   border-radius: 14px;
   padding: 10px 12px 11px;
   background: rgba(17, 24, 39, 0.72);
@@ -240,6 +241,10 @@ body {
   pointer-events: auto;
 }
 
+#app .agent-stream-toast.is-positioned {
+  right: auto;
+}
+
 #app .agent-stream-toast.is-visible {
   opacity: 1;
 }
@@ -250,6 +255,15 @@ body {
   justify-content: space-between;
   gap: 8px;
   margin-bottom: 6px;
+  cursor: grab;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: none;
+}
+
+#app .agent-stream-toast.is-dragging,
+#app .agent-stream-toast.is-dragging .agent-stream-toast__top {
+  cursor: grabbing;
 }
 
 #app .agent-stream-toast__header {
@@ -270,6 +284,8 @@ body {
   cursor: pointer;
   line-height: 1;
   font-size: 16px;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 #app .agent-stream-toast__close:hover {

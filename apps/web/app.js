@@ -238,6 +238,11 @@ const state = {
     dismissed: false,
   },
   /**
+   * Agent Toast viewport position (persisted)
+   * @type {null | { left: number, top: number }}
+   */
+  agentStreamToastPos: null,
+  /**
    * Bootstrap guard for server activity feed (avoid toasting historical items on initial load)
    * @type {boolean}
    */
@@ -2006,6 +2011,74 @@ function clipSingleLine(text, maxLen = 38) {
   return `${s.slice(0, Math.max(0, maxLen - 1))}…`;
 }
 
+const AGENT_STREAM_TOAST_POS_STORAGE_KEY = "tradeShelfAgent:agentStreamToastPos:v1";
+
+function clampNumber(v, min, max) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return min;
+  if (n < min) return min;
+  if (n > max) return max;
+  return n;
+}
+
+function loadAgentStreamToastPos() {
+  try {
+    const raw = window.localStorage ? window.localStorage.getItem(AGENT_STREAM_TOAST_POS_STORAGE_KEY) : null;
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    const left = Number(parsed && parsed.left);
+    const top = Number(parsed && parsed.top);
+    if (!Number.isFinite(left) || !Number.isFinite(top)) return null;
+    return { left, top };
+  } catch {
+    return null;
+  }
+}
+
+function saveAgentStreamToastPos(pos) {
+  try {
+    if (!window.localStorage) return;
+    if (!pos) {
+      window.localStorage.removeItem(AGENT_STREAM_TOAST_POS_STORAGE_KEY);
+      return;
+    }
+    const left = Number(pos.left);
+    const top = Number(pos.top);
+    if (!Number.isFinite(left) || !Number.isFinite(top)) return;
+    window.localStorage.setItem(AGENT_STREAM_TOAST_POS_STORAGE_KEY, JSON.stringify({ left, top }));
+  } catch {
+    // ignore
+  }
+}
+
+function ensureAgentStreamToastPosBootstrapped() {
+  if (state.agentStreamToastPos && typeof state.agentStreamToastPos === "object") return;
+  state.agentStreamToastPos = loadAgentStreamToastPos();
+}
+
+function clampAgentStreamToastPos({ left, top }, { width, height }, { margin = 10 } = {}) {
+  const vw = Math.max(0, Number(window.innerWidth) || 0);
+  const vh = Math.max(0, Number(window.innerHeight) || 0);
+  const maxLeft = Math.max(margin, vw - Math.max(0, width) - margin);
+  const maxTop = Math.max(margin, vh - Math.max(0, height) - margin);
+  return {
+    left: clampNumber(left, margin, maxLeft),
+    top: clampNumber(top, margin, maxTop),
+  };
+}
+
+function applyAgentStreamToastPosToEl(el, pos) {
+  if (!el || !pos) return;
+  const left = Number(pos.left);
+  const top = Number(pos.top);
+  if (!Number.isFinite(left) || !Number.isFinite(top)) return;
+  el.style.left = `${Math.round(left)}px`;
+  el.style.top = `${Math.round(top)}px`;
+  el.style.right = "auto";
+  el.style.bottom = "auto";
+  el.classList.add("is-positioned");
+}
+
 function closeAgentStreamToast({ immediate: _immediate = false } = {}) {
   const t = state.agentStreamToast;
   if (!t) return;
@@ -3088,15 +3161,15 @@ function renderAgentStreamToast() {
           .join("")}</div>`;
 
   return `
-    <div class="agent-stream-toast is-visible" role="status" aria-live="polite" aria-label="Agent status panel">
-      <div class="agent-stream-toast__top">
-        <div class="agent-stream-toast__header">${escapeHtml(header)}</div>
-        <button class="agent-stream-toast__close" type="button" aria-label="Close" data-agent-stream-close="1">×</button>
-      </div>
-      <div class="agent-stream-toast__message">${escapeHtml(statusLabel)}</div>
-      ${bodyHtml}
-    </div>
-  `;
+	    <div class="agent-stream-toast is-visible" role="status" aria-live="polite" aria-label="Agent status panel" data-agent-stream-toast="1">
+	      <div class="agent-stream-toast__top" data-agent-stream-drag-handle="1">
+	        <div class="agent-stream-toast__header">${escapeHtml(header)}</div>
+	        <button class="agent-stream-toast__close" type="button" aria-label="Close" data-agent-stream-close="1">×</button>
+	      </div>
+	      <div class="agent-stream-toast__message">${escapeHtml(statusLabel)}</div>
+	      ${bodyHtml}
+	    </div>
+	  `;
 }
 
 function renderNewTop() {
@@ -4028,6 +4101,20 @@ function renderApp() {
   if (!root) return;
   root.innerHTML = renderNewTop();
   syncOperationalThreadModal();
+  ensureAgentStreamToastPosBootstrapped();
+  const toast = root.querySelector ? root.querySelector(".agent-stream-toast[data-agent-stream-toast]") : null;
+  if (toast) {
+    const rect = toast.getBoundingClientRect();
+    const saved = state.agentStreamToastPos;
+    if (saved && Number.isFinite(saved.left) && Number.isFinite(saved.top)) {
+      const clamped = clampAgentStreamToastPos(saved, { width: rect.width, height: rect.height }, { margin: 10 });
+      if (clamped.left !== saved.left || clamped.top !== saved.top) {
+        state.agentStreamToastPos = clamped;
+        saveAgentStreamToastPos(clamped);
+      }
+      applyAgentStreamToastPosToEl(toast, clamped);
+    }
+  }
 
   if (DEBUG_UI_LOGS) {
     console.log("[renderApp done]", {
@@ -8704,6 +8791,104 @@ function setupNewTop() {
 
   const root = document.getElementById("app");
   if (!root) return;
+
+  ensureAgentStreamToastPosBootstrapped();
+
+  const dragState = {
+    active: false,
+    pointerId: null,
+    startX: 0,
+    startY: 0,
+    startLeft: 0,
+    startTop: 0,
+    width: 0,
+    height: 0,
+  };
+
+  const getToastEl = () => (root.querySelector ? root.querySelector(".agent-stream-toast[data-agent-stream-toast]") : null);
+
+  const beginDragAgentStreamToast = (e) => {
+    const target = e.target;
+    if (!target || !target.closest) return;
+    const handle = target.closest("[data-agent-stream-drag-handle]");
+    if (!handle) return;
+    if (target.closest("[data-agent-stream-close]")) return;
+    const toast = getToastEl();
+    if (!toast) return;
+
+    const rect = toast.getBoundingClientRect();
+    const existing = state.agentStreamToastPos;
+    const startLeft = existing && Number.isFinite(existing.left) ? Number(existing.left) : rect.left;
+    const startTop = existing && Number.isFinite(existing.top) ? Number(existing.top) : rect.top;
+    const boot = { left: startLeft, top: startTop };
+    state.agentStreamToastPos = boot;
+    applyAgentStreamToastPosToEl(toast, boot);
+
+    dragState.active = true;
+    dragState.pointerId = e.pointerId;
+    dragState.startX = e.clientX;
+    dragState.startY = e.clientY;
+    dragState.startLeft = boot.left;
+    dragState.startTop = boot.top;
+    dragState.width = rect.width;
+    dragState.height = rect.height;
+
+    toast.classList.add("is-dragging");
+
+    try {
+      handle.setPointerCapture(e.pointerId);
+    } catch {
+      // ignore
+    }
+    e.preventDefault();
+  };
+
+  const moveDragAgentStreamToast = (e) => {
+    if (!dragState.active) return;
+    if (dragState.pointerId != null && e.pointerId !== dragState.pointerId) return;
+    const toast = getToastEl();
+    if (!toast) return;
+    const dx = e.clientX - dragState.startX;
+    const dy = e.clientY - dragState.startY;
+    const next = clampAgentStreamToastPos(
+      { left: dragState.startLeft + dx, top: dragState.startTop + dy },
+      { width: dragState.width, height: dragState.height },
+      { margin: 10 }
+    );
+    state.agentStreamToastPos = next;
+    applyAgentStreamToastPosToEl(toast, next);
+  };
+
+  const endDragAgentStreamToast = (e) => {
+    if (!dragState.active) return;
+    if (dragState.pointerId != null && e.pointerId !== dragState.pointerId) return;
+    const toast = getToastEl();
+    if (toast) toast.classList.remove("is-dragging");
+    dragState.active = false;
+    dragState.pointerId = null;
+    if (state.agentStreamToastPos) saveAgentStreamToastPos(state.agentStreamToastPos);
+  };
+
+  root.addEventListener("pointerdown", beginDragAgentStreamToast);
+  root.addEventListener("pointermove", moveDragAgentStreamToast, { passive: true });
+  root.addEventListener("pointerup", endDragAgentStreamToast);
+  root.addEventListener("pointercancel", endDragAgentStreamToast);
+
+  window.addEventListener(
+    "resize",
+    () => {
+      const toast = getToastEl();
+      const pos = state.agentStreamToastPos;
+      if (!toast || !pos) return;
+      const rect = toast.getBoundingClientRect();
+      const clamped = clampAgentStreamToastPos(pos, { width: rect.width, height: rect.height }, { margin: 10 });
+      if (clamped.left === pos.left && clamped.top === pos.top) return;
+      state.agentStreamToastPos = clamped;
+      applyAgentStreamToastPosToEl(toast, clamped);
+      saveAgentStreamToastPos(clamped);
+    },
+    { passive: true }
+  );
 
   function handleNewTopClick(e) {
     window.__newTopClickCount = (window.__newTopClickCount || 0) + 1;
