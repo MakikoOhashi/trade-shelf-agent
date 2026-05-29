@@ -2140,10 +2140,10 @@ function enqueueAgentStreamToastFromActivityEvent(ev) {
   const mapped = AGENT_STREAM_LABELS[rawType] || "処理を継続中...";
   const desc = clipSingleLine(e.description || e.summary || "", 64);
   const nextLine = desc || mapped;
+  const demoApprovalId = String(e.demoApprovalId || "").trim() || null;
   const approvalContext = (() => {
     // "latest 1 item only": when an approval-like event arrives, show a CTA in toast.
     if (rawType === "approval_required" || rawType === "approval_added") {
-      const demoApprovalId = String(e.demoApprovalId || "").trim();
       if (demoApprovalId) return { kind: "demoApproval", id: demoApprovalId };
       // Server Activity feed may not carry enough local state to drive ActionPlan approval.
       // Avoid showing a broken CTA when we can't resolve an ActionPlan locally.
@@ -2174,6 +2174,12 @@ function enqueueAgentStreamToastFromActivityEvent(ev) {
     status: approvalContext ? "approval_pending" : "processing",
     lines: deduped,
     approvalContext: approvalContext || null,
+    debug: {
+      rawType,
+      demoApprovalId,
+      approvalContextKind: approvalContext?.kind || null,
+      approvalContextId: approvalContext?.id || null,
+    },
     dismissed: false, // re-open on new activity
   };
   renderApp();
@@ -3235,6 +3241,32 @@ function renderAgentStreamToast() {
         </div>`
       : "";
 
+  const debugHtml = (() => {
+    // Temporary wiring debug (hideable): localStorage key `tradeShelfAgent:agentStreamToastDebug` set to "0" to disable.
+    const storageFlag = (() => {
+      try {
+        return window.localStorage.getItem("tradeShelfAgent:agentStreamToastDebug");
+      } catch (_e) {
+        return null;
+      }
+    })();
+    const show = storageFlag !== "0";
+    if (!show) return "";
+    const d = t.debug && typeof t.debug === "object" ? t.debug : {};
+    const rawType = String(d.rawType || "");
+    const demoApprovalId = d.demoApprovalId == null ? "null" : String(d.demoApprovalId);
+    const hasApprovalContext = approvalContext && approvalContext.id ? "yes" : "no";
+    const approvalId = approvalContext && approvalContext.id ? String(approvalContext.id) : "null";
+    return `<div class="agent-stream-toast__debug nt-muted nt-mono" style="font-size:11px;line-height:1.2;padding-top:6px;">
+      <div>debug:</div>
+      <div>type=${escapeHtml(rawType || "n/a")}</div>
+      <div>status=${escapeHtml(statusKey)}</div>
+      <div>demoApprovalId=${escapeHtml(demoApprovalId)}</div>
+      <div>approvalContext=${escapeHtml(hasApprovalContext)}</div>
+      <div>approvalContext.id=${escapeHtml(approvalId)}</div>
+    </div>`;
+  })();
+
   return `
 	    <div class="agent-stream-toast is-visible" role="status" aria-live="polite" aria-label="Agent status panel" data-agent-stream-toast="1">
 	      <div class="agent-stream-toast__top" data-agent-stream-drag-handle="1">
@@ -3244,6 +3276,7 @@ function renderAgentStreamToast() {
 	      <div class="agent-stream-toast__message">${escapeHtml(statusLabel)}</div>
 	      ${bodyHtml}
         ${actionsHtml}
+        ${debugHtml}
 	    </div>
 	  `;
 }
