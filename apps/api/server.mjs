@@ -941,6 +941,83 @@ function findDemoApprovalBySiNumber(siNumber) {
   return list.find((x) => String(x?.metadata?.siNumber || "").trim().toUpperCase() === si) || null;
 }
 
+function findPendingDemoApprovalBySiAndSuggestedStatus(siNumber, suggestedStatus) {
+  const si = String(siNumber || "").trim().toUpperCase();
+  const st = String(suggestedStatus || "").trim();
+  if (!si || !st) return null;
+  const list = Array.isArray(slackState.demoApprovals) ? slackState.demoApprovals : [];
+  return (
+    list.find((x) => {
+      if (String(x?.status || "") !== "pending") return false;
+      const meta = x?.metadata && typeof x.metadata === "object" ? x.metadata : {};
+      const metaSi = String(meta?.siNumber || "").trim().toUpperCase();
+      const metaSt = String(meta?.suggestedStatus || "").trim();
+      return metaSi === si && metaSt === st;
+    }) || null
+  );
+}
+
+function inferSuggestedStatusFromText(text) {
+  const t = String(text || "").toLowerCase();
+  if (!t) return "";
+
+  // Minimal demo mapping -> existing shelf keys used by the frontend.
+  // OK scope: 通関中 / 倉庫到着 / ETA変更
+  if (t.includes("通関")) return "importCustoms";
+  if (t.includes("倉庫到着") || t.includes("倉庫") || t.includes("warehouse")) return "warehouseReceived";
+  if (t.includes("eta") || t.includes("到着予定") || t.includes("到着日") || t.includes("納期")) return "inTransit";
+
+  return "";
+}
+
+function extractPrimarySiNumberFromLinkedEntities(linkedEntities, fallbackText) {
+  const links = Array.isArray(linkedEntities) ? linkedEntities : [];
+  for (const l of links) {
+    if (String(l?.entityType || "") !== "SI") continue;
+    const si = normalizeSiId(String(l?.entityId || ""), new Date());
+    if (si) return si;
+  }
+  const fromText = extractSiNumbersFromText(String(fallbackText || ""));
+  return fromText && fromText.length ? String(fromText[0] || "").trim().toUpperCase() : "";
+}
+
+function maybeEnqueueDemoApprovalFromApprovalRequiredEvent({ event, rawText }) {
+  const ev = event && typeof event === "object" ? event : null;
+  if (!ev || String(ev.type || "") !== "approval_required") return null;
+
+  const siNumber = extractPrimarySiNumberFromLinkedEntities(ev.linkedEntities, rawText);
+  if (!siNumber) return null;
+
+  const suggestedStatus = inferSuggestedStatusFromText(rawText);
+  if (!suggestedStatus) return null;
+
+  const dedupeExisting = findPendingDemoApprovalBySiAndSuggestedStatus(siNumber, suggestedStatus);
+  if (dedupeExisting) return dedupeExisting;
+
+  const title = "状態更新候補";
+  const description = `${siNumber} の状態を更新しますか？`;
+  const approval = {
+    id: `APR-STATE-${siNumber.replace(/[^A-Z0-9]/g, "")}-${suggestedStatus}-${Date.now()}`,
+    type: "state_update",
+    status: "pending",
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    title,
+    description,
+    metadata: {
+      siNumber,
+      source: "slack",
+      suggestedStatus,
+      eta: "",
+      reason: "",
+      originalMessage: String(rawText || "").trim(),
+    },
+  };
+
+  upsertDemoApproval(approval);
+  return approval;
+}
+
 function pushActivityItem(item) {
   slackState.activityFeedItems = [item, ...(Array.isArray(slackState.activityFeedItems) ? slackState.activityFeedItems : [])].slice(0, 500);
   slackState.lastReceivedAt = new Date().toISOString();
@@ -1147,10 +1224,90 @@ const server = http.createServer(async (req, res) => {
       };
       upsertDemoApproval(updated);
 
+      const approvalType = String(updated?.type || "").trim();
+      const siNumber = String(updated?.metadata?.siNumber || "").trim().toUpperCase();
+
+      if (approvalType === "state_update") {
+        const suggestedStatus = String(updated?.metadata?.suggestedStatus || "").trim();
+        const list = Array.isArray(slackState.demoTradeCases) ? slackState.demoTradeCases : [];
+        const idx = list.findIndex((tc) => {
+          const si = String(tc?.siEntity?.siNo || (Array.isArray(tc?.siNumbers) ? tc.siNumbers[0] : "") || "").trim().toUpperCase();
+          return si && si === siNumber;
+        });
+
+        if (idx !== -1) {
+          const tcPrev = list[idx];
+          const fromState = String(tcPrev?.shipmentEntity?.shipmentState || "").trim();
+          const nextTc = {
+            ...tcPrev,
+            shipmentEntity: {
+              ...(tcPrev?.shipmentEntity || {}),
+              shipmentState: suggestedStatus || fromState,
+              updatedAt: new Date().toISOString(),
+            },
+            caseProgress: {
+              ...(tcPrev?.caseProgress || {}),
+              currentStatusLabel: suggestedStatus ? `状態更新: ${suggestedStatus}` : (tcPrev?.caseProgress?.currentStatusLabel || ""),
+            },
+            timeline: [
+              {
+                id: `TL-${Date.now()}`,
+                at: new Date().toISOString(),
+                type: "approvedStateUpdate",
+                message: `Approved state update: ${fromState || "-"} → ${suggestedStatus || "-"}`,
+              },
+              ...(Array.isArray(tcPrev?.timeline) ? tcPrev.timeline : []),
+            ],
+            updatedAt: new Date().toISOString(),
+          };
+
+          const nextList = list.slice();
+          nextList[idx] = nextTc;
+          slackState.demoTradeCases = nextList;
+          schedulePersistDemoStores();
+
+          const shipmentId = String(nextTc?.shipmentEntity?.id || "").trim();
+          pushActivityItem({
+            id: `demo:approved:${siNumber}:${Date.now()}`,
+            type: "aiProcessed",
+            source: "ai",
+            title: `承認済み：${siNumber} の状態更新を承認しました`,
+            actor: "demo approval",
+            occurredAt: new Date().toISOString(),
+            summary: updated.description || "approved",
+            details: [`approvalId: ${updated.id}`],
+            statusKey: "success",
+            linked: [{ kind: "si", label: siNumber }, ...(shipmentId ? [{ kind: "shipment", label: shipmentId }] : [])],
+            links: [],
+          });
+
+          pushActivityItem({
+            id: `demo:state-transition:${siNumber}:${Date.now()}`,
+            type: "aiProcessed",
+            source: "ai",
+            title: `状態更新：${siNumber} ${fromState || "-"} → ${suggestedStatus || "-"}`,
+            actor: "demo approval",
+            occurredAt: new Date().toISOString(),
+            summary: "state transition",
+            details: [`from: ${fromState || "-"}`, `to: ${suggestedStatus || "-"}`],
+            statusKey: "success",
+            linked: [{ kind: "si", label: siNumber }, ...(shipmentId ? [{ kind: "shipment", label: shipmentId }] : [])],
+            links: [],
+          });
+
+          sendJson(res, 200, { ok: true, approval: updated, tradeCase: nextTc });
+          return;
+        }
+
+        // If we don't have a TradeCase yet, treat it as a no-op approval (still approved).
+        sendJson(res, 200, { ok: true, approval: updated, tradeCase: null });
+        return;
+      }
+
+      // Default demo approval flow: unknown SI -> add to shelf.
       const tc = createDemoTradeCaseFromApproval(updated);
       appendDemoTradeCase(tc);
 
-      const siNumber = String(updated?.metadata?.siNumber || "").trim().toUpperCase();
       const shipmentId = String(tc?.shipmentEntity?.id || "").trim();
       pushActivityItem({
         id: `demo:shelf-added:${siNumber}:${Date.now()}`,
@@ -1182,6 +1339,7 @@ const server = http.createServer(async (req, res) => {
 
       sendJson(res, 200, { ok: true, approval: updated, tradeCase: tc });
       return;
+
     } catch (e) {
       sendJson(res, 400, { ok: false, error: "invalid request body" });
       return;
@@ -1351,6 +1509,32 @@ const server = http.createServer(async (req, res) => {
             const result = await ingestWithLlmOrMock({ rawInput, pendingClarifications: [] });
             const events = Array.isArray(result?.activityEvents) ? result.activityEvents.filter(Boolean) : [];
             const feedItems = events.map((evv) => activityEventToFeedItem(evv, { actorFallback: hasAzureLlmEnv() ? "Kimi AI分類" : "mock ingest" }));
+
+            // If approval_required was generated, also register a pending demo approval item
+            // so Approval Center + Agent Toast can surface it.
+            try {
+              for (const evv of events) {
+                const created = maybeEnqueueDemoApprovalFromApprovalRequiredEvent({ event: evv, rawText: text });
+                if (!created || !created.id) continue;
+                const siNumber = String(created?.metadata?.siNumber || "").trim().toUpperCase();
+                if (!siNumber) continue;
+                pushActivityItem({
+                  id: `demo:approval-created:${siNumber}:${Date.now()}`,
+                  type: "aiProcessed",
+                  source: "ai",
+                  title: `承認待ち：${siNumber} の状態更新候補を追加しました`,
+                  actor: "demo approval bridge",
+                  occurredAt: new Date().toISOString(),
+                  summary: created.description || created.title || "approval pending",
+                  details: [`approvalId: ${created.id}`, `suggestedStatus: ${String(created?.metadata?.suggestedStatus || "")}`].filter(Boolean),
+                  statusKey: "awaitingApproval",
+                  linked: [{ kind: "si", label: siNumber }],
+                  links: [],
+                });
+              }
+            } catch (e) {
+              console.warn("[demo] failed to create state_update demo approval:", String(e));
+            }
 
             if (feedItems.length) {
               slackState.activityFeedItems = [...feedItems, ...(Array.isArray(slackState.activityFeedItems) ? slackState.activityFeedItems : [])].slice(0, 400);

@@ -668,6 +668,7 @@ function normalizeServerDemoApprovalItem(item) {
   const it = item && typeof item === "object" ? item : {};
   const id = String(it.id || "").trim();
   if (!id) return null;
+  const type = String(it.type || "").trim();
   const status = String(it.status || "").trim() || "pending";
   const title = String(it.title || "").trim();
   const description = String(it.description || "").trim();
@@ -675,6 +676,7 @@ function normalizeServerDemoApprovalItem(item) {
   return {
     ...it,
     id,
+    type,
     status,
     title,
     description,
@@ -745,10 +747,8 @@ function scheduleDemoApprovalsPoll() {
     window.clearTimeout(demoApprovalsPollTimer);
     demoApprovalsPollTimer = null;
   }
-  if (state.topActiveTab !== "issues") return;
   const tick = async () => {
     await fetchServerDemoApprovals();
-    if (state.topActiveTab !== "issues") return;
     demoApprovalsPollTimer = window.setTimeout(tick, 5000);
   };
   demoApprovalsPollTimer = window.setTimeout(tick, 150);
@@ -842,10 +842,8 @@ function scheduleServerActivityPoll() {
     window.clearTimeout(serverActivityPollTimer);
     serverActivityPollTimer = null;
   }
-  if (state.topActiveTab !== "activity") return;
   const tick = async () => {
     await fetchServerActivityFeed();
-    if (state.topActiveTab !== "activity") return;
     serverActivityPollTimer = window.setTimeout(tick, 5000);
   };
   serverActivityPollTimer = window.setTimeout(tick, 200);
@@ -10520,6 +10518,7 @@ function main() {
   renderApp();
   scheduleServerActivityPoll();
   scheduleSlackStatusPoll();
+  scheduleDemoApprovalsPoll();
 }
 
 main();

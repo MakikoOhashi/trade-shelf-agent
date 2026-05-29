@@ -214,9 +214,20 @@ export function createApprovalCenterRenderer(deps) {
       const pending = listRaw.filter((x) => String(x?.status || "") === "pending");
       if (!pending.length) return "";
 
-      const rows = pending
+      const statusLabelJa = (key) => {
+        const k = String(key || "").trim();
+        if (!k) return "";
+        if (k === "importCustoms") return "輸入通関中";
+        if (k === "warehouseReceived") return "倉庫入荷済み";
+        if (k === "inTransit") return "輸送中";
+        return k;
+      };
+
+      const renderRows = (items) =>
+        items
         .map((ap) => {
           const id = String(ap?.id || "").trim();
+          const type = String(ap?.type || "").trim();
           const title = String(ap?.title || "新規案件候補");
           const desc = String(ap?.description || "");
           const meta = ap?.metadata && typeof ap.metadata === "object" ? ap.metadata : {};
@@ -228,9 +239,10 @@ export function createApprovalCenterRenderer(deps) {
 
           const lines = [
             source ? `送信元: ${source}` : "",
-            status ? `推定ステータス: ${status === "inTransit" ? "輸送中" : status}` : "",
+            status ? `推定ステータス: ${statusLabelJa(status)}` : "",
             eta ? `推定ETA: ${eta}` : "",
             reason ? `理由: ${reason}` : "",
+            type ? `種別: ${type}` : "",
           ]
             .filter(Boolean)
             .map((l) => `<div class="demo-approval__line">${escapeHtml(l)}</div>`)
@@ -252,11 +264,35 @@ export function createApprovalCenterRenderer(deps) {
         })
         .join("");
 
-      return `<section class="demo-approvals" aria-label="Demo approvals">
-        <div class="demo-approvals__title">新規案件（要確認 / Slack 未登録SI）</div>
-        <div class="demo-approvals__sub muted">Slack から検出された未登録SIです。承認すると Shelf に新規案件を追加します。</div>
-        <div class="demo-approvals__list">${rows}</div>
-      </section>`;
+      const stateUpdates = pending.filter((x) => String(x?.type || "") === "state_update");
+      const unknownSi = pending.filter((x) => String(x?.type || "") === "unknown_si_add_to_shelf");
+      const others = pending.filter((x) => !["state_update", "unknown_si_add_to_shelf"].includes(String(x?.type || "")));
+
+      const blocks = [
+        stateUpdates.length
+          ? `<section class="demo-approvals" aria-label="State update approvals">
+              <div class="demo-approvals__title">状態更新（承認待ち）</div>
+              <div class="demo-approvals__sub muted">Slack / Activity から検出された状態遷移候補です。承認すると Shelf の状態を更新します。</div>
+              <div class="demo-approvals__list">${renderRows(stateUpdates)}</div>
+            </section>`
+          : "",
+        unknownSi.length
+          ? `<section class="demo-approvals" aria-label="Unknown SI approvals">
+              <div class="demo-approvals__title">新規案件（要確認 / Slack 未登録SI）</div>
+              <div class="demo-approvals__sub muted">Slack から検出された未登録SIです。承認すると Shelf に新規案件を追加します。</div>
+              <div class="demo-approvals__list">${renderRows(unknownSi)}</div>
+            </section>`
+          : "",
+        others.length
+          ? `<section class="demo-approvals" aria-label="Other demo approvals">
+              <div class="demo-approvals__title">承認待ち（その他）</div>
+              <div class="demo-approvals__sub muted">デモ用の承認待ち項目です。</div>
+              <div class="demo-approvals__list">${renderRows(others)}</div>
+            </section>`
+          : "",
+      ].filter(Boolean);
+
+      return blocks.join("");
     };
 
     const allCases = Array.isArray(state.tradeCases) ? state.tradeCases.filter(Boolean) : [];
