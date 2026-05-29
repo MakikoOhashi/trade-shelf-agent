@@ -4978,16 +4978,31 @@ function clamp(n, min, max) {
   return Math.max(min, Math.min(max, n));
 }
 
+function isShippingInstructionDocument(activeDocument, viewerKey) {
+  const doc = activeDocument && typeof activeDocument === "object" ? activeDocument : null;
+  const viewerKeyNorm = String(viewerKey || "").trim().toLowerCase();
+  const docViewerKeyNorm = String(doc?.viewerKey || "").trim().toLowerCase();
+  const docTypeNorm = String(doc?.type || "").trim().toLowerCase();
+  const docIdNorm = String(doc?.id || "").trim().toLowerCase();
+  const docTitle = String(doc?.title || doc?.label || "");
+
+  if (!doc) return false;
+  if (viewerKeyNorm === "si") return true;
+  if (docViewerKeyNorm === "si") return true;
+  if (docTypeNorm === "si") return true;
+  if (docTypeNorm === "shipping instruction") return true;
+  if (docIdNorm.startsWith("si-")) return true;
+  if (/Shipping Instruction/i.test(docTitle)) return true;
+  return false;
+}
+
 function renderDocumentViewer(documents, { modalId, viewerKey }) {
   const docs = Array.isArray(documents) ? documents.filter(Boolean) : [];
   const ui = ensureWorkspaceUiDefaults(modalId, docs);
   const activeDoc = docs.find((d) => d && d.id === ui.activeDocId) || docs[0] || null;
   const activeDocId = activeDoc ? activeDoc.id : null;
   const isActiveDocMissing = Boolean(activeDoc && activeDoc.status === "missing");
-  const isBaselineShippingInstruction =
-    String(viewerKey || "").trim() === "si" &&
-    activeDoc &&
-    (String(activeDoc?.type || "").trim() === "Shipping Instruction" || String(activeDoc?.id || "").startsWith("si-"));
+  const isBaselineShippingInstruction = isShippingInstructionDocument(activeDoc, viewerKey);
 
   if (isBaselineShippingInstruction) ui.showMarkers = false;
 

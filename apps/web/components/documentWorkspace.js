@@ -1015,6 +1015,9 @@ export function createDocumentWorkspaceRenderer(deps) {
     const tabsHtml = renderDocumentTabs(documents, { activeDocId: uiForTabs.activeDocId, viewerKey: "document" });
     const viewerHtml = renderDocumentViewer(documents, { modalId: "document-workspace-modal", viewerKey: "document" });
 
+    const activeDoc = documents.find((d) => d && d.id === uiForTabs.activeDocId) || documents[0] || null;
+    const isBaselineShippingInstruction = isShippingInstructionDocument(activeDoc, "document");
+
     const executionTimelineRisk = buildExecutionTimelineRisk(tc, type, id);
     ensureExecutionTimelineIssueCandidateSynced(executionTimelineRisk);
     const riskHtml = renderExecutionTimelineRiskHtml(executionTimelineRisk);
@@ -1026,9 +1029,8 @@ export function createDocumentWorkspaceRenderer(deps) {
     })();
 
     const docCheckResults = buildDocumentCheckResults(tc, type, id);
-    const docCheckHtml = documents.length
-      ? renderDocumentCheckResults(docCheckResults)
-      : `
+    const docCheckHtml = !documents.length
+      ? `
         <div class="doc-check-empty">
           <div class="doc-check-empty__title">関連書類未登録</div>
           <div class="doc-check-empty__body">
@@ -1036,7 +1038,20 @@ export function createDocumentWorkspaceRenderer(deps) {
             書類が追加されると自動解析されます。
           </div>
         </div>
-      `;
+      `
+      : isBaselineShippingInstruction
+        ? `
+          <div class="muted" style="margin-bottom:6px;">基準書類：Shipping Instruction</div>
+          <div style="margin-bottom:10px;">このSIを基準に、後続の Invoice / Packing List / B/L の内容を照合します。</div>
+          <div class="muted" style="margin-bottom:6px;">確認ポイント</div>
+          <ul class="list">
+            <li>SI番号</li>
+            <li>数量</li>
+            <li>納期</li>
+            <li>出荷条件</li>
+          </ul>
+        `
+        : renderDocumentCheckResults(docCheckResults);
 
     const relationshipTree = buildWorkspaceRelationshipTree(tc, type, id);
     const relationshipTreeHtml = renderWorkspaceRelationshipTree(relationshipTree);
