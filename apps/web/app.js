@@ -640,6 +640,7 @@ async function fetchServerActivityFeed() {
           id: String(it.id || ""),
           type: String(it.type || ""),
           description: String(it.summary || it.title || ""),
+          threadId: String(it.threadId || "").trim(),
         });
       }
     }
@@ -696,6 +697,24 @@ async function fetchServerDemoApprovals() {
     const itemsRaw = Array.isArray(json?.items) ? json.items : [];
     const normalized = itemsRaw.map(normalizeServerDemoApprovalItem).filter(Boolean);
     state.demoApprovals = normalized;
+
+    // If there is a pending demo approval, surface the latest 1 item on the Agent Toast with a CTA.
+    const pending = normalized.filter((x) => String(x?.status || "") === "pending");
+    const latest = pending[0] || null;
+    if (latest && latest.id) {
+      if (!state.agentStreamSeenDemoApprovalById || typeof state.agentStreamSeenDemoApprovalById !== "object")
+        state.agentStreamSeenDemoApprovalById = {};
+      if (!state.agentStreamSeenDemoApprovalById[latest.id]) {
+        state.agentStreamSeenDemoApprovalById[latest.id] = true;
+        enqueueAgentStreamToastFromActivityEvent({
+          id: `demo-approval:${latest.id}`,
+          type: "approval_added",
+          description: latest.description || latest.title || "承認待ち",
+          demoApprovalId: latest.id,
+        });
+      }
+    }
+
     renderApp();
   } catch {
     // ignore (demo)
@@ -766,7 +785,7 @@ function mergeTradeCaseIntoState(tradeCase) {
 
 async function approveDemoApprovalItem(approvalId) {
   const id = String(approvalId || "").trim();
-  if (!id) return;
+  if (!id) return { ok: false, error: "missing_id" };
   try {
     const response = await fetchWithTimeout(
       `${API_BASE_URL}/api/demo/approvals/approve`,
@@ -780,7 +799,7 @@ async function approveDemoApprovalItem(approvalId) {
     if (!response.ok) {
       const text = await response.text();
       window.alert(text || "(demo) approve failed");
-      return;
+      return { ok: false, error: "http_error" };
     }
     const json = await response.json();
     const approval = normalizeServerDemoApprovalItem(json?.approval);
@@ -790,9 +809,31 @@ async function approveDemoApprovalItem(approvalId) {
       state.demoApprovals = next;
     }
     if (json?.tradeCase) mergeTradeCaseIntoState(json.tradeCase);
+
+    // Activity: reflect "approved" immediately (demo).
+    const now = nowIso();
+    const summary = approval ? String(approval.description || approval.title || "").trim() : "承認しました";
+    const item = {
+      id: `act:${shortId()}`,
+      type: "demoApprovalApproved",
+      source: "human",
+      title: "承認済み",
+      actor: "human",
+      occurredAt: now,
+      at: formatLocalTime(now),
+      summary: summary || "承認しました",
+      details: [id],
+      statusKey: "success",
+      linked: [],
+      links: [],
+    };
+    state.activityFeedItems = prependUniqueById(state.activityFeedItems, [item]);
+
     renderApp();
+    return { ok: true };
   } catch {
     window.alert("(demo) approve failed");
+    return { ok: false, error: "exception" };
   }
 }
 
@@ -2099,6 +2140,23 @@ function enqueueAgentStreamToastFromActivityEvent(ev) {
   const mapped = AGENT_STREAM_LABELS[rawType] || "処理を継続中...";
   const desc = clipSingleLine(e.description || e.summary || "", 64);
   const nextLine = desc || mapped;
+  const approvalContext = (() => {
+    // "latest 1 item only": when an approval-like event arrives, show a CTA in toast.
+    if (rawType === "approval_required" || rawType === "approval_added") {
+      const apId = String(e.threadId || "").trim();
+      if (apId) return { kind: "actionPlan", id: apId };
+      const demoApprovalId = String(e.demoApprovalId || "").trim();
+      if (demoApprovalId) return { kind: "demoApproval", id: demoApprovalId };
+      return null;
+    }
+    if (rawType === "state_transition_candidate_detected") {
+      const evId = String(e.id || "").trim();
+      const candidateId = evId.startsWith("ACT-") ? evId.slice(4) : evId;
+      if (candidateId) return { kind: "stateTransitionCandidate", id: candidateId };
+      return null;
+    }
+    return null;
+  })();
   const prev = state.agentStreamToast && typeof state.agentStreamToast === "object" ? state.agentStreamToast : null;
   const prevLines = Array.isArray(prev?.lines) ? prev.lines.filter(Boolean).map((x) => String(x)) : [];
   const merged = [nextLine, ...prevLines].filter(Boolean);
@@ -2110,8 +2168,9 @@ function enqueueAgentStreamToastFromActivityEvent(ev) {
   state.agentStreamToast = {
     id: "agent-status-panel",
     header: "Trade Shelf Agent",
-    status: "processing",
+    status: approvalContext ? "approval_pending" : "processing",
     lines: deduped,
+    approvalContext: approvalContext || null,
     dismissed: false, // re-open on new activity
   };
   renderApp();
@@ -3150,7 +3209,7 @@ function renderAgentStreamToast() {
   if (!t || t.dismissed) return "";
   const header = String(t.header || "Trade Shelf Agent").trim() || "Trade Shelf Agent";
   const statusKey = String(t.status || "idle");
-  const statusLabel = statusKey === "processing" ? "処理中" : "待機中";
+  const statusLabel = statusKey === "approval_pending" ? "承認待ち" : statusKey === "processing" ? "処理中" : "待機中";
   const lines = Array.isArray(t.lines) ? t.lines.filter(Boolean).map((x) => String(x)) : [];
   const bodyHtml =
     statusKey === "idle"
@@ -3160,6 +3219,19 @@ function renderAgentStreamToast() {
           .map((line) => `<div class="agent-stream-toast__line">${escapeHtml(line)}</div>`)
           .join("")}</div>`;
 
+  const approvalContext = t.approvalContext && typeof t.approvalContext === "object" ? t.approvalContext : null;
+  const actionsHtml =
+    statusKey === "approval_pending" && approvalContext && approvalContext.id
+      ? `<div class="agent-stream-toast__actions" role="group" aria-label="Approval actions">
+          <button class="btn btn--primary btn--small" type="button" data-agent-stream-approve="1">承認する</button>
+          ${
+            approvalContext.kind === "stateTransitionCandidate"
+              ? `<button class="btn btn--ghost btn--small" type="button" data-agent-stream-open-approval-center="1">承認センターで確認</button>`
+              : `<button class="btn btn--ghost btn--small" type="button" data-agent-stream-later="1">後で確認</button>`
+          }
+        </div>`
+      : "";
+
   return `
 	    <div class="agent-stream-toast is-visible" role="status" aria-live="polite" aria-label="Agent status panel" data-agent-stream-toast="1">
 	      <div class="agent-stream-toast__top" data-agent-stream-drag-handle="1">
@@ -3168,6 +3240,7 @@ function renderAgentStreamToast() {
 	      </div>
 	      <div class="agent-stream-toast__message">${escapeHtml(statusLabel)}</div>
 	      ${bodyHtml}
+        ${actionsHtml}
 	    </div>
 	  `;
 }
@@ -8903,6 +8976,107 @@ function setupNewTop() {
 
     const agentStreamCloseEl = target.closest && target.closest("[data-agent-stream-close]");
     if (agentStreamCloseEl) {
+      e.preventDefault();
+      e.stopPropagation();
+      closeAgentStreamToast();
+      return;
+    }
+
+    const agentStreamApproveEl = target.closest && target.closest("[data-agent-stream-approve]");
+    if (agentStreamApproveEl) {
+      e.preventDefault();
+      e.stopPropagation();
+      const toast = state.agentStreamToast && typeof state.agentStreamToast === "object" ? state.agentStreamToast : null;
+      const ctx = toast && toast.approvalContext && typeof toast.approvalContext === "object" ? toast.approvalContext : null;
+      const kind = ctx ? String(ctx.kind || "") : "";
+      const id = ctx ? String(ctx.id || "").trim() : "";
+      if (!id) return;
+
+      const setToastResult = ({ ok, message }) => {
+        const prev = state.agentStreamToast && typeof state.agentStreamToast === "object" ? state.agentStreamToast : {};
+        state.agentStreamToast = {
+          ...prev,
+          status: ok ? "processing" : "approval_pending",
+          approvalContext: ok ? null : prev.approvalContext || null,
+          lines: [message, ...(Array.isArray(prev.lines) ? prev.lines : [])].filter(Boolean).slice(0, 3),
+          dismissed: false,
+        };
+      };
+
+      try {
+        if (kind === "demoApproval") {
+          (async () => {
+            const res = await approveDemoApprovalItem(id);
+            if (res && res.ok) setToastResult({ ok: true, message: "承認しました" });
+            else setToastResult({ ok: false, message: "承認に失敗しました" });
+            renderApp();
+          })();
+          return;
+        }
+        if (kind === "stateTransitionCandidate") {
+          const res = applyStateTransitionCandidate(id);
+          if (res && res.ok) setToastResult({ ok: true, message: "承認しました" });
+          else setToastResult({ ok: false, message: "承認に失敗しました" });
+          renderApp();
+          return;
+        }
+        // default: ActionPlan approval flow (existing approvals pipeline)
+        const guardApprovalClick = (idLike, action, { description } = {}) => {
+          const apId = findActionPlanIdFromAnyId(idLike);
+          if (!apId) return { ok: false, ignored: true, reason: "missing_action_plan" };
+          const entry = state.approvalsByActionPlanId?.[apId] || null;
+          const fallbackPlan =
+            (Array.isArray(state.latestIngestResult?.actionPlans) ? state.latestIngestResult.actionPlans : []).find(
+              (p) => p && String(p.id || "") === apId,
+            ) || null;
+          const current = String((entry && entry.status) || (fallbackPlan && fallbackPlan.status) || "planned");
+          const available = getAvailableApprovalActions(current);
+          if (!available[String(action)])
+            return { ok: false, ignored: true, reason: `unavailable:${current}->${String(action)}` };
+          const res = applyApprovalAction(apId, action, { description });
+          return { ok: res.ok, ignored: false, res };
+        };
+
+        const attempt = guardApprovalClick(id, "approve");
+        if (!attempt.ok) {
+          setToastResult({ ok: false, message: "承認に失敗しました" });
+          renderApp();
+          return;
+        }
+        setToastResult({ ok: true, message: "承認しました" });
+        renderApp();
+      } catch {
+        const prev = state.agentStreamToast && typeof state.agentStreamToast === "object" ? state.agentStreamToast : {};
+        state.agentStreamToast = { ...prev, status: "approval_pending", lines: ["承認に失敗しました", ...(prev.lines || [])].slice(0, 3) };
+        renderApp();
+      }
+      return;
+    }
+
+    const agentStreamOpenApprovalCenterEl = target.closest && target.closest("[data-agent-stream-open-approval-center]");
+    if (agentStreamOpenApprovalCenterEl) {
+      e.preventDefault();
+      e.stopPropagation();
+      const toast = state.agentStreamToast && typeof state.agentStreamToast === "object" ? state.agentStreamToast : null;
+      const ctx = toast && toast.approvalContext && typeof toast.approvalContext === "object" ? toast.approvalContext : null;
+      const id = ctx ? String(ctx.id || "").trim() : "";
+      // Navigate to the existing approval center (Issues tab).
+      state.topActiveTab = "issues";
+      state.activeIssueId = null;
+      state.activeReplyCandidateId = null;
+      state.activeMutationId = id ? findActionPlanIdFromAnyId(id) || id : null;
+      try {
+        location.hash = "#issues";
+      } catch {
+        // ignore
+      }
+      closeAgentStreamToast();
+      renderApp();
+      return;
+    }
+
+    const agentStreamLaterEl = target.closest && target.closest("[data-agent-stream-later]");
+    if (agentStreamLaterEl) {
       e.preventDefault();
       e.stopPropagation();
       closeAgentStreamToast();

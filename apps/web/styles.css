@@ -314,6 +314,14 @@ body {
   margin-top: 0;
 }
 
+#app .agent-stream-toast__actions {
+  margin-top: 10px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: flex-start;
+}
+
 #app .operations-layout.is-right-collapsed {
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 12px;
