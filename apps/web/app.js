@@ -317,6 +317,7 @@ const documentWorkspaceRenderer = createDocumentWorkspaceRenderer({
   uniqStrings,
   normalizeFocusType,
   normalizeInvoiceNo,
+  isShippingInstructionDocument,
   detectIncidents,
   buildDocumentWorkspaceDocuments,
   resolveInitialDocId,

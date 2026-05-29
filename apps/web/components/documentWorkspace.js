@@ -5,6 +5,7 @@ export function createDocumentWorkspaceRenderer(deps) {
     uniqStrings,
     normalizeFocusType,
     normalizeInvoiceNo,
+    isShippingInstructionDocument,
     detectIncidents,
     buildDocumentWorkspaceDocuments,
     resolveInitialDocId,
@@ -1016,7 +1017,7 @@ export function createDocumentWorkspaceRenderer(deps) {
     const viewerHtml = renderDocumentViewer(documents, { modalId: "document-workspace-modal", viewerKey: "document" });
 
     const activeDoc = documents.find((d) => d && d.id === uiForTabs.activeDocId) || documents[0] || null;
-    const isBaselineShippingInstruction = isShippingInstructionDocument(activeDoc, "document");
+    const isBaselineShippingInstruction = Boolean(isShippingInstructionDocument?.(activeDoc, "document"));
 
     const executionTimelineRisk = buildExecutionTimelineRisk(tc, type, id);
     ensureExecutionTimelineIssueCandidateSynced(executionTimelineRisk);
