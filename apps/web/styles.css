@@ -7428,6 +7428,10 @@ body {
   align-items: start;
 }
 
+#app .activity-item > :nth-child(2) {
+  min-width: 0;
+}
+
 #app .activity-tl {
   position: relative;
   width: 18px;
@@ -7479,6 +7483,11 @@ body {
   border-radius: 8px;
   padding: 6px 8px;
   box-shadow: 0 1px 0 rgba(31, 35, 40, 0.03);
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  white-space: normal;
 }
 
 #app .activity-card:hover {
@@ -7537,6 +7546,8 @@ body {
 
 #app .activity-detail {
   margin-top: 6px;
+  min-width: 0;
+  max-width: 100%;
 }
 
 #app .activity-details {
@@ -7545,6 +7556,19 @@ body {
   color: #57606a;
   font-size: 11px;
   font-weight: 700;
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  white-space: normal;
+}
+
+#app .activity-details li {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  white-space: normal;
 }
 
 #app .activity-linked {
@@ -7564,6 +7588,11 @@ body {
   background: #f6f8fa;
   font-size: 11px;
   font-weight: 900;
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  white-space: normal;
 }
 
 #app .activity-links {
@@ -7578,6 +7607,9 @@ body {
   text-decoration: none;
   font-size: 12px;
   font-weight: 900;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  white-space: normal;
 }
 
 #app .activity-link:hover {
