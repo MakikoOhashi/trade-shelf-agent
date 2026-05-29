@@ -19,6 +19,7 @@ export function createDocumentWorkspaceRenderer(deps) {
     nowIso,
     matchesMutationId,
     activityEventToFeedItem,
+    enqueueAgentStreamToastFromActivityEvent,
   } = deps || {};
 
   function shipmentStateToJa(shipmentState) {
@@ -780,6 +781,9 @@ export function createDocumentWorkspaceRenderer(deps) {
       };
       state.latestIngestResult.activityEvents = prependUniqueById(state.latestIngestResult.activityEvents, [ev]);
       state.activityFeedItems = prependUniqueById(state.activityFeedItems, [activityEventToFeedItem(ev)]);
+      if (typeof enqueueAgentStreamToastFromActivityEvent === "function") {
+        enqueueAgentStreamToastFromActivityEvent(ev);
+      }
     }
   }
 

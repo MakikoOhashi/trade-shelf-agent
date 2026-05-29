@@ -20,6 +20,8 @@ const API_BASE_URL = (() => {
 let serverActivityPollTimer = null;
 let slackStatusPollTimer = null;
 let demoApprovalsPollTimer = null;
+let agentStreamToastTimer = null;
+let agentStreamToastCleanupTimer = null;
 
 const DEBUG_UI_LOGS = Boolean(window && window.TRADE_SHELF_DEBUG_UI_LOGS);
 
@@ -222,6 +224,26 @@ const state = {
    */
   activityFeedItems: [],
   /**
+   * “AI独り言Toast” queue (1 item at a time)
+   * @type {Array<{ id: string, eventId?: string, header: string, message: string, sub?: string }>}
+   */
+  agentStreamQueue: [],
+  /**
+   * Active “AI独り言Toast”
+   * @type {null | { id: string, header: string, message: string, sub?: string, phase: "entering" | "visible" | "closing" }}
+   */
+  agentStreamToast: null,
+  /**
+   * Bootstrap guard for server activity feed (avoid toasting historical items on initial load)
+   * @type {boolean}
+   */
+  agentStreamBootstrapped: false,
+  /**
+   * Seen activity ids for toast dedupe (id -> true)
+   * @type {Record<string, boolean>}
+   */
+  agentStreamSeenById: {},
+  /**
    * Activity Feed expanded state (id -> boolean)
    * @type {Record<string, boolean>}
    */
@@ -331,6 +353,7 @@ const documentWorkspaceRenderer = createDocumentWorkspaceRenderer({
   nowIso,
   matchesMutationId,
   activityEventToFeedItem,
+  enqueueAgentStreamToastFromActivityEvent,
 });
 
 const newTopTabs = [
@@ -580,7 +603,37 @@ async function fetchServerActivityFeed() {
     const itemsRaw = Array.isArray(json?.items) ? json.items : [];
     const normalized = itemsRaw.map(normalizeServerActivityFeedItem).filter(Boolean);
     if (!normalized.length) return;
-    state.activityFeedItems = prependUniqueById(state.activityFeedItems, normalized);
+    const existing = Array.isArray(state.activityFeedItems) ? state.activityFeedItems.filter(Boolean) : [];
+    const existingIds = new Set(existing.map((x) => String(x?.id || "")));
+    const incomingNew = normalized.filter((x) => x && x.id && !existingIds.has(String(x.id)));
+    state.activityFeedItems = prependUniqueById(existing, normalized);
+
+    if (!state.agentStreamBootstrapped) {
+      // Avoid showing historical items on first load.
+      state.agentStreamBootstrapped = true;
+      if (!state.agentStreamSeenById || typeof state.agentStreamSeenById !== "object") state.agentStreamSeenById = {};
+      for (const it of state.activityFeedItems) {
+        const id = it && it.id ? String(it.id) : "";
+        if (id) state.agentStreamSeenById[id] = true;
+      }
+    } else if (incomingNew.length) {
+      const inOrder = incomingNew
+        .slice()
+        .sort(
+          (a, b) =>
+            String(a?.occurredAt || "").localeCompare(String(b?.occurredAt || "")) ||
+            (Number(a?.sequence ?? 0) - Number(b?.sequence ?? 0)) ||
+            String(a?.id || "").localeCompare(String(b?.id || "")),
+        );
+      for (const it of inOrder) {
+        if (String(it?.source || "") !== "ai") continue;
+        enqueueAgentStreamToastFromActivityEvent({
+          id: String(it.id || ""),
+          type: String(it.type || ""),
+          description: String(it.summary || it.title || ""),
+        });
+      }
+    }
     renderApp();
   } catch {
     // ignore (demo)
@@ -1911,6 +1964,125 @@ function prependUniqueById(existing, incoming) {
   return out;
 }
 
+const AGENT_STREAM_LABELS = {
+  raw_input_received: "受信内容を解析中...",
+  context_resolved: "文脈を整理中...",
+  clarification_required: "追加情報を確認中...",
+  clarification_waiting: "返信待ちをセット中...",
+  clarification_matched: "返信を照合中...",
+  classified: "AI分類を実行中...",
+  entity_linked: "関連Shipmentを照合中...",
+  state_transition_candidate_detected: "状態遷移候補を確認中...",
+  intake_resolved: "Intakeを確定中...",
+  action_planned: "次アクションを組み立て中...",
+  draft_created: "下書きを生成中...",
+  approval_required: "承認フローへ追加...",
+  issue_updated: "Issue candidate を更新中...",
+  approved: "承認を反映中...",
+  held: "保留を反映中...",
+  edited: "下書きを更新中...",
+  resumed: "処理を再開中...",
+  mock_sent: "送信処理を実行中...",
+  failed_processing: "処理状況を確認中...",
+  timeline_deviation_detected: "ETD/ETA差分を解析中...",
+};
+
+function normalizeAgentStreamEventType(typeLike) {
+  const t = String(typeLike || "").trim();
+  if (!t) return "";
+  if (t === "issueUpdated") return "issue_updated";
+  if (t === "failedProcessing") return "failed_processing";
+  return t;
+}
+
+function clipSingleLine(text, maxLen = 38) {
+  const s = String(text || "").replace(/\s+/g, " ").trim();
+  if (!s) return "";
+  if (s.length <= maxLen) return s;
+  return `${s.slice(0, Math.max(0, maxLen - 1))}…`;
+}
+
+function clearAgentStreamTimers() {
+  if (agentStreamToastTimer) window.clearTimeout(agentStreamToastTimer);
+  if (agentStreamToastCleanupTimer) window.clearTimeout(agentStreamToastCleanupTimer);
+  agentStreamToastTimer = null;
+  agentStreamToastCleanupTimer = null;
+}
+
+function closeAgentStreamToast({ immediate = false } = {}) {
+  if (!state.agentStreamToast) return;
+  clearAgentStreamTimers();
+  if (immediate) {
+    state.agentStreamToast = null;
+    renderApp();
+    showNextAgentStreamToast();
+    return;
+  }
+  if (state.agentStreamToast.phase === "closing") return;
+  state.agentStreamToast = { ...state.agentStreamToast, phase: "closing" };
+  renderApp();
+  agentStreamToastCleanupTimer = window.setTimeout(() => {
+    state.agentStreamToast = null;
+    renderApp();
+    showNextAgentStreamToast();
+  }, 260);
+}
+
+function showNextAgentStreamToast() {
+  if (state.agentStreamToast) return;
+  const queue = Array.isArray(state.agentStreamQueue) ? state.agentStreamQueue.filter(Boolean) : [];
+  if (!queue.length) return;
+  const next = queue[0];
+  state.agentStreamQueue = queue.slice(1);
+  const toastId = String(next.id || `toast:${shortId()}`);
+  state.agentStreamToast = {
+    id: toastId,
+    header: String(next.header || "AI Agent"),
+    message: String(next.message || "").trim() || "処理を継続中...",
+    sub: next.sub ? String(next.sub) : "",
+    phase: "entering",
+  };
+  renderApp();
+  window.requestAnimationFrame(() => {
+    if (!state.agentStreamToast) return;
+    if (state.agentStreamToast.id !== toastId) return;
+    state.agentStreamToast = { ...state.agentStreamToast, phase: "visible" };
+    renderApp();
+  });
+  agentStreamToastTimer = window.setTimeout(() => closeAgentStreamToast(), 4200);
+}
+
+function enqueueAgentStreamToast(toastLike) {
+  const t = toastLike && typeof toastLike === "object" ? toastLike : {};
+  const id = String(t.id || "").trim() || `toast:${shortId()}`;
+  const header = String(t.header || "AI Agent").trim() || "AI Agent";
+  const message = String(t.message || "").trim() || "処理を継続中...";
+  const sub = t.sub ? String(t.sub).trim() : "";
+  const item = { id, header, message, sub };
+  state.agentStreamQueue = [...(Array.isArray(state.agentStreamQueue) ? state.agentStreamQueue.filter(Boolean) : []), item].slice(0, 20);
+  if (!state.agentStreamToast) showNextAgentStreamToast();
+}
+
+function enqueueAgentStreamToastFromActivityEvent(ev) {
+  const e = ev && typeof ev === "object" ? ev : {};
+  const eventId = String(e.id || "").trim();
+  if (eventId) {
+    if (!state.agentStreamSeenById || typeof state.agentStreamSeenById !== "object") state.agentStreamSeenById = {};
+    if (state.agentStreamSeenById[eventId]) return;
+    state.agentStreamSeenById[eventId] = true;
+  }
+  const rawType = normalizeAgentStreamEventType(e.type);
+  const mapped = AGENT_STREAM_LABELS[rawType] || "処理を継続中...";
+  const desc = clipSingleLine(e.description || e.summary || "", 42);
+  enqueueAgentStreamToast({
+    id: eventId ? `toast:${eventId}` : `toast:${shortId()}`,
+    eventId,
+    header: "AI Agent",
+    message: mapped,
+    sub: desc && desc !== mapped ? desc : "",
+  });
+}
+
 function statusKeyFromIngestStatus(status) {
   const s = String(status || "").toLowerCase();
   if (s === "ok" || s === "success") return "success";
@@ -2939,6 +3111,33 @@ function agentRunEdit(tradeCaseId) {
   return true;
 }
 
+function renderAgentStreamToast() {
+  const t = state.agentStreamToast || null;
+  if (!t) return "";
+  const phase = String(t.phase || "visible");
+  const cls =
+    phase === "closing"
+      ? "agent-stream-toast is-visible is-closing"
+      : phase === "entering"
+        ? "agent-stream-toast"
+        : "agent-stream-toast is-visible";
+
+  const header = String(t.header || "AI Agent").trim() || "AI Agent";
+  const message = String(t.message || "").trim() || "処理を継続中...";
+  const sub = String(t.sub || "").trim();
+
+  return `
+    <div class="${cls}" role="status" aria-live="polite" aria-label="AI process stream">
+      <div class="agent-stream-toast__top">
+        <div class="agent-stream-toast__header">${escapeHtml(header)}</div>
+        <button class="agent-stream-toast__close" type="button" aria-label="Close" data-agent-stream-close="1">×</button>
+      </div>
+      <div class="agent-stream-toast__message">${escapeHtml(message)}</div>
+      ${sub ? `<div class="agent-stream-toast__sub">${escapeHtml(sub)}</div>` : ""}
+    </div>
+  `;
+}
+
 function renderNewTop() {
   const rawTab = state.topActiveTab || "shelf";
   const tab = newTopTabs.some((t) => t && String(t.key) === String(rawTab)) ? rawTab : "issues";
@@ -3849,6 +4048,7 @@ function renderNewTop() {
 		      <main class="nt-main" aria-label="Main">${mainHtml}</main>
 	        ${renderDraftEditModal()}
           ${renderHumanMemoModal()}
+          ${renderAgentStreamToast()}
 		    </div>
 		  `;
 }
@@ -8555,6 +8755,14 @@ function setupNewTop() {
     }
     if (!target) return;
 
+    const agentStreamCloseEl = target.closest && target.closest("[data-agent-stream-close]");
+    if (agentStreamCloseEl) {
+      e.preventDefault();
+      e.stopPropagation();
+      closeAgentStreamToast();
+      return;
+    }
+
     const approvalRightToggleEl = target.closest && target.closest("[data-toggle-approval-right-panel]");
     if (approvalRightToggleEl) {
       e.preventDefault();
@@ -9094,6 +9302,17 @@ function setupNewTop() {
 	          }
 
           const events = Array.isArray(result?.activityEvents) ? result.activityEvents.filter(Boolean) : [];
+          if (events.length) {
+            const ordered = events
+              .slice()
+              .sort(
+                (a, b) =>
+                  String(a?.occurredAt || "").localeCompare(String(b?.occurredAt || "")) ||
+                  (Number(a?.sequence ?? 0) - Number(b?.sequence ?? 0)) ||
+                  String(a?.id || "").localeCompare(String(b?.id || "")),
+              );
+            for (const ev of ordered) enqueueAgentStreamToastFromActivityEvent(ev);
+          }
           const feedItems = events.map(activityEventToFeedItem);
           state.activityFeedItems = prependUniqueById(state.activityFeedItems, feedItems);
 

@@ -219,6 +219,84 @@ body {
   align-items: start;
 }
 
+/* Ambient “AI process stream toast” (activityEvents-driven) */
+#app .agent-stream-toast {
+  position: fixed;
+  top: 14px;
+  right: 14px;
+  width: 320px;
+  max-width: calc(100vw - 28px);
+  z-index: 10000;
+  border-radius: 14px;
+  padding: 10px 12px 11px;
+  background: rgba(17, 24, 39, 0.72);
+  color: rgba(255, 255, 255, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.22);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  opacity: 0;
+  transform: translateY(-6px);
+  transition: opacity 220ms ease, transform 220ms ease;
+  pointer-events: auto;
+}
+
+#app .agent-stream-toast.is-visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+#app .agent-stream-toast.is-closing {
+  opacity: 0;
+  transform: translateY(-6px);
+}
+
+#app .agent-stream-toast__top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+#app .agent-stream-toast__header {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.2px;
+  color: rgba(255, 255, 255, 0.9);
+}
+
+#app .agent-stream-toast__close {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.75);
+  width: 26px;
+  height: 26px;
+  border-radius: 10px;
+  cursor: pointer;
+  line-height: 1;
+  font-size: 16px;
+}
+
+#app .agent-stream-toast__close:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.92);
+}
+
+#app .agent-stream-toast__message {
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.25;
+}
+
+#app .agent-stream-toast__sub {
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 1.25;
+  color: rgba(255, 255, 255, 0.72);
+}
+
 #app .operations-layout.is-right-collapsed {
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 12px;
