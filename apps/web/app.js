@@ -5342,17 +5342,15 @@ function buildDocumentWorkspaceDocuments(tradeCase, focusType, focusId) {
   const base = buildSiWorkspaceDocuments(tc);
   if (type === "si" && !base.length) return [];
   const siDoc = base.find((d) => String(d?.id || "").startsWith("si-")) || null;
-  const salesResponseDoc = base.find((d) => String(d?.id || "") === "sales-response") || null;
-  const salesCommitmentDoc = base.find((d) => String(d?.id || "") === "sales-commitment") || null;
-  const salesResponseDocForTabs = salesResponseDoc ? { ...salesResponseDoc, label: "Sales response" } : null;
-  const salesCommitmentDocForTabs = salesCommitmentDoc ? { ...salesCommitmentDoc, label: "売約" } : null;
+  // Operational context docs (e.g. 営業回答 / 売約) are intentionally excluded from document tabs.
 
   const invoiceRefs = Array.isArray(tc.invoiceNumbers) ? tc.invoiceNumbers.filter(Boolean) : [];
-  const invoiceNos = uniqStrings([
-    ...invoiceRefs.map((x) => normalizeInvoiceNo(x?.invoiceNo)),
-    ...(sh?.supplierInvoices || []).map(normalizeInvoiceNo),
-    ...(si?.relatedInvoiceNos || []).map(normalizeInvoiceNo),
-  ]).filter(Boolean);
+  const shipmentInvoiceRefs = Array.isArray(sh?.supplierInvoices) ? sh.supplierInvoices.filter(Boolean) : [];
+  const hasShipmentInvoices = shipmentInvoiceRefs.length > 0;
+  const invoiceNos = (hasShipmentInvoices
+    ? uniqStrings(shipmentInvoiceRefs.map(normalizeInvoiceNo))
+    : uniqStrings([...invoiceRefs.map((x) => normalizeInvoiceNo(x?.invoiceNo)), ...(si?.relatedInvoiceNos || []).map(normalizeInvoiceNo)]))
+    .filter(Boolean);
 
   const invByNo = new Map();
   for (const inv of invoiceRefs) {
@@ -5417,7 +5415,7 @@ function buildDocumentWorkspaceDocuments(tradeCase, focusType, focusId) {
   const hasAnyPlMissing = true;
   const plDoc = {
     id: "pl-missing",
-    label: "PL missing",
+    label: "PL",
     type: "Packing List",
     status: hasAnyPlMissing ? "missing" : undefined,
   };
@@ -5446,34 +5444,11 @@ function buildDocumentWorkspaceDocuments(tradeCase, focusType, focusId) {
     ],
   };
 
-  const shipmentDoc = {
-    id: "shipment",
-    label: "Shipment",
-    type: "Shipment",
-    title: "Shipment Overview",
-    mockPages: [
-      {
-        title: "SHIPMENT OVERVIEW",
-        subtitle: "AI operational summary",
-        rows: [
-          { k: "Shipment", v: sh?.id || "SHP-2026-009" },
-          { k: "Booking", v: sh?.bookingNo || "BK-88201" },
-          { k: "Container", v: sh?.containerNo || "TCLU-998877" },
-          { k: "ETA", v: sh?.eta || "2026-05-12" },
-          { k: "Status", v: shipmentStateLabelJa(sh?.shipmentState || tc?.shipmentState || "") || "-" },
-        ],
-      },
-    ],
-  };
-
   const out = [];
   if (siDoc) out.push(siDoc);
-  if (salesResponseDocForTabs) out.push(salesResponseDocForTabs);
-  if (salesCommitmentDocForTabs) out.push(salesCommitmentDocForTabs);
   out.push(...invDocs);
   out.push(plDoc);
   out.push(blDoc);
-  out.push(shipmentDoc);
 
   const docs = out.filter(Boolean);
   const focusDocId = resolveFocusDocId({ focusType: type, focusId: focusKey, documents: docs });

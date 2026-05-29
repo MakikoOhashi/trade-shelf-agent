@@ -77,11 +77,11 @@ export function createDocumentWorkspaceRenderer(deps) {
 
     const invNo = (() => {
       if (type === "invoice") return normalizeInvoiceNo(id || "");
+      const fromShipment = Array.isArray(sh?.supplierInvoices) ? sh.supplierInvoices.filter(Boolean)[0] : "";
+      if (fromShipment) return normalizeInvoiceNo(fromShipment);
       const invoiceRefs = Array.isArray(tc?.invoiceNumbers) ? tc.invoiceNumbers.filter(Boolean) : [];
       const first = invoiceRefs[0]?.invoiceNo ? String(invoiceRefs[0].invoiceNo).trim() : "";
       if (first) return normalizeInvoiceNo(first);
-      const fromShipment = Array.isArray(sh?.supplierInvoices) ? sh.supplierInvoices.filter(Boolean)[0] : "";
-      if (fromShipment) return normalizeInvoiceNo(fromShipment);
       const fromSi = Array.isArray(si?.relatedInvoiceNos) ? si.relatedInvoiceNos.filter(Boolean)[0] : "";
       if (fromSi) return normalizeInvoiceNo(fromSi);
       return "";
@@ -117,11 +117,12 @@ export function createDocumentWorkspaceRenderer(deps) {
     const id = String(focusId || "").trim();
 
     const invoiceRefs = Array.isArray(tc?.invoiceNumbers) ? tc.invoiceNumbers.filter(Boolean) : [];
-    const invNos = uniqStrings([
-      ...invoiceRefs.map((x) => normalizeInvoiceNo(x?.invoiceNo)),
-      ...(sh?.supplierInvoices || []).map(normalizeInvoiceNo),
-      ...(si?.relatedInvoiceNos || []).map(normalizeInvoiceNo),
-    ]).filter(Boolean);
+    const shipmentInvoiceRefs = Array.isArray(sh?.supplierInvoices) ? sh.supplierInvoices.filter(Boolean) : [];
+    const hasShipmentInvoices = shipmentInvoiceRefs.length > 0;
+    const invNos = (hasShipmentInvoices
+      ? uniqStrings(shipmentInvoiceRefs.map(normalizeInvoiceNo))
+      : uniqStrings([...invoiceRefs.map((x) => normalizeInvoiceNo(x?.invoiceNo)), ...(si?.relatedInvoiceNos || []).map(normalizeInvoiceNo)]))
+      .filter(Boolean);
 
     const blNo = String(sh?.blNo || (Array.isArray(tc?.blNumbers) ? tc.blNumbers[0] : "") || "").trim() || "-";
     const plLabel = "PL書類待ち";
