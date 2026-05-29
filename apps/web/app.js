@@ -20,8 +20,6 @@ const API_BASE_URL = (() => {
 let serverActivityPollTimer = null;
 let slackStatusPollTimer = null;
 let demoApprovalsPollTimer = null;
-let agentStreamToastTimer = null;
-let agentStreamToastCleanupTimer = null;
 
 const DEBUG_UI_LOGS = Boolean(window && window.TRADE_SHELF_DEBUG_UI_LOGS);
 
@@ -229,10 +227,16 @@ const state = {
    */
   agentStreamQueue: [],
   /**
-   * Active “AI独り言Toast”
-   * @type {null | { id: string, header: string, message: string, sub?: string, phase: "entering" | "visible" | "closing" }}
+   * Active “AI独り言Toast” (reused as persistent Agent Status Panel)
+   * @type {null | { id: string, header: string, status: "idle" | "processing", lines: Array<string>, dismissed: boolean }}
    */
-  agentStreamToast: null,
+  agentStreamToast: {
+    id: "agent-status-panel",
+    header: "Trade Shelf Agent",
+    status: "idle",
+    lines: [],
+    dismissed: false,
+  },
   /**
    * Bootstrap guard for server activity feed (avoid toasting historical items on initial load)
    * @type {boolean}
@@ -2002,65 +2006,12 @@ function clipSingleLine(text, maxLen = 38) {
   return `${s.slice(0, Math.max(0, maxLen - 1))}…`;
 }
 
-function clearAgentStreamTimers() {
-  if (agentStreamToastTimer) window.clearTimeout(agentStreamToastTimer);
-  if (agentStreamToastCleanupTimer) window.clearTimeout(agentStreamToastCleanupTimer);
-  agentStreamToastTimer = null;
-  agentStreamToastCleanupTimer = null;
-}
-
-function closeAgentStreamToast({ immediate = false } = {}) {
-  if (!state.agentStreamToast) return;
-  clearAgentStreamTimers();
-  if (immediate) {
-    state.agentStreamToast = null;
-    renderApp();
-    showNextAgentStreamToast();
-    return;
-  }
-  if (state.agentStreamToast.phase === "closing") return;
-  state.agentStreamToast = { ...state.agentStreamToast, phase: "closing" };
+function closeAgentStreamToast({ immediate: _immediate = false } = {}) {
+  const t = state.agentStreamToast;
+  if (!t) return;
+  if (t.dismissed) return;
+  state.agentStreamToast = { ...t, dismissed: true };
   renderApp();
-  agentStreamToastCleanupTimer = window.setTimeout(() => {
-    state.agentStreamToast = null;
-    renderApp();
-    showNextAgentStreamToast();
-  }, 260);
-}
-
-function showNextAgentStreamToast() {
-  if (state.agentStreamToast) return;
-  const queue = Array.isArray(state.agentStreamQueue) ? state.agentStreamQueue.filter(Boolean) : [];
-  if (!queue.length) return;
-  const next = queue[0];
-  state.agentStreamQueue = queue.slice(1);
-  const toastId = String(next.id || `toast:${shortId()}`);
-  state.agentStreamToast = {
-    id: toastId,
-    header: String(next.header || "AI Agent"),
-    message: String(next.message || "").trim() || "処理を継続中...",
-    sub: next.sub ? String(next.sub) : "",
-    phase: "entering",
-  };
-  renderApp();
-  window.requestAnimationFrame(() => {
-    if (!state.agentStreamToast) return;
-    if (state.agentStreamToast.id !== toastId) return;
-    state.agentStreamToast = { ...state.agentStreamToast, phase: "visible" };
-    renderApp();
-  });
-  agentStreamToastTimer = window.setTimeout(() => closeAgentStreamToast(), 4200);
-}
-
-function enqueueAgentStreamToast(toastLike) {
-  const t = toastLike && typeof toastLike === "object" ? toastLike : {};
-  const id = String(t.id || "").trim() || `toast:${shortId()}`;
-  const header = String(t.header || "AI Agent").trim() || "AI Agent";
-  const message = String(t.message || "").trim() || "処理を継続中...";
-  const sub = t.sub ? String(t.sub).trim() : "";
-  const item = { id, header, message, sub };
-  state.agentStreamQueue = [...(Array.isArray(state.agentStreamQueue) ? state.agentStreamQueue.filter(Boolean) : []), item].slice(0, 20);
-  if (!state.agentStreamToast) showNextAgentStreamToast();
 }
 
 function enqueueAgentStreamToastFromActivityEvent(ev) {
@@ -2073,14 +2024,24 @@ function enqueueAgentStreamToastFromActivityEvent(ev) {
   }
   const rawType = normalizeAgentStreamEventType(e.type);
   const mapped = AGENT_STREAM_LABELS[rawType] || "処理を継続中...";
-  const desc = clipSingleLine(e.description || e.summary || "", 42);
-  enqueueAgentStreamToast({
-    id: eventId ? `toast:${eventId}` : `toast:${shortId()}`,
-    eventId,
-    header: "AI Agent",
-    message: mapped,
-    sub: desc && desc !== mapped ? desc : "",
-  });
+  const desc = clipSingleLine(e.description || e.summary || "", 64);
+  const nextLine = desc || mapped;
+  const prev = state.agentStreamToast && typeof state.agentStreamToast === "object" ? state.agentStreamToast : null;
+  const prevLines = Array.isArray(prev?.lines) ? prev.lines.filter(Boolean).map((x) => String(x)) : [];
+  const merged = [nextLine, ...prevLines].filter(Boolean);
+  const deduped = [];
+  for (const line of merged) {
+    if (!deduped.length || deduped[deduped.length - 1] !== line) deduped.push(line);
+    if (deduped.length >= 3) break;
+  }
+  state.agentStreamToast = {
+    id: "agent-status-panel",
+    header: "Trade Shelf Agent",
+    status: "processing",
+    lines: deduped,
+    dismissed: false, // re-open on new activity
+  };
+  renderApp();
 }
 
 function statusKeyFromIngestStatus(status) {
@@ -3113,27 +3074,27 @@ function agentRunEdit(tradeCaseId) {
 
 function renderAgentStreamToast() {
   const t = state.agentStreamToast || null;
-  if (!t) return "";
-  const phase = String(t.phase || "visible");
-  const cls =
-    phase === "closing"
-      ? "agent-stream-toast is-visible is-closing"
-      : phase === "entering"
-        ? "agent-stream-toast"
-        : "agent-stream-toast is-visible";
-
-  const header = String(t.header || "AI Agent").trim() || "AI Agent";
-  const message = String(t.message || "").trim() || "処理を継続中...";
-  const sub = String(t.sub || "").trim();
+  if (!t || t.dismissed) return "";
+  const header = String(t.header || "Trade Shelf Agent").trim() || "Trade Shelf Agent";
+  const statusKey = String(t.status || "idle");
+  const statusLabel = statusKey === "processing" ? "処理中" : "待機中";
+  const lines = Array.isArray(t.lines) ? t.lines.filter(Boolean).map((x) => String(x)) : [];
+  const bodyHtml =
+    statusKey === "idle"
+      ? `<div class="agent-stream-toast__body">Slack / Email / Teams の更新を監視しています</div>`
+      : `<div class="agent-stream-toast__body">${lines
+          .slice(0, 3)
+          .map((line) => `<div class="agent-stream-toast__line">${escapeHtml(line)}</div>`)
+          .join("")}</div>`;
 
   return `
-    <div class="${cls}" role="status" aria-live="polite" aria-label="AI process stream">
+    <div class="agent-stream-toast is-visible" role="status" aria-live="polite" aria-label="Agent status panel">
       <div class="agent-stream-toast__top">
         <div class="agent-stream-toast__header">${escapeHtml(header)}</div>
         <button class="agent-stream-toast__close" type="button" aria-label="Close" data-agent-stream-close="1">×</button>
       </div>
-      <div class="agent-stream-toast__message">${escapeHtml(message)}</div>
-      ${sub ? `<div class="agent-stream-toast__sub">${escapeHtml(sub)}</div>` : ""}
+      <div class="agent-stream-toast__message">${escapeHtml(statusLabel)}</div>
+      ${bodyHtml}
     </div>
   `;
 }

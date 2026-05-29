@@ -235,20 +235,13 @@ body {
   box-shadow: 0 12px 30px rgba(0, 0, 0, 0.22);
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
-  opacity: 0;
-  transform: translateY(-6px);
-  transition: opacity 220ms ease, transform 220ms ease;
+  opacity: 1;
+  transform: none;
   pointer-events: auto;
 }
 
 #app .agent-stream-toast.is-visible {
   opacity: 1;
-  transform: translateY(0);
-}
-
-#app .agent-stream-toast.is-closing {
-  opacity: 0;
-  transform: translateY(-6px);
 }
 
 #app .agent-stream-toast__top {
@@ -290,11 +283,19 @@ body {
   line-height: 1.25;
 }
 
-#app .agent-stream-toast__sub {
+#app .agent-stream-toast__body {
   margin-top: 6px;
   font-size: 12px;
   line-height: 1.25;
   color: rgba(255, 255, 255, 0.72);
+}
+
+#app .agent-stream-toast__line {
+  margin-top: 4px;
+}
+
+#app .agent-stream-toast__line:first-child {
+  margin-top: 0;
 }
 
 #app .operations-layout.is-right-collapsed {
