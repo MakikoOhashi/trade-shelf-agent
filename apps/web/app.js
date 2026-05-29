@@ -617,6 +617,25 @@ async function fetchServerActivityFeed() {
     const incomingNew = normalized.filter((x) => x && x.id && !existingIds.has(String(x.id)));
     state.activityFeedItems = prependUniqueById(existing, normalized);
 
+    const mergeStateTransitionCandidatesFromServerActivity = (items) => {
+      const list = Array.isArray(items) ? items.filter(Boolean) : [];
+      if (!list.length) return;
+      const candidates = [];
+      for (const it of list) {
+        if (String(it?.type || "") !== "state_transition_candidate_detected") continue;
+        const c = it?.stateTransitionCandidate && typeof it.stateTransitionCandidate === "object" ? it.stateTransitionCandidate : null;
+        const id = String(c?.id || "").trim();
+        if (!id) continue;
+        candidates.push(c);
+      }
+      if (!candidates.length) return;
+      if (!state.latestIngestResult) state.latestIngestResult = {};
+      const existingCandidates = Array.isArray(state.latestIngestResult.stateTransitionCandidates)
+        ? state.latestIngestResult.stateTransitionCandidates.filter(Boolean)
+        : [];
+      state.latestIngestResult.stateTransitionCandidates = prependUniqueById(existingCandidates, candidates);
+    };
+
     if (!state.agentStreamBootstrapped) {
       // Avoid showing historical items on first load.
       state.agentStreamBootstrapped = true;
@@ -626,6 +645,7 @@ async function fetchServerActivityFeed() {
         if (id) state.agentStreamSeenById[id] = true;
       }
     } else if (incomingNew.length) {
+      mergeStateTransitionCandidatesFromServerActivity(incomingNew);
       const inOrder = incomingNew
         .slice()
         .sort(
@@ -642,6 +662,7 @@ async function fetchServerActivityFeed() {
           description: String(it.summary || it.title || ""),
           threadId: String(it.threadId || "").trim(),
           demoApprovalId: String(it.demoApprovalId || "").trim(),
+          stateTransitionCandidate: it?.stateTransitionCandidate && typeof it.stateTransitionCandidate === "object" ? it.stateTransitionCandidate : null,
           origin: "serverActivity",
         });
       }

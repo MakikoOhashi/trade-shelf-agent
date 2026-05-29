@@ -145,6 +145,7 @@ function activityEventToFeedItem(ev, { actorFallback } = {}) {
   const threadId = String(ev?.threadId || "").trim();
   const issueId = String(ev?.issueId || "").trim();
   const demoApprovalId = String(ev?.demoApprovalId || "").trim();
+  const stateTransitionCandidate = ev?.stateTransitionCandidate && typeof ev.stateTransitionCandidate === "object" ? ev.stateTransitionCandidate : null;
 
   const linkedDeduped = (() => {
     const seen = new Set();
@@ -193,6 +194,7 @@ function activityEventToFeedItem(ev, { actorFallback } = {}) {
     ...(threadId ? { threadId } : {}),
     ...(issueId ? { issueId } : {}),
     ...(demoApprovalId ? { demoApprovalId } : {}),
+    ...(stateTransitionCandidate ? { stateTransitionCandidate } : {}),
   };
 }
 
@@ -1514,6 +1516,25 @@ const server = http.createServer(async (req, res) => {
 
             const result = await ingestWithLlmOrMock({ rawInput, pendingClarifications: [] });
             const events = Array.isArray(result?.activityEvents) ? result.activityEvents.filter(Boolean) : [];
+            const stateTransitionCandidates = Array.isArray(result?.stateTransitionCandidates)
+              ? result.stateTransitionCandidates.filter(Boolean)
+              : [];
+            const stcById = new Map(stateTransitionCandidates.map((c) => [String(c?.id || "").trim(), c]));
+
+            // Attach full candidate payload so the web UI can re-use existing applyStateTransitionCandidate logic
+            // even when the candidate originates from server-side Slack ingest (no local ingest result).
+            for (const evv of events) {
+              if (!evv || String(evv.type || "") !== "state_transition_candidate_detected") continue;
+              const evId = String(evv.id || "").trim();
+              const candId = evId.startsWith("ACT-") ? evId.slice(4) : evId;
+              const cand = candId ? stcById.get(candId) || null : null;
+              if (!cand) continue;
+              try {
+                evv.stateTransitionCandidate = cand;
+              } catch {
+                // ignore (non-extensible event object)
+              }
+            }
 
             // If approval_required was generated, also register a pending demo approval item
             // so Approval Center + Agent Toast can surface it.
