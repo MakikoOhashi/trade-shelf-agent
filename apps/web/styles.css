@@ -322,6 +322,43 @@ body {
   justify-content: flex-start;
 }
 
+#app .agent-stream-toast.is-minimized {
+  width: auto;
+  padding: 8px;
+  border-radius: 999px;
+  opacity: 0.65;
+}
+
+#app .agent-stream-toast__minimized {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: grab;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: none;
+}
+
+#app .agent-stream-toast__indicator {
+  appearance: none;
+  border: 0;
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.92);
+  width: 34px;
+  height: 34px;
+  border-radius: 999px;
+  cursor: pointer;
+  line-height: 1;
+  font-size: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+#app .agent-stream-toast__indicator:hover {
+  background: rgba(255, 255, 255, 0.14);
+}
+
 #app .operations-layout.is-right-collapsed {
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 12px;

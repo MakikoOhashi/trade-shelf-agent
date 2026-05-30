@@ -228,14 +228,14 @@ const state = {
   agentStreamQueue: [],
   /**
    * Active “AI独り言Toast” (reused as persistent Agent Status Panel)
-   * @type {null | { id: string, header: string, status: "idle" | "processing", lines: Array<string>, dismissed: boolean }}
+   * @type {null | { id: string, header: string, status: "idle" | "processing", lines: Array<string>, minimized: boolean, dismissed?: boolean }}
    */
   agentStreamToast: {
     id: "agent-status-panel",
     header: "Trade Shelf Agent",
     status: "idle",
     lines: [],
-    dismissed: false,
+    minimized: false,
   },
   /**
    * Agent Toast viewport position (persisted)
@@ -2205,8 +2205,16 @@ function applyAgentStreamToastPosToEl(el, pos) {
 function closeAgentStreamToast({ immediate: _immediate = false } = {}) {
   const t = state.agentStreamToast;
   if (!t) return;
-  if (t.dismissed) return;
-  state.agentStreamToast = { ...t, dismissed: true };
+  if (t.minimized) return;
+  state.agentStreamToast = { ...t, minimized: true, dismissed: false };
+  renderApp();
+}
+
+function expandAgentStreamToast() {
+  const t = state.agentStreamToast;
+  if (!t) return;
+  if (!t.minimized) return;
+  state.agentStreamToast = { ...t, minimized: false, dismissed: false };
   renderApp();
 }
 
@@ -2242,7 +2250,8 @@ function enqueueAgentStreamToastFromActivityEvent(ev) {
       approvalContextKind: null,
       approvalContextId: null,
     },
-    dismissed: false, // re-open on new activity
+    minimized: false, // re-open on new activity
+    dismissed: false,
   };
   renderApp();
 }
@@ -3290,6 +3299,18 @@ function renderAgentStreamToast() {
   const statusKey = latestStateTransitionCandidate ? "approval_pending" : String(t.status || "idle");
   const statusLabel = statusKey === "approval_pending" ? "承認待ち" : statusKey === "processing" ? "処理中" : "待機中";
   const lines = Array.isArray(t.lines) ? t.lines.filter(Boolean).map((x) => String(x)) : [];
+  const isMinimized = !!t.minimized;
+
+  if (isMinimized) {
+    return `
+	    <div class="agent-stream-toast is-visible is-minimized" role="status" aria-live="polite" aria-label="Agent status minimized" data-agent-stream-toast="1" data-agent-stream-minimized="1">
+        <div class="agent-stream-toast__minimized" data-agent-stream-drag-handle="1">
+          <button class="agent-stream-toast__indicator" type="button" aria-label="Expand agent status" data-agent-stream-expand="1">◉</button>
+        </div>
+	    </div>
+	  `;
+  }
+
   const bodyHtml = (() => {
     if (latestStateTransitionCandidate) {
       const c = latestStateTransitionCandidate;
@@ -3352,7 +3373,7 @@ function renderAgentStreamToast() {
 	    <div class="agent-stream-toast is-visible" role="status" aria-live="polite" aria-label="Agent status panel" data-agent-stream-toast="1">
 	      <div class="agent-stream-toast__top" data-agent-stream-drag-handle="1">
 	        <div class="agent-stream-toast__header">${escapeHtml(header)}</div>
-	        <button class="agent-stream-toast__close" type="button" aria-label="Close" data-agent-stream-close="1">×</button>
+	        <button class="agent-stream-toast__close" type="button" aria-label="Minimize" data-agent-stream-close="1">×</button>
 	      </div>
 	      <div class="agent-stream-toast__message">${escapeHtml(statusLabel)}</div>
 	      ${bodyHtml}
@@ -8989,6 +9010,7 @@ function setupNewTop() {
     const handle = target.closest("[data-agent-stream-drag-handle]");
     if (!handle) return;
     if (target.closest("[data-agent-stream-close]")) return;
+    if (target.closest("[data-agent-stream-expand]")) return;
     const toast = getToastEl();
     if (!toast) return;
 
@@ -9085,6 +9107,14 @@ function setupNewTop() {
       return;
     }
 
+    const agentStreamExpandEl = target.closest && target.closest("[data-agent-stream-expand]");
+    if (agentStreamExpandEl) {
+      e.preventDefault();
+      e.stopPropagation();
+      expandAgentStreamToast();
+      return;
+    }
+
     const agentStreamApproveStateTransitionEl = target.closest && target.closest("[data-agent-stream-approve-state-transition]");
     if (agentStreamApproveStateTransitionEl) {
       e.preventDefault();
@@ -9099,6 +9129,7 @@ function setupNewTop() {
           status: ok ? "processing" : "approval_pending",
           approvalContext: null,
           lines: [message, ...(Array.isArray(prev.lines) ? prev.lines : [])].filter(Boolean).slice(0, 3),
+          minimized: false,
           dismissed: false,
         };
       };
@@ -9110,7 +9141,13 @@ function setupNewTop() {
         renderApp();
       } catch {
         const prev = state.agentStreamToast && typeof state.agentStreamToast === "object" ? state.agentStreamToast : {};
-        state.agentStreamToast = { ...prev, status: "approval_pending", lines: ["承認に失敗しました", ...(prev.lines || [])].slice(0, 3) };
+        state.agentStreamToast = {
+          ...prev,
+          status: "approval_pending",
+          minimized: false,
+          dismissed: false,
+          lines: ["承認に失敗しました", ...(prev.lines || [])].slice(0, 3),
+        };
         renderApp();
       }
       return;
