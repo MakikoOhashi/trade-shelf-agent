@@ -12,6 +12,7 @@ import type {
   OperationalThread,
   RawInput,
   StateTransitionCandidate,
+  StateTransitionEntityType,
   StateTransitionEvidence,
   StateTransitionRisk,
 } from "./domain";
@@ -51,6 +52,7 @@ const ACTIVITY_SEQUENCE: Record<ActivityEventType, number> = {
   reminder_planned: 17,
   classified: 20,
   entity_linked: 30,
+  state_transition_not_supported: 32,
   state_transition_candidate_detected: 33,
   intake_resolved: 35,
   action_planned: 40,
@@ -73,6 +75,33 @@ export type IngestPipelineOptions = IngestBuildOptions & {
   threads?: OperationalThread[];
   pendingClarifications?: PendingClarification[];
 };
+
+type StateTransitionNotice = {
+  entityType: StateTransitionEntityType;
+  entityId: string;
+  fromState?: string;
+  toState?: string;
+  title: string;
+  message: string;
+  reason?: string;
+};
+
+const ALLOWED_SHELF_TRANSITION_STATES = new Set<string>([
+  // Canonical (domain.ts ShipmentState)
+  "notArranged",
+  "bookingRequested",
+  "shippingPending",
+  "shipped",
+  "inTransit",
+  "arrived",
+  "customsCleared",
+  "completed",
+  // Shelf-mapped shipment progress (apps/web/lib/shelfMapping.js)
+  "exportCustoms",
+  "importCustoms",
+  "waitingWarehouseReceipt",
+  "warehouseReceived",
+]);
 
 function addHoursIso(baseIso: string, hours: number) {
   const d = new Date(baseIso);
@@ -153,13 +182,14 @@ export function buildStateTransitionCandidates(args: {
   entityLinks: EntityLink[];
   intakeResolutions: IntakeResolution[];
   now?: string;
-}): StateTransitionCandidate[] {
+}): { candidates: StateTransitionCandidate[]; notices: StateTransitionNotice[] } {
   const rawInput = args.rawInput;
   const threads = Array.isArray(args.threads) ? args.threads.filter(Boolean) : [];
   const links = Array.isArray(args.entityLinks) ? args.entityLinks.filter(Boolean) : [];
   const now = String(args.now || "").trim() || ingestNowIso();
 
   const candidates: StateTransitionCandidate[] = [];
+  const notices: StateTransitionNotice[] = [];
 
   const hasStrongShippedLanguage = (text: string) => {
     const t = String(text || "").toLowerCase();
@@ -218,7 +248,8 @@ export function buildStateTransitionCandidates(args: {
     ) {
       return {
         fromState: "inTransit",
-        toState: "delivered",
+        // Align with Shelf lane mapping (apps/web/lib/shelfMapping.js).
+        toState: "warehouseReceived",
         reason: "Slack/Teams update indicates the shipment has arrived at (or been received by) the warehouse.",
       };
     }
@@ -269,6 +300,30 @@ export function buildStateTransitionCandidates(args: {
     }
 
     return null;
+  };
+
+  const pushCandidateOrNotice = (
+    entityType: StateTransitionEntityType,
+    entityId: string,
+    candidate: StateTransitionCandidate,
+  ) => {
+    const toState = String(candidate?.toState || "").trim();
+    if (toState && ALLOWED_SHELF_TRANSITION_STATES.has(toState)) {
+      candidates.push(candidate);
+      return;
+    }
+
+    const fromState = String(candidate?.fromState || "").trim();
+    notices.push({
+      entityType,
+      entityId,
+      fromState,
+      toState,
+      title: "倉庫着/状態更新を検出（自動遷移対象外）",
+      message:
+        "状態更新のシグナルを検出しました。ただし現在のShelfレーンでは自動遷移対象外のstateのため、棚の自動移動は行いません。",
+      reason: `Unsupported toState for Shelf lanes: ${toState || "-"}`,
+    });
   };
 
   for (const thread of threads) {
@@ -399,7 +454,7 @@ export function buildStateTransitionCandidates(args: {
     for (const lnk of shipmentLinks) {
       const combinedText = `${rawInput.rawText}\n${thread.title}\n${thread.summary}`;
       const { confidence, risks } = computeConfidenceAndRisks(lnk, combinedText);
-      candidates.push({
+      pushCandidateOrNotice("Shipment", lnk.entityId, {
         id: stateTransitionCandidateIdFromParts({
           rawInputId: rawInput.id,
           entityId: lnk.entityId,
@@ -423,7 +478,7 @@ export function buildStateTransitionCandidates(args: {
       const combinedText = `${rawInput.rawText}\n${thread.title}\n${thread.summary}`;
       const confidence = scoreConfidence(lnk);
       const risks = buildRisks(lnk, confidence, combinedText);
-      candidates.push({
+      pushCandidateOrNotice("SI", lnk.entityId, {
         id: stateTransitionCandidateIdFromParts({
           rawInputId: rawInput.id,
           entityId: lnk.entityId,
@@ -445,12 +500,23 @@ export function buildStateTransitionCandidates(args: {
 
   // Deduplicate by id (deterministic generation may collide across multiple threads)
   const seen = new Set<string>();
-  return candidates.filter((c) => {
+  const dedupedCandidates = candidates.filter((c) => {
     const id = String(c?.id || "");
     if (!id || seen.has(id)) return false;
     seen.add(id);
     return true;
   });
+
+  // Deduplicate notices by (entityType/entityId/toState/message).
+  const noticeSeen = new Set<string>();
+  const dedupedNotices = notices.filter((n) => {
+    const k = `${n.entityType}::${n.entityId}::${String(n.toState || "")}::${n.message}`;
+    if (noticeSeen.has(k)) return false;
+    noticeSeen.add(k);
+    return true;
+  });
+
+  return { candidates: dedupedCandidates, notices: dedupedNotices };
 }
 
 export function resolveContext(input: RawInput, options: IngestBuildOptions = {}): ContextResolution {
@@ -1018,6 +1084,7 @@ export function buildActivityEvents(
   occurredAt: string,
   options: IngestBuildOptions = {},
   stateTransitionCandidates: StateTransitionCandidate[] = [],
+  stateTransitionNotices: StateTransitionNotice[] = [],
 ): ActivityEvent[] {
   const events: ActivityEvent[] = [];
   const actor = options.sourceLabel || "AI";
@@ -1083,6 +1150,26 @@ export function buildActivityEvents(
     status: "ok",
     actor,
   });
+
+  const notices = Array.isArray(stateTransitionNotices) ? stateTransitionNotices.filter(Boolean) : [];
+  for (const notice of notices) {
+    const entityType = String(notice?.entityType || "").trim();
+    const entityId = String(notice?.entityId || "").trim();
+    if (!entityType || !entityId) continue;
+    const linked = links.filter((l) => String(l?.entityType || "") === entityType && String(l?.entityId || "").trim() === entityId);
+    events.push({
+      id: ingestStableId("ACT", `${input.id}:${entityType}:${entityId}:${String(notice?.toState || "")}:st_not_supported`),
+      type: "state_transition_not_supported",
+      occurredAt,
+      sequence: ACTIVITY_SEQUENCE.state_transition_not_supported,
+      title: String(notice?.title || "状態遷移: 自動対象外"),
+      description: String(notice?.message || "").trim() || undefined,
+      sourceRawInputId: input.id,
+      linkedEntities: linked && linked.length ? linked : undefined,
+      status: "warning",
+      actor: "ai_agent",
+    });
+  }
 
   const stCandidates = Array.isArray(stateTransitionCandidates) ? stateTransitionCandidates.filter(Boolean) : [];
   for (const candidate of stCandidates) {
@@ -1647,13 +1734,15 @@ export function runIngestPipeline(input: RawInput, options: IngestPipelineOption
       reason: "補足返信で対象が特定できたため、確認待ちを解消しました。",
     }));
   }
-  const stateTransitionCandidates = buildStateTransitionCandidates({
+  const stateTransition = buildStateTransitionCandidates({
     rawInput: effectiveInput,
     threads: normalizedThreads,
     entityLinks: links,
     intakeResolutions,
     now: pipelineOccurredAt,
   });
+  const stateTransitionCandidates = stateTransition.candidates;
+  const stateTransitionNotices = stateTransition.notices;
   const issueMutations = isClarificationResolvedByReply
     ? []
     : buildIssueMutations(effectiveInput, normalizedThreads, links, intakeResolutions, options);
@@ -1712,6 +1801,7 @@ export function runIngestPipeline(input: RawInput, options: IngestPipelineOption
     pipelineOccurredAt,
     isClarificationResolvedByReply ? { ...options, approvalPolicy: "none" } : options,
     stateTransitionCandidates,
+    stateTransitionNotices,
   );
 
   const contextResolvedEvent: ActivityEvent[] =

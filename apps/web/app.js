@@ -2043,6 +2043,7 @@ const AGENT_STREAM_LABELS = {
   clarification_matched: "返信を照合中...",
   classified: "AI分類を実行中...",
   entity_linked: "関連Shipmentを照合中...",
+  state_transition_not_supported: "状態更新を記録中...",
   state_transition_candidate_detected: "状態遷移候補を確認中...",
   intake_resolved: "Intakeを確定中...",
   action_planned: "次アクションを組み立て中...",
@@ -2295,6 +2296,8 @@ function activityEventToFeedItem(ev) {
         return "AI分類";
       case "entity_linked":
         return "関連紐付け";
+      case "state_transition_not_supported":
+        return "状態遷移: 自動対象外";
       case "state_transition_candidate_detected":
         return "状態遷移候補を検出";
       case "intake_resolved":
@@ -4567,11 +4570,15 @@ function shipmentStateLabelJa(shipmentState) {
     notArranged: "未手配",
     bookingRequested: "ブッキング依頼中",
     shippingPending: "出荷前確認中",
+    exportCustoms: "輸出通関中",
     shipped: "出荷済み",
     inTransit: "輸送中",
+    importCustoms: "輸入通関中",
     arrived: "到着",
     customsCleared: "通関済み",
     delivered: "納品済み",
+    waitingWarehouseReceipt: "倉庫入荷待ち",
+    warehouseReceived: "倉庫入荷済み",
     completed: "完了",
   };
   return map[s] || s || "-";

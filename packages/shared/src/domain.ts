@@ -822,6 +822,7 @@ export type ActivityEventType =
   | "reminder_planned"
   | "classified"
   | "entity_linked"
+  | "state_transition_not_supported"
   | "state_transition_candidate_detected"
   | "intake_resolved"
   | "issue_updated"
