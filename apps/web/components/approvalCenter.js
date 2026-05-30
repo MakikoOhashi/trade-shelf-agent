@@ -482,6 +482,39 @@ export function createApprovalCenterRenderer(deps) {
         issueMutations: Array.isArray(state.issueMutationItems) ? state.issueMutationItems : [],
       };
       const intakeCandidates = conversationThreads.filter((t) => isPreIssueConversationThread(t) && !hasApprovalCandidateForThread(t, approvalSide));
+      const slackClarificationWaiting = (() => {
+        const approvals = Array.isArray(state?.demoApprovals) ? state.demoApprovals.filter(Boolean) : [];
+        const pending = approvals.filter(
+          (x) => String(x?.status || "") === "pending" && String(x?.type || "") === "slack_clarification_waiting",
+        );
+        return pending.map((ap) => {
+          const meta = ap?.metadata && typeof ap.metadata === "object" ? ap.metadata : {};
+          const requester = String(meta.requester || "—").trim() || "—";
+          const question = String(meta.clarificationQuestion || "").trim() || "対象のSIまたはShipmentを教えてください。";
+          const original = String(meta.originalMessage || "").trim();
+          const updatedAt = String(ap?.updatedAt || ap?.createdAt || "") || nowIso();
+          const slackSendOk = Boolean(meta.slackSendOk);
+          const slackSendError = String(meta.slackSendError || "").trim();
+          const status = "awaiting_clarification";
+          const lastMessageText = slackSendOk
+            ? question
+            : `Slack返信失敗：${slackSendError || "unknown_error"}`;
+
+          return {
+            id: `demo-clarify:${String(ap?.id || shortId())}`,
+            requesterName: requester,
+            sourceChannel: "slack",
+            title: "不足情報の確認待ち（Slack）",
+            status,
+            updatedAt,
+            messageCount: 1,
+            lastMessageText,
+            relatedSiIds: [],
+            relatedIssueIds: [],
+            messages: original || question ? [{ role: "human", text: original || question, createdAt: updatedAt, sequence: 0 }] : [],
+          };
+        });
+      })();
       const replyCandidates = (() => {
         const resolutions = Array.isArray(state.latestIngestResult?.intakeResolutions) ? state.latestIngestResult.intakeResolutions.filter(Boolean) : [];
         const resolutionItems = resolutions.filter((r) => r && r.shouldCreateIssue === false && isPreIssueItem({ kind: "pending_clarification", status: r.status }));
@@ -581,6 +614,7 @@ export function createApprovalCenterRenderer(deps) {
       const rawPreIssueItems = [
         ...replyCandidates.map((item) => ({ ...item, __source: "replyCandidates" })),
         ...intakeCandidates.map((item) => ({ ...item, __source: "intakeCandidates" })),
+        ...slackClarificationWaiting.map((item) => ({ ...item, __source: "demoApprovals(slack_clarification_waiting)" })),
       ];
 
       if (DEBUG_PRE_ISSUE) {
@@ -612,7 +646,7 @@ export function createApprovalCenterRenderer(deps) {
         );
       }
 
-      const preIssueItems = dedupePreIssueItems([...replyCandidates, ...intakeCandidates]);
+      const preIssueItems = dedupePreIssueItems([...replyCandidates, ...intakeCandidates, ...slackClarificationWaiting]);
       const activeConversationThreadId =
         state.activeConversationThreadId || (preIssueItems.find((x) => x && x.kind !== "clarification_reply_candidate")?.id ?? null);
 

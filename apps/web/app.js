@@ -764,12 +764,19 @@ function normalizeServerDemoApprovalItem(item) {
     title,
     description,
     metadata: {
+      ...metadata,
       siNumber: String(metadata.siNumber || "").trim(),
       source: String(metadata.source || "").trim(),
       suggestedStatus: String(metadata.suggestedStatus || "").trim(),
       eta: String(metadata.eta || "").trim(),
       reason: String(metadata.reason || "").trim(),
       originalMessage: String(metadata.originalMessage || "").trim(),
+      channel: String(metadata.channel || "").trim(),
+      threadTs: String(metadata.threadTs || "").trim(),
+      requester: String(metadata.requester || "").trim(),
+      clarificationQuestion: String(metadata.clarificationQuestion || "").trim(),
+      slackSendOk: Boolean(metadata.slackSendOk),
+      slackSendError: String(metadata.slackSendError || "").trim(),
     },
   };
 }
@@ -2382,7 +2389,7 @@ function activityEventToFeedItem(ev) {
       case "action_planned":
         return "次アクションを判定";
       case "draft_created":
-        return "下書きを生成";
+        return "返信案を生成";
       case "approval_required":
         return "承認待ちへ追加";
       case "issue_updated":
