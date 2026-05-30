@@ -72,6 +72,11 @@ export type IngestBuildOptions = {
   sourceLabel?: string;
   approvalPolicy?: "all" | "low_confidence" | "none";
   tradeCases?: TradeCase[];
+  /**
+   * Force approval_required generation for these threadIds, regardless of confidence.
+   * Used by Operational Responder (Execution Planner) when an external follow-up is required.
+   */
+  forceApprovalForThreadIds?: string[];
 };
 
 export type IngestPipelineOptions = IngestBuildOptions & {
@@ -1151,6 +1156,9 @@ export function buildActivityEvents(
   const events: ActivityEvent[] = [];
   const actor = options.sourceLabel || "AI";
   const approvalPolicy = options.approvalPolicy ?? "low_confidence";
+  const forcedApprovalThreadIds = new Set(
+    Array.isArray(options.forceApprovalForThreadIds) ? options.forceApprovalForThreadIds.map((v) => String(v || "").trim()).filter(Boolean) : [],
+  );
 
   const sourceActorForInput = () => {
     const src = String(input.source || "").trim();
@@ -1261,8 +1269,14 @@ export function buildActivityEvents(
   }
 
   for (const thread of threads) {
-    const shouldRequireApproval =
-      approvalPolicy === "all" ? true : approvalPolicy === "low_confidence" ? thread.confidence < 0.7 : false;
+    const forced = forcedApprovalThreadIds.has(String(thread.id || ""));
+    const shouldRequireApproval = forced
+      ? true
+      : approvalPolicy === "all"
+        ? true
+        : approvalPolicy === "low_confidence"
+          ? thread.confidence < 0.7
+          : false;
     if (!shouldRequireApproval) continue;
     const threadLinks = links.filter((l) => l.threadId === thread.id);
     const title = chooseThreadTitle(thread, threadLinks);
@@ -1272,7 +1286,7 @@ export function buildActivityEvents(
       occurredAt,
       sequence: ACTIVITY_SEQUENCE.approval_required,
       title: "承認待ちへ追加",
-      description: `${title} を承認待ちへ追加`,
+      description: forced ? "PL未着を確認しました / 仕入先への確認返信案を生成" : `${title} を承認待ちへ追加`,
       sourceRawInputId: input.id,
       threadId: thread.id,
       linkedEntities: threadLinks,
@@ -1437,6 +1451,22 @@ function primarySiLabelForThread(thread: OperationalThread, threadLinks: EntityL
   return fromLinks ? String(fromLinks.entityId) : "SI-UNKNOWN";
 }
 
+function buildSupplierFollowupDraftText(params: {
+  invoiceId?: string;
+  shipmentId?: string;
+  siId?: string;
+}) {
+  const invoiceId = String(params.invoiceId || "").trim();
+  const shipmentId = String(params.shipmentId || "").trim();
+  const siId = String(params.siId || "").trim();
+
+  const subject = invoiceId || shipmentId || siId || "該当案件";
+  const refBits = [shipmentId ? `Shipment: ${shipmentId}` : "", siId ? `SI: ${siId}` : ""].filter(Boolean);
+  const refLine = refBits.length ? `\n（${refBits.join(" / ")}）` : "";
+
+  return `${subject} に紐づく Packing List（PL）が未着です。${refLine}\n送付状況をご確認いただけますでしょうか。`.trim();
+}
+
 export function buildDraftDocuments(
   input: RawInput,
   threads: OperationalThread[],
@@ -1531,6 +1561,14 @@ export function buildDraftDocuments(
       return resolveOperationalContext({ entityType: "Document", entityId: inv, tradeCases });
     })();
 
+    const supplierFollowupDraftText = (() => {
+      if (!operationalCtx || operationalCtx.plStatus !== "missing") return "";
+      const inv = String(operationalCtx.invoice || primaryInvoiceLabelForThread() || "").trim();
+      const shipmentId = String(operationalCtx.shipment || "").trim();
+      const siId = String(operationalCtx.si || "").trim();
+      return buildSupplierFollowupDraftText({ invoiceId: inv, shipmentId, siId });
+    })();
+
     const plReplyDraftBody = (() => {
       const inv = String(operationalCtx?.invoice || primaryInvoiceLabelForThread() || "").trim();
       if (!inv) return "";
@@ -1551,8 +1589,8 @@ export function buildDraftDocuments(
         channel: "email",
         to: "supplier@example.invalid",
         subject: t.subject,
-        body: t.body,
-        status: "drafted",
+        body: supplierFollowupDraftText || t.body,
+        status: ap.status === "pending_approval" ? "pending_approval" : "drafted",
         generatedBy,
         generatedAt,
         confidence: typeof ap.confidence === "number" ? ap.confidence : 0.3,
@@ -1905,12 +1943,34 @@ export function runIngestPipeline(input: RawInput, options: IngestPipelineOption
   const isApprovalRequired = (thread: OperationalThread) =>
     approvalPolicy === "all" ? true : approvalPolicy === "low_confidence" ? thread.confidence < 0.7 : false;
 
+  const forceApprovalForThreadIds: string[] = suppressNewOutputs
+    ? []
+    : (() => {
+        const tradeCases = Array.isArray(options.tradeCases) ? options.tradeCases.filter(Boolean) : [];
+        if (!tradeCases.length) return [];
+        const out: string[] = [];
+        for (const thread of normalizedThreads) {
+          if (!thread) continue;
+          if (thread.intent !== "missing_document_check" && thread.intent !== "document_status_inquiry") continue;
+          const threadId = String(thread.id || "").trim();
+          if (!threadId) continue;
+          const threadLinks = links.filter((l) => l.threadId === threadId);
+          const doc = threadLinks.find((l) => l.entityType === "Document" && l.entityId) || null;
+          if (!doc) continue;
+          const ctx = resolveOperationalContext({ entityType: "Document", entityId: String(doc.entityId), tradeCases });
+          if (!ctx || ctx.plStatus !== "missing") continue;
+          out.push(threadId);
+        }
+        return out;
+      })();
+
+  const forcedApprovalSet = new Set(forceApprovalForThreadIds);
   const actionPlans: ActionPlan[] = suppressNewOutputs
     ? []
     : actionPlansBase.map((ap) => {
         const thread = normalizedThreads.find((t) => t.id === ap.threadId);
         if (!thread) return ap;
-        const status = isApprovalRequired(thread) ? "pending_approval" : "planned";
+        const status = isApprovalRequired(thread) || forcedApprovalSet.has(String(thread.id || "")) ? "pending_approval" : "planned";
         return { ...ap, status };
       });
 
@@ -1950,7 +2010,7 @@ export function runIngestPipeline(input: RawInput, options: IngestPipelineOption
     normalizedThreads,
     links,
     pipelineOccurredAt,
-    suppressNewOutputs ? { ...options, approvalPolicy: "none" } : options,
+    suppressNewOutputs ? { ...options, approvalPolicy: "none" } : { ...options, forceApprovalForThreadIds },
     stateTransitionCandidates,
     stateTransitionNotices,
   );

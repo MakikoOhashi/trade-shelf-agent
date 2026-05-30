@@ -240,16 +240,26 @@ export function createApprovalCenterRenderer(deps) {
           const threadTs = String(meta.threadTs || "").trim();
           const clarificationQuestion = String(meta.clarificationQuestion || "").trim();
           const replyText = String(meta.replyText || "").trim();
+          const shipmentId = String(meta.shipmentId || "").trim();
+          const siId = String(meta.siId || "").trim();
+          const invoiceId = String(meta.invoiceId || "").trim();
+          const target = String(meta.target || "").trim();
+          const draftText = String(meta.draftText || "").trim();
 
           const lines = [
             source ? `送信元: ${source}` : "",
             channel ? `channel: ${channel}` : "",
             threadTs ? `threadTs: ${threadTs}` : "",
+            invoiceId ? `invoiceId: ${invoiceId}` : "",
+            shipmentId ? `shipmentId: ${shipmentId}` : "",
+            siId ? `siId: ${siId}` : "",
             status ? `推定ステータス: ${statusLabelJa(status)}` : "",
             eta ? `推定ETA: ${eta}` : "",
             reason ? `理由: ${reason}` : "",
             clarificationQuestion ? `確認内容: ${clarificationQuestion.replace(/\n/g, " ")}` : "",
             replyText && replyText !== clarificationQuestion ? `返信文面: ${replyText.replace(/\n/g, " ")}` : "",
+            target ? `target: ${target}` : "",
+            draftText ? `draftText: ${draftText.replace(/\n/g, " ")}` : "",
             type ? `種別: ${type}` : "",
           ]
             .filter(Boolean)

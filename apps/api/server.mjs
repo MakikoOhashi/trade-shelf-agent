@@ -1169,6 +1169,23 @@ function extractPrimarySiNumberFromLinkedEntities(linkedEntities, fallbackText) 
   return fromText && fromText.length ? String(fromText[0] || "").trim().toUpperCase() : "";
 }
 
+function extractPrimaryIdsFromLinkedEntities(linkedEntities, fallbackText) {
+  const links = Array.isArray(linkedEntities) ? linkedEntities : [];
+  let shipmentId = "";
+  let siId = "";
+  let invoiceId = "";
+  for (const l of links) {
+    const t = String(l?.entityType || "").trim();
+    const id = String(l?.entityId || "").trim().toUpperCase();
+    if (!id) continue;
+    if (!shipmentId && t === "Shipment") shipmentId = id;
+    if (!siId && t === "SI") siId = id;
+    if (!invoiceId && t === "Document") invoiceId = id;
+  }
+  if (!siId) siId = extractPrimarySiNumberFromLinkedEntities(links, fallbackText);
+  return { shipmentId, siId, invoiceId };
+}
+
 function maybeEnqueueDemoApprovalFromApprovalRequiredEvent({ event, rawText }) {
   const ev = event && typeof event === "object" ? event : null;
   if (!ev || String(ev.type || "") !== "approval_required") return null;
@@ -1198,6 +1215,77 @@ function maybeEnqueueDemoApprovalFromApprovalRequiredEvent({ event, rawText }) {
       suggestedStatus,
       eta: "",
       reason: "",
+      originalMessage: String(rawText || "").trim(),
+    },
+  };
+
+  upsertDemoApproval(approval);
+  return approval;
+}
+
+function findPendingDemoApprovalBySupplierFollowupKey({ shipmentId, invoiceId }) {
+  const sh = String(shipmentId || "").trim().toUpperCase();
+  const inv = String(invoiceId || "").trim().toUpperCase();
+  if (!sh && !inv) return null;
+  const list = Array.isArray(slackState.demoApprovals) ? slackState.demoApprovals : [];
+  return (
+    list.find((x) => {
+      if (String(x?.status || "") !== "pending") return false;
+      if (String(x?.type || "") !== "supplier_followup") return false;
+      const meta = x?.metadata && typeof x.metadata === "object" ? x.metadata : {};
+      const metaSh = String(meta?.shipmentId || "").trim().toUpperCase();
+      const metaInv = String(meta?.invoiceId || "").trim().toUpperCase();
+      return (sh && metaSh === sh) || (inv && metaInv === inv);
+    }) || null
+  );
+}
+
+function maybeEnqueueDemoApprovalFromSupplierFollowupDraft({ ingestResult, rawText, slackChannelId, slackThreadTs }) {
+  const result = ingestResult && typeof ingestResult === "object" ? ingestResult : null;
+  if (!result) return null;
+
+  const drafts = Array.isArray(result.drafts) ? result.drafts.filter(Boolean) : [];
+  const pendingEmailDrafts = drafts.filter((d) => String(d?.channel || "") === "email" && String(d?.status || "") === "pending_approval");
+  if (!pendingEmailDrafts.length) return null;
+
+  // Pick the most relevant 1 draft (PL follow-up).
+  const picked =
+    pendingEmailDrafts.find((d) => /\bPL\b|Packing\s*List/i.test(String(d?.subject || "") + "\n" + String(d?.body || ""))) || pendingEmailDrafts[0];
+  if (!picked) return null;
+
+  const threadId = String(picked.threadId || "").trim();
+  const linkedEntities = Array.isArray(result.links) ? result.links.filter((l) => String(l?.threadId || "") === threadId) : [];
+  const { shipmentId, siId, invoiceId } = extractPrimaryIdsFromLinkedEntities(linkedEntities, rawText);
+  const draftText = String(picked.body || "").trim();
+  if (!draftText) return null;
+  // Only trigger when PL is explicitly missing (e.g., "未着").
+  if (!/未着|missing/i.test(draftText)) return null;
+
+  const dedupeExisting = findPendingDemoApprovalBySupplierFollowupKey({ shipmentId, invoiceId });
+  if (dedupeExisting) return dedupeExisting;
+
+  const title = "仕入先確認返信";
+  const descKey = invoiceId || shipmentId || siId || "PL未着";
+  const description = `${descKey} のPL未着を確認しました。仕入先への確認返信案を作成しました。`;
+
+  const approval = {
+    id: `APR-SUPFOLLOWUP-${(shipmentId || invoiceId || siId || "NA").replace(/[^A-Z0-9]/g, "")}-${Date.now()}`,
+    type: "supplier_followup",
+    status: "pending",
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    title,
+    description,
+    metadata: {
+      type: "supplier_followup",
+      shipmentId: shipmentId || "",
+      siId: siId || "",
+      invoiceId: invoiceId || "",
+      draftText,
+      target: "supplier",
+      source: "slack",
+      channel: String(slackChannelId || "").trim(),
+      threadTs: String(slackThreadTs || "").trim(),
       originalMessage: String(rawText || "").trim(),
     },
   };
@@ -1610,6 +1698,37 @@ const server = http.createServer(async (req, res) => {
         return;
       }
 
+      if (approvalType === "supplier_followup") {
+        const meta = updated?.metadata && typeof updated.metadata === "object" ? updated.metadata : {};
+        const shipmentId = String(meta?.shipmentId || "").trim().toUpperCase();
+        const invoiceId = String(meta?.invoiceId || "").trim().toUpperCase();
+        const draftText = String(meta?.draftText || "").trim();
+
+        pushActivityItem({
+          id: `demo:supplier-followup-approved:${id}:${Date.now()}`,
+          type: "aiProcessed",
+          source: "ai",
+          title: "承認済み：仕入先確認返信（mock送信）",
+          actor: "demo approval",
+          occurredAt: new Date().toISOString(),
+          summary: draftText || updated.description || "supplier follow-up approved",
+          details: [
+            `approvalId: ${updated.id}`,
+            invoiceId ? `invoiceId: ${invoiceId}` : "",
+            shipmentId ? `shipmentId: ${shipmentId}` : "",
+          ].filter(Boolean),
+          statusKey: "success",
+          linked: [
+            ...(invoiceId ? [{ kind: "document", label: invoiceId }] : []),
+            ...(shipmentId ? [{ kind: "shipment", label: shipmentId }] : []),
+          ],
+          links: [],
+        });
+
+        sendJson(res, 200, { ok: true, approval: updated, tradeCase: null });
+        return;
+      }
+
       // Default demo approval flow: unknown SI -> add to shelf.
       const tc = createDemoTradeCaseFromApproval(updated);
       appendDemoTradeCase(tc);
@@ -1988,6 +2107,45 @@ const server = http.createServer(async (req, res) => {
               }
             } catch (e) {
               console.warn("[demo] failed to create state_update demo approval:", String(e));
+            }
+
+            // Operational Responder: PL missing -> supplier follow-up approval item + notify sales on Slack.
+            try {
+              const created = maybeEnqueueDemoApprovalFromSupplierFollowupDraft({
+                ingestResult: result,
+                rawText: text,
+                slackChannelId: channelId,
+                slackThreadTs: threadTs || ts,
+              });
+              if (created && created.id) {
+                const meta = created?.metadata && typeof created.metadata === "object" ? created.metadata : {};
+                const invoiceId = String(meta?.invoiceId || "").trim();
+                const summary = created.description || created.title || "approval pending";
+
+                pushActivityItem({
+                  id: `demo:supplier-followup:${created.id}:${Date.now()}`,
+                  type: "aiProcessed",
+                  source: "ai",
+                  title: "承認待ち：仕入先確認返信を追加しました",
+                  actor: "operational responder",
+                  occurredAt: new Date().toISOString(),
+                  summary,
+                  details: [`approvalId: ${created.id}`, invoiceId ? `invoiceId: ${invoiceId}` : ""].filter(Boolean),
+                  statusKey: "awaitingApproval",
+                  linked: [
+                    ...(invoiceId ? [{ kind: "document", label: invoiceId }] : []),
+                  ],
+                  links: [],
+                });
+
+                // Slack返信（営業向け）
+                const salesText = invoiceId
+                  ? `${invoiceId} のPLは未着です。\n仕入先への確認文を作成しました。`
+                  : "PLは未着です。\n仕入先への確認文を作成しました。";
+                await postSlackReply({ channel: channelId, threadTs: threadTs || ts, text: salesText }).catch(() => null);
+              }
+            } catch (e) {
+              console.warn("[demo] failed to enqueue supplier follow-up approval:", String(e));
             }
 
             const feedItems = events.map((evv) =>
