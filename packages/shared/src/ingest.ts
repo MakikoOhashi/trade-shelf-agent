@@ -211,6 +211,27 @@ export function buildStateTransitionCandidates(args: {
     const t = String(text || "").toLowerCase();
 
     // Minimal heuristic rules for Phase 6-1.
+    // Prefer more-advanced signals first (e.g. warehouse arrival > customs in progress > arrival notice).
+    if (
+      /\b(arrived at warehouse|warehouse arrival|warehouse arrived|warehouse received|received at warehouse)\b/.test(t) ||
+      /(倉庫着|倉庫到着|倉庫に到着|倉庫へ到着|倉庫着しました|倉庫到着しました|倉庫入庫|入庫しました|倉庫受領|倉庫受け|入庫済)/.test(text)
+    ) {
+      return {
+        fromState: "inTransit",
+        toState: "delivered",
+        reason: "Slack/Teams update indicates the shipment has arrived at (or been received by) the warehouse.",
+      };
+    }
+    if (
+      /\b(customs in progress|in customs|under customs|under customs clearance|import customs)\b/.test(t) ||
+      /(通関中|通関対応中|通関手続き中|輸入通関中)/.test(text)
+    ) {
+      return {
+        fromState: "inTransit",
+        toState: "arrived",
+        reason: "Update indicates the shipment is at the import/customs stage.",
+      };
+    }
     if (/\b(shipped|dispatched|departed|picked up)\b/.test(t) || /(出荷|発送|搬出|集荷|出発|出港|出発しました)/.test(t)) {
       return {
         fromState: "shippingPending",
@@ -244,13 +265,6 @@ export function buildStateTransitionCandidates(args: {
         fromState: "arrived",
         toState: "customsCleared",
         reason: "Customs clearance confirmed.",
-      };
-    }
-    if (/\b(warehouse received|received at warehouse)\b/.test(t) || /(倉庫入庫|入庫しました|倉庫受領)/.test(t)) {
-      return {
-        fromState: "customsCleared",
-        toState: "delivered",
-        reason: "Warehouse receipt confirmed.",
       };
     }
 
@@ -462,7 +476,9 @@ export function resolveContext(input: RawInput, options: IngestBuildOptions = {}
       /\b(booking confirmed|booked)\b/.test(t) ||
       /\b(bl issued|bill of lading issued)\b/.test(t) ||
       /\b(arrival notice)\b/.test(t) ||
-      /(出荷|発送|搬出|集荷|出発|出港|出発しました|ブッキング確定|booking確定|到着案内)/.test(text)
+      /\b(arrived at warehouse|warehouse arrival|warehouse arrived|warehouse received|received at warehouse)\b/.test(t) ||
+      /\b(customs in progress|in customs|under customs|under customs clearance|import customs)\b/.test(t) ||
+      /(出荷|発送|搬出|集荷|出発|出港|出発しました|ブッキング確定|booking確定|到着案内|通関中|通関対応中|通関手続き中|輸入通関中|倉庫着|倉庫到着|倉庫入庫|入庫しました|倉庫受領)/.test(text)
     );
   })();
 
@@ -812,8 +828,8 @@ export function classifyRawInput(input: RawInput): OperationalThread[] {
       title: "未分類依頼",
       intent: "unknown",
       summary: text,
-      extractedEntities: {},
-      confidence: 0.3,
+      extractedEntities: shipmentIds.length || siIds.length ? { shipmentIds, siIds: Array.from(siIds) } : {},
+      confidence: shipmentIds.length || siIds.length ? 0.55 : 0.3,
     });
   }
 
