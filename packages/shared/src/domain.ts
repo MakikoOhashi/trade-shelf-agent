@@ -655,6 +655,12 @@ export type RawInput = {
   senderName?: string;
   senderEmail?: string;
   channel?: string;
+  /**
+   * Optional per-source thread identifier.
+   * - Slack: `thread_ts`
+   * - Teams: reply/parent thread id (future)
+   */
+  threadTs?: string;
   subject?: string;
   rawText: string;
   attachmentNames?: string[];
@@ -747,6 +753,11 @@ export type PendingClarification = {
 
   requesterName?: string;
   sourceChannel?: string;
+  /**
+   * Optional thread identifier (e.g. Slack `thread_ts`) used to bind a clarification
+   * request and its follow-up reply within the same conversation thread.
+   */
+  sourceThreadTs?: string;
 
   missingFields: string[];
 

@@ -116,6 +116,7 @@ export function matchPendingClarification(
 
   const requesterName = String(input?.senderName || "").trim();
   const sourceChannel = String(input?.channel || "").trim();
+  const threadTs = String(input?.threadTs || "").trim();
   const rawText = String(input?.rawText || "");
 
   const candidates = pending
@@ -128,6 +129,13 @@ export function matchPendingClarification(
     .filter((p) => {
       const pc = String(p?.sourceChannel || "").trim();
       if (pc && sourceChannel && pc !== sourceChannel) return false;
+      return true;
+    })
+    .filter((p) => {
+      const pt = String(p?.sourceThreadTs || "").trim();
+      // If the pending clarification is thread-scoped, require an exact match to avoid
+      // cross-thread clarification leakage within a channel.
+      if (pt) return Boolean(threadTs && pt === threadTs);
       return true;
     })
     .filter((p) => satisfiesMissingFields(rawText, p.missingFields));

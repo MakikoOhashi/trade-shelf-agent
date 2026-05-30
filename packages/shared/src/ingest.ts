@@ -580,8 +580,8 @@ export function resolveContext(input: RawInput, options: IngestBuildOptions = {}
     return {
       ...base,
       status: "missing_context",
-      missingFields: ["SI or Shipment"],
-      clarificationQuestion: "どのSIまたはShipmentの更新でしょうか？対象を教えてください。",
+      missingFields: ["SI or Shipment or Invoice"],
+      clarificationQuestion: "どのSI / Shipment / INV の更新でしょうか？対象番号を教えてください。",
       waitingState: "awaiting_clarification_reply",
       reminder: {
         followUpAt: addHoursIso(now, 4),
@@ -597,8 +597,8 @@ export function resolveContext(input: RawInput, options: IngestBuildOptions = {}
     return {
       ...base,
       status: "missing_context",
-      missingFields: ["SI or Shipment"],
-      clarificationQuestion: "対象のSIまたはShipmentを教えてください。",
+      missingFields: ["SI or Shipment or Invoice"],
+      clarificationQuestion: "対象のSI / Shipment / INV を教えてください。",
       waitingState: "awaiting_clarification_reply",
       reminder: {
         followUpAt: addHoursIso(now, 4),
@@ -632,8 +632,8 @@ export function resolveContext(input: RawInput, options: IngestBuildOptions = {}
     return {
       ...base,
       status: "missing_context",
-      missingFields: ["SI or Shipment"],
-      clarificationQuestion: "どのSIまたはShipmentのPLでしょうか？対象を教えてください。",
+      missingFields: ["SI or Shipment or Invoice"],
+      clarificationQuestion: "どのSI / Shipment / INV のPLでしょうか？対象番号を教えてください。",
       waitingState: "awaiting_clarification_reply",
       reminder: {
         followUpAt: addHoursIso(now, 4),
@@ -1549,6 +1549,7 @@ export function runIngestPipeline(input: RawInput, options: IngestPipelineOption
       originalRawText: String(input.rawText || ""),
       requesterName: input.senderName,
       sourceChannel: input.channel,
+      sourceThreadTs: input.threadTs,
       missingFields: Array.isArray(contextResolution.missingFields) ? contextResolution.missingFields : ["SI or Shipment"],
       clarificationQuestion: String(contextResolution.clarificationQuestion || "どのSIまたはShipmentでしょうか？").trim(),
       status: "awaiting_clarification_reply",
@@ -1813,7 +1814,7 @@ export function runIngestPipeline(input: RawInput, options: IngestPipelineOption
             occurredAt: pipelineOccurredAt,
             sequence: ACTIVITY_SEQUENCE.context_resolved,
             title: "補足で対象を特定",
-            description: `Pending clarification (${matchedPendingClarification.id}) を補足返信で解決しました。`,
+            description: `確認回答を受信：${String(input.rawText || "").trim() || resolvedLabel}`,
             sourceRawInputId: input.id,
             status: "ok",
             actor,
@@ -1830,7 +1831,7 @@ export function runIngestPipeline(input: RawInput, options: IngestPipelineOption
             occurredAt: pipelineOccurredAt,
             sequence: ACTIVITY_SEQUENCE.clarification_matched,
             title: "確認返信を紐付け",
-            description: "未解決の確認依頼への返信として対象を特定しました。",
+            description: "対象案件を特定しました",
             sourceRawInputId: input.id,
             status: "ok",
             actor,

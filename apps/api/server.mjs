@@ -1749,10 +1749,11 @@ const server = http.createServer(async (req, res) => {
             // If no SHP/SI is present, ask the requester to specify which shipment they mean.
             const hasSi = extractSiNumbersFromText(text).length > 0;
             const hasShipment = /\bSHP-\d{4}-\d{3}\b/i.test(text);
-            const needsClarification = !hasSi && !hasShipment;
+            const hasInvoice = /\bINV[-\s]?\d{1,8}\b/i.test(text);
+            const needsClarification = !hasSi && !hasShipment && !hasInvoice;
 
             if (needsClarification) {
-              const clarificationText = "どの出荷の件でしょうか？\nSHP番号またはSI番号を教えてください。";
+              const clarificationText = "どの出荷の件でしょうか？\nSHP番号 / SI番号 / INV番号 を教えてください。";
               const now = new Date().toISOString();
               const thread = threadTs || ts;
 
@@ -1811,6 +1812,7 @@ const server = http.createServer(async (req, res) => {
               receivedAt: new Date().toISOString(),
               senderName: user,
               channel,
+              threadTs: threadTs || ts,
               subject: undefined,
               rawText: text,
               attachmentNames: [],
