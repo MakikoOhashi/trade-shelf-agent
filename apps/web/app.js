@@ -2162,26 +2162,54 @@ function enqueueAgentStreamToastFromActivityEvent(ev) {
   const desc = clipSingleLine(e.description || e.summary || "", 64);
   const nextLine = desc || mapped;
   const demoApprovalId = String(e.demoApprovalId || "").trim() || null;
-  const approvalContext = (() => {
+  const prev = state.agentStreamToast && typeof state.agentStreamToast === "object" ? state.agentStreamToast : null;
+  const prevApprovalContext =
+    prev && prev.approvalContext && typeof prev.approvalContext === "object" ? prev.approvalContext : null;
+  const prevStatus = prev ? String(prev.status || "") : "";
+  const prevDebug = prev && prev.debug && typeof prev.debug === "object" ? prev.debug : null;
+
+  const approvalContextFromEvent = (() => {
     // "latest 1 item only": when an approval-like event arrives, show a CTA in toast.
-    if (rawType === "approval_required" || rawType === "approval_added") {
+    if (rawType === "approval_added") {
       if (demoApprovalId) return { kind: "demoApproval", id: demoApprovalId };
-      // Server Activity feed may not carry enough local state to drive ActionPlan approval.
-      // Avoid showing a broken CTA when we can't resolve an ActionPlan locally.
-      if (rawType === "approval_required" && String(e.origin || "") === "serverActivity") return null;
       const apId = String(e.threadId || "").trim();
       if (apId) return { kind: "actionPlan", id: apId };
       return null;
     }
-    if (rawType === "state_transition_candidate_detected") {
-      const evId = String(e.id || "").trim();
-      const candidateId = evId.startsWith("ACT-") ? evId.slice(4) : evId;
-      if (candidateId) return { kind: "stateTransitionCandidate", id: candidateId };
+
+    // Treat approval_required as a supplementary log; do not force a CTA unless we have a concrete demo approval id.
+    if (rawType === "approval_required") {
+      if (demoApprovalId) return { kind: "demoApproval", id: demoApprovalId };
       return null;
     }
+
+    // Prefer the attached candidate payload from state_transition_candidate_detected.
+    if (rawType === "state_transition_candidate_detected") {
+      const cand = e.stateTransitionCandidate && typeof e.stateTransitionCandidate === "object" ? e.stateTransitionCandidate : null;
+      const candId = cand && cand.id != null ? String(cand.id).trim() : "";
+      if (candId) return { kind: "state_transition", id: candId, candidate: cand };
+
+      // Backward compatible fallback: derive candidate id from event id.
+      const evId = String(e.id || "").trim();
+      const candidateId = evId.startsWith("ACT-") ? evId.slice(4) : evId;
+      if (candidateId) return { kind: "state_transition", id: candidateId };
+      return null;
+    }
+
     return null;
   })();
-  const prev = state.agentStreamToast && typeof state.agentStreamToast === "object" ? state.agentStreamToast : null;
+
+  const approvalContext = (() => {
+    if (approvalContextFromEvent) return approvalContextFromEvent;
+
+    // Keep the state-transition CTA sticky so that a later approval_required does not downgrade the toast back to processing.
+    const prevKind = prevApprovalContext ? String(prevApprovalContext.kind || "") : "";
+    if (rawType === "approval_required" && prevStatus === "approval_pending" && prevKind === "state_transition" && prevApprovalContext?.id) {
+      return prevApprovalContext;
+    }
+
+    return null;
+  })();
   const prevLines = Array.isArray(prev?.lines) ? prev.lines.filter(Boolean).map((x) => String(x)) : [];
   const merged = [nextLine, ...prevLines].filter(Boolean);
   const deduped = [];
@@ -2196,7 +2224,10 @@ function enqueueAgentStreamToastFromActivityEvent(ev) {
     lines: deduped,
     approvalContext: approvalContext || null,
     debug: {
-      rawType,
+      rawType:
+        approvalContext && approvalContext === prevApprovalContext && prevDebug && prevDebug.rawType
+          ? String(prevDebug.rawType)
+          : rawType,
       demoApprovalId,
       approvalContextKind: approvalContext?.kind || null,
       approvalContextId: approvalContext?.id || null,
@@ -3255,7 +3286,7 @@ function renderAgentStreamToast() {
       ? `<div class="agent-stream-toast__actions" role="group" aria-label="Approval actions">
           <button class="btn btn--primary btn--small" type="button" data-agent-stream-approve="1">承認する</button>
           ${
-            approvalContext.kind === "stateTransitionCandidate"
+            approvalContext.kind === "state_transition" || approvalContext.kind === "stateTransitionCandidate"
               ? `<button class="btn btn--ghost btn--small" type="button" data-agent-stream-open-approval-center="1">承認センターで確認</button>`
               : `<button class="btn btn--ghost btn--small" type="button" data-agent-stream-later="1">後で確認</button>`
           }
@@ -9052,7 +9083,7 @@ function setupNewTop() {
           })();
           return;
         }
-        if (kind === "stateTransitionCandidate") {
+        if (kind === "state_transition" || kind === "stateTransitionCandidate") {
           const res = applyStateTransitionCandidate(id);
           if (res && res.ok) setToastResult({ ok: true, message: "承認しました" });
           else setToastResult({ ok: false, message: "承認に失敗しました" });
