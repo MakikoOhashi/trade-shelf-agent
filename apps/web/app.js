@@ -2303,7 +2303,7 @@ function enqueueAgentStreamToastFromActivityEvent(ev) {
   const deduped = [];
   for (const line of merged) {
     if (!deduped.length || deduped[deduped.length - 1] !== line) deduped.push(line);
-    if (deduped.length >= 3) break;
+    if (deduped.length >= 4) break;
   }
   state.agentStreamToast = {
     id: "agent-status-panel",

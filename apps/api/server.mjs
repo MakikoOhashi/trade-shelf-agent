@@ -1264,9 +1264,9 @@ function maybeEnqueueDemoApprovalFromSupplierFollowupDraft({ ingestResult, rawTe
   const dedupeExisting = findPendingDemoApprovalBySupplierFollowupKey({ shipmentId, invoiceId });
   if (dedupeExisting) return dedupeExisting;
 
-  const title = "仕入先確認返信";
+  const title = "仕入先督促メール";
   const descKey = invoiceId || shipmentId || siId || "PL未着";
-  const description = `${descKey} のPL未着を確認しました。仕入先への確認返信案を作成しました。`;
+  const description = `${descKey} のPL未着を確認しました。仕入先への督促メール案を作成しました。`;
 
   const approval = {
     id: `APR-SUPFOLLOWUP-${(shipmentId || invoiceId || siId || "NA").replace(/[^A-Z0-9]/g, "")}-${Date.now()}`,
@@ -1276,6 +1276,9 @@ function maybeEnqueueDemoApprovalFromSupplierFollowupDraft({ ingestResult, rawTe
     updatedAt: new Date().toISOString(),
     title,
     description,
+    shipmentId: shipmentId || "",
+    siId: siId || "",
+    invoiceId: invoiceId || "",
     metadata: {
       type: "supplier_followup",
       shipmentId: shipmentId || "",
@@ -1283,7 +1286,7 @@ function maybeEnqueueDemoApprovalFromSupplierFollowupDraft({ ingestResult, rawTe
       invoiceId: invoiceId || "",
       draftText,
       target: "supplier",
-      source: "slack",
+      source: "operational_responder",
       channel: String(slackChannelId || "").trim(),
       threadTs: String(slackThreadTs || "").trim(),
       originalMessage: String(rawText || "").trim(),
@@ -1934,49 +1937,19 @@ const server = http.createServer(async (req, res) => {
               const now = new Date().toISOString();
               const thread = threadTs || ts;
 
-              // Keep a dedicated "確認待ち" item in server-backed demo approvals.
-              // Slack reply must be sent on server-side approve (NOT here).
               try {
-                const approval = {
-                  id: `APR-DEMO-CLARIFY-${eventId || ts}-${Date.now()}`,
-                  type: "slack_clarification",
-                  status: "pending",
-                  createdAt: now,
-                  updatedAt: now,
-                  title: "営業確認待ち（Slack）",
-                  description: `Slack確認返信（承認待ち）：${clarificationText.replace(/\n/g, " ")}`,
-                  metadata: {
-                    source: "slack",
-                    channel: channelId,
-                    threadTs: thread,
-                    replyText: clarificationText,
-                    requester: user,
-                    originalMessage: text,
-                    originalText: text,
-                    clarificationQuestion: clarificationText,
-                    missingFields: ["SI or Shipment or INV"],
-                    expectedEntities: ["SHP", "SI", "INV"],
-                    clarificationStatus: "awaiting_send_approval",
-                    slackSendOk: false,
-                    slackSendError: "",
-                  },
-                };
-                upsertDemoApproval(approval);
-
+                // 社内Slackへの返信は承認不要（即送信）。
+                await postSlackReply({ channel: channelId, threadTs: thread, text: clarificationText });
                 pushActivityItem({
-                  id: `slack:clarification_pending:${approval.id}:${Date.now()}`,
-                  type: "approval_required",
+                  id: `slack:clarification_sent:${eventId || ts}:${Date.now()}`,
+                  type: "aiProcessed",
                   source: "ai",
-                  title: "承認待ち：Slack確認返信の送信を承認してください",
+                  title: "Slack返信送信済み",
                   actor: "trade-shelf-agent",
                   occurredAt: now,
-                  summary: clarificationText,
-                  details: [
-                    `approvalId: ${approval.id}`,
-                    channel ? `channel: ${channel}` : "",
-                    thread ? `threadTs: ${thread}` : "",
-                  ].filter(Boolean),
-                  statusKey: "awaitingApproval",
+                  summary: "営業へSlack返信しました",
+                  details: [clarificationText],
+                  statusKey: "success",
                   linked: [],
                   links: [],
                 });
@@ -1998,7 +1971,7 @@ const server = http.createServer(async (req, res) => {
                 });
                 schedulePersistDemoStores();
               } catch (e) {
-                console.warn("[demo] failed to enqueue slack clarification waiting approval:", String(e));
+                console.warn("[demo] failed to send slack clarification reply:", String(e));
               }
 
               return;
@@ -2120,15 +2093,37 @@ const server = http.createServer(async (req, res) => {
               if (created && created.id) {
                 const meta = created?.metadata && typeof created.metadata === "object" ? created.metadata : {};
                 const invoiceId = String(meta?.invoiceId || "").trim();
+                const shipmentId = String(meta?.shipmentId || "").trim();
+                const siId = String(meta?.siId || "").trim();
                 const summary = created.description || created.title || "approval pending";
+                const now = new Date().toISOString();
+
+                // Toast / Activity: PL未着検出〜社内返信〜外部送信承認待ち の導線を明示する
+                pushActivityItem({
+                  id: `demo:pl-missing:confirmed:${created.id}:${Date.now()}`,
+                  type: "aiProcessed",
+                  source: "ai",
+                  title: "PL未着を確認",
+                  actor: "operational responder",
+                  occurredAt: now,
+                  summary: "PL未着を確認",
+                  details: [
+                    invoiceId ? `invoiceId: ${invoiceId}` : "",
+                    shipmentId ? `shipmentId: ${shipmentId}` : "",
+                    siId ? `siId: ${siId}` : "",
+                  ].filter(Boolean),
+                  statusKey: "warning",
+                  linked: [...(invoiceId ? [{ kind: "document", label: invoiceId }] : [])],
+                  links: [],
+                });
 
                 pushActivityItem({
                   id: `demo:supplier-followup:${created.id}:${Date.now()}`,
                   type: "aiProcessed",
                   source: "ai",
-                  title: "承認待ち：仕入先確認返信を追加しました",
+                  title: "承認待ち：仕入先督促メール",
                   actor: "operational responder",
-                  occurredAt: new Date().toISOString(),
+                  occurredAt: now,
                   summary,
                   details: [`approvalId: ${created.id}`, invoiceId ? `invoiceId: ${invoiceId}` : ""].filter(Boolean),
                   statusKey: "awaitingApproval",
@@ -2140,9 +2135,51 @@ const server = http.createServer(async (req, res) => {
 
                 // Slack返信（営業向け）
                 const salesText = invoiceId
-                  ? `${invoiceId} のPLは未着です。\n仕入先への確認文を作成しました。`
-                  : "PLは未着です。\n仕入先への確認文を作成しました。";
+                  ? `${invoiceId} に紐づくPLはまだ届いていません。\n仕入先への督促メール案を作成しました。`
+                  : "PLはまだ届いていません。\n仕入先への督促メール案を作成しました。";
                 await postSlackReply({ channel: channelId, threadTs: threadTs || ts, text: salesText }).catch(() => null);
+
+                pushActivityItem({
+                  id: `demo:pl-missing:slack-replied:${created.id}:${Date.now()}`,
+                  type: "aiProcessed",
+                  source: "ai",
+                  title: "Slack返信送信済み",
+                  actor: "operational responder",
+                  occurredAt: new Date().toISOString(),
+                  summary: "営業へSlack返信しました",
+                  details: [salesText],
+                  statusKey: "success",
+                  linked: [...(invoiceId ? [{ kind: "document", label: invoiceId }] : [])],
+                  links: [],
+                });
+
+                pushActivityItem({
+                  id: `demo:pl-missing:supplier-draft:${created.id}:${Date.now()}`,
+                  type: "aiProcessed",
+                  source: "ai",
+                  title: "仕入先督促メール案を生成",
+                  actor: "operational responder",
+                  occurredAt: new Date().toISOString(),
+                  summary: "仕入先督促メール案を作成しました",
+                  details: [`approvalId: ${created.id}`],
+                  statusKey: "processing",
+                  linked: [...(invoiceId ? [{ kind: "document", label: invoiceId }] : [])],
+                  links: [],
+                });
+
+                pushActivityItem({
+                  id: `demo:pl-missing:awaiting-approval:${created.id}:${Date.now()}`,
+                  type: "approval_required",
+                  source: "ai",
+                  title: "承認待ち：仕入先督促メール",
+                  actor: "operational responder",
+                  occurredAt: new Date().toISOString(),
+                  summary: "送信確認待ち",
+                  details: [`approvalId: ${created.id}`],
+                  statusKey: "awaitingApproval",
+                  linked: [...(invoiceId ? [{ kind: "document", label: invoiceId }] : [])],
+                  links: [],
+                });
               }
             } catch (e) {
               console.warn("[demo] failed to enqueue supplier follow-up approval:", String(e));
