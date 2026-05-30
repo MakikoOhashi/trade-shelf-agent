@@ -57,6 +57,7 @@ const ACTIVITY_SEQUENCE: Record<ActivityEventType, number> = {
   state_transition_not_supported: 32,
   state_transition_candidate_detected: 33,
   intake_resolved: 35,
+  operational_responder: 37,
   action_planned: 40,
   approval_required: 50,
   draft_created: 45,
@@ -2101,6 +2102,50 @@ export function runIngestPipeline(input: RawInput, options: IngestPipelineOption
     ];
   })();
 
+  const operationalResponderEvents: ActivityEvent[] = (() => {
+    const tradeCases = Array.isArray(options.tradeCases) ? options.tradeCases.filter(Boolean) : [];
+    if (!tradeCases.length) return [];
+    const listDrafts = Array.isArray(drafts) ? drafts.filter(Boolean) : [];
+    const out: ActivityEvent[] = [];
+
+    for (const thread of normalizedThreads) {
+      if (!thread) continue;
+      if (thread.intent !== "missing_document_check" && thread.intent !== "document_status_inquiry") continue;
+
+      const threadId = String(thread.id || "").trim();
+      if (!threadId) continue;
+
+      const threadLinks = links.filter((l) => l.threadId === threadId);
+      const directInv = Array.isArray(thread?.extractedEntities?.invoiceIds) ? thread.extractedEntities.invoiceIds.find(Boolean) : "";
+      const invFromLinks = threadLinks.find((l) => l?.entityType === "Document" && l?.entityId) || null;
+      const invoiceId = String(directInv || (invFromLinks ? invFromLinks.entityId : "") || "").trim();
+
+      const ctx = invoiceId ? resolveOperationalContext({ entityType: "Document", entityId: invoiceId, tradeCases }) : null;
+      if (!ctx || ctx.plStatus !== "missing") continue;
+
+      const pendingEmailDraft = listDrafts.find(
+        (d) => String(d?.threadId || "") === threadId && String(d?.channel || "") === "email" && String(d?.status || "") === "pending_approval",
+      );
+      if (!pendingEmailDraft) continue;
+
+      out.push({
+        id: ingestStableId("ACT", `${input.id}:${threadId}:operational_responder:pl_missing_supplier_followup`),
+        type: "operational_responder",
+        occurredAt: pipelineOccurredAt,
+        sequence: ACTIVITY_SEQUENCE.operational_responder,
+        title: "PL未着を確認",
+        description: "PL未着 確認返信案を生成しました",
+        sourceRawInputId: input.id,
+        threadId,
+        linkedEntities: threadLinks,
+        status: "ok",
+        actor,
+      } satisfies ActivityEvent);
+    }
+
+    return out;
+  })();
+
   return {
     rawInput: { ...effectiveInput, status: "linked" },
     contextResolution,
@@ -2113,6 +2158,7 @@ export function runIngestPipeline(input: RawInput, options: IngestPipelineOption
       ...clarificationMatchedEvent,
       ...activityEventsBase,
       ...intakeResolvedEvents,
+      ...operationalResponderEvents,
       ...draftCreatedEvents,
       ...actionPlannedEvents,
       ...issueUpdatedEvents,

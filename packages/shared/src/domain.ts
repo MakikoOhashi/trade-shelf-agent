@@ -837,6 +837,7 @@ export type ActivityEventType =
   | "state_transition_not_supported"
   | "state_transition_candidate_detected"
   | "intake_resolved"
+  | "operational_responder"
   | "issue_updated"
   | "action_planned"
   | "approval_required"

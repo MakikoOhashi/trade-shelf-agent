@@ -1415,6 +1415,7 @@ const ACTIVITY_SEQUENCE = {
     state_transition_not_supported: 32,
     state_transition_candidate_detected: 33,
     intake_resolved: 35,
+    operational_responder: 37,
     action_planned: 40,
     approval_required: 50,
     draft_created: 45,
@@ -2367,6 +2368,7 @@ export function buildActivityEvents(input, threads, links, occurredAt, options =
     const events = [];
     const actor = options.sourceLabel || "AI";
     const approvalPolicy = options.approvalPolicy ?? "low_confidence";
+    const forcedApprovalThreadIds = new Set(Array.isArray(options.forceApprovalForThreadIds) ? options.forceApprovalForThreadIds.map((v) => String(v || "").trim()).filter(Boolean) : []);
     const sourceActorForInput = () => {
         const src = String(input.source || "").trim();
         const ch = String(input.channel || "").trim();
@@ -2474,7 +2476,14 @@ export function buildActivityEvents(input, threads, links, occurredAt, options =
         });
     }
     for (const thread of threads) {
-        const shouldRequireApproval = approvalPolicy === "all" ? true : approvalPolicy === "low_confidence" ? thread.confidence < 0.7 : false;
+        const forced = forcedApprovalThreadIds.has(String(thread.id || ""));
+        const shouldRequireApproval = forced
+            ? true
+            : approvalPolicy === "all"
+                ? true
+                : approvalPolicy === "low_confidence"
+                    ? thread.confidence < 0.7
+                    : false;
         if (!shouldRequireApproval)
             continue;
         const threadLinks = links.filter((l) => l.threadId === thread.id);
@@ -2485,7 +2494,7 @@ export function buildActivityEvents(input, threads, links, occurredAt, options =
             occurredAt,
             sequence: ACTIVITY_SEQUENCE.approval_required,
             title: "承認待ちへ追加",
-            description: `${title} を承認待ちへ追加`,
+            description: forced ? "PL未着を確認しました / 仕入先への確認返信案を生成" : `${title} を承認待ちへ追加`,
             sourceRawInputId: input.id,
             threadId: thread.id,
             linkedEntities: threadLinks,
@@ -2625,6 +2634,15 @@ function primarySiLabelForThread(thread, threadLinks) {
     const fromLinks = (threadLinks || []).find((l) => l?.entityType === "SI" && l?.entityId);
     return fromLinks ? String(fromLinks.entityId) : "SI-UNKNOWN";
 }
+function buildSupplierFollowupDraftText(params) {
+    const invoiceId = String(params.invoiceId || "").trim();
+    const shipmentId = String(params.shipmentId || "").trim();
+    const siId = String(params.siId || "").trim();
+    const subject = invoiceId || shipmentId || siId || "該当案件";
+    const refBits = [shipmentId ? `Shipment: ${shipmentId}` : "", siId ? `SI: ${siId}` : ""].filter(Boolean);
+    const refLine = refBits.length ? `\n（${refBits.join(" / ")}）` : "";
+    return `${subject} に紐づく Packing List（PL）が未着です。${refLine}\n送付状況をご確認いただけますでしょうか。`.trim();
+}
 export function buildDraftDocuments(input, threads, links, intakeResolutions, issueMutations, actionPlans, options = {}) {
     const tList = Array.isArray(threads) ? threads.filter(Boolean) : [];
     const allLinks = Array.isArray(links) ? links.filter(Boolean) : [];
@@ -2705,6 +2723,14 @@ export function buildDraftDocuments(input, threads, links, intakeResolutions, is
                 return null;
             return resolveOperationalContext({ entityType: "Document", entityId: inv, tradeCases });
         })();
+        const supplierFollowupDraftText = (() => {
+            if (!operationalCtx || operationalCtx.plStatus !== "missing")
+                return "";
+            const inv = String(operationalCtx.invoice || primaryInvoiceLabelForThread() || "").trim();
+            const shipmentId = String(operationalCtx.shipment || "").trim();
+            const siId = String(operationalCtx.si || "").trim();
+            return buildSupplierFollowupDraftText({ invoiceId: inv, shipmentId, siId });
+        })();
         const plReplyDraftBody = (() => {
             const inv = String(operationalCtx?.invoice || primaryInvoiceLabelForThread() || "").trim();
             if (!inv)
@@ -2727,8 +2753,8 @@ export function buildDraftDocuments(input, threads, links, intakeResolutions, is
                 channel: "email",
                 to: "supplier@example.invalid",
                 subject: t.subject,
-                body: t.body,
-                status: "drafted",
+                body: supplierFollowupDraftText || t.body,
+                status: ap.status === "pending_approval" ? "pending_approval" : "drafted",
                 generatedBy,
                 generatedAt,
                 confidence: typeof ap.confidence === "number" ? ap.confidence : 0.3,
@@ -3054,13 +3080,40 @@ export function runIngestPipeline(input, options = {}) {
         : planNextActions(effectiveInput, normalizedThreads, links, intakeResolutions, issueMutations, options);
     const approvalPolicy = options.approvalPolicy ?? "low_confidence";
     const isApprovalRequired = (thread) => approvalPolicy === "all" ? true : approvalPolicy === "low_confidence" ? thread.confidence < 0.7 : false;
+    const forceApprovalForThreadIds = suppressNewOutputs
+        ? []
+        : (() => {
+            const tradeCases = Array.isArray(options.tradeCases) ? options.tradeCases.filter(Boolean) : [];
+            if (!tradeCases.length)
+                return [];
+            const out = [];
+            for (const thread of normalizedThreads) {
+                if (!thread)
+                    continue;
+                if (thread.intent !== "missing_document_check" && thread.intent !== "document_status_inquiry")
+                    continue;
+                const threadId = String(thread.id || "").trim();
+                if (!threadId)
+                    continue;
+                const threadLinks = links.filter((l) => l.threadId === threadId);
+                const doc = threadLinks.find((l) => l.entityType === "Document" && l.entityId) || null;
+                if (!doc)
+                    continue;
+                const ctx = resolveOperationalContext({ entityType: "Document", entityId: String(doc.entityId), tradeCases });
+                if (!ctx || ctx.plStatus !== "missing")
+                    continue;
+                out.push(threadId);
+            }
+            return out;
+        })();
+    const forcedApprovalSet = new Set(forceApprovalForThreadIds);
     const actionPlans = suppressNewOutputs
         ? []
         : actionPlansBase.map((ap) => {
             const thread = normalizedThreads.find((t) => t.id === ap.threadId);
             if (!thread)
                 return ap;
-            const status = isApprovalRequired(thread) ? "pending_approval" : "planned";
+            const status = isApprovalRequired(thread) || forcedApprovalSet.has(String(thread.id || "")) ? "pending_approval" : "planned";
             return { ...ap, status };
         });
     const intakeResolvedEvents = intakeResolutions.map((r) => {
@@ -3092,7 +3145,7 @@ export function runIngestPipeline(input, options = {}) {
     const drafts = suppressNewOutputs
         ? []
         : buildDraftDocuments(effectiveInput, normalizedThreads, links, intakeResolutions, issueMutations, actionPlans, options);
-    const activityEventsBase = buildActivityEvents(effectiveInput, normalizedThreads, links, pipelineOccurredAt, suppressNewOutputs ? { ...options, approvalPolicy: "none" } : options, stateTransitionCandidates, stateTransitionNotices);
+    const activityEventsBase = buildActivityEvents(effectiveInput, normalizedThreads, links, pipelineOccurredAt, suppressNewOutputs ? { ...options, approvalPolicy: "none" } : { ...options, forceApprovalForThreadIds }, stateTransitionCandidates, stateTransitionNotices);
     const contextResolvedEvent = matchedPendingClarification && resolvedLabel
         ? [
             {
@@ -3172,6 +3225,46 @@ export function runIngestPipeline(input, options = {}) {
             },
         ];
     })();
+    const operationalResponderEvents = (() => {
+        const tradeCases = Array.isArray(options.tradeCases) ? options.tradeCases.filter(Boolean) : [];
+        if (!tradeCases.length)
+            return [];
+        const listDrafts = Array.isArray(drafts) ? drafts.filter(Boolean) : [];
+        const out = [];
+        for (const thread of normalizedThreads) {
+            if (!thread)
+                continue;
+            if (thread.intent !== "missing_document_check" && thread.intent !== "document_status_inquiry")
+                continue;
+            const threadId = String(thread.id || "").trim();
+            if (!threadId)
+                continue;
+            const threadLinks = links.filter((l) => l.threadId === threadId);
+            const directInv = Array.isArray(thread?.extractedEntities?.invoiceIds) ? thread.extractedEntities.invoiceIds.find(Boolean) : "";
+            const invFromLinks = threadLinks.find((l) => l?.entityType === "Document" && l?.entityId) || null;
+            const invoiceId = String(directInv || (invFromLinks ? invFromLinks.entityId : "") || "").trim();
+            const ctx = invoiceId ? resolveOperationalContext({ entityType: "Document", entityId: invoiceId, tradeCases }) : null;
+            if (!ctx || ctx.plStatus !== "missing")
+                continue;
+            const pendingEmailDraft = listDrafts.find((d) => String(d?.threadId || "") === threadId && String(d?.channel || "") === "email" && String(d?.status || "") === "pending_approval");
+            if (!pendingEmailDraft)
+                continue;
+            out.push({
+                id: ingestStableId("ACT", `${input.id}:${threadId}:operational_responder:pl_missing_supplier_followup`),
+                type: "operational_responder",
+                occurredAt: pipelineOccurredAt,
+                sequence: ACTIVITY_SEQUENCE.operational_responder,
+                title: "PL未着を確認",
+                description: "PL未着 確認返信案を生成しました",
+                sourceRawInputId: input.id,
+                threadId,
+                linkedEntities: threadLinks,
+                status: "ok",
+                actor,
+            });
+        }
+        return out;
+    })();
     return {
         rawInput: { ...effectiveInput, status: "linked" },
         contextResolution,
@@ -3184,6 +3277,7 @@ export function runIngestPipeline(input, options = {}) {
             ...clarificationMatchedEvent,
             ...activityEventsBase,
             ...intakeResolvedEvents,
+            ...operationalResponderEvents,
             ...draftCreatedEvents,
             ...actionPlannedEvents,
             ...issueUpdatedEvents,
