@@ -254,6 +254,14 @@ async function postSlackReply({ channel, threadTs, text }) {
   }
 }
 
+function slackErrorJaFromSlackApiError(errorRaw) {
+  const err = String(errorRaw || "").trim();
+  if (!err) return "unknown_error";
+  if (err === "missing_token") return "SLACK_BOT_TOKEN未設定";
+  if (err === "missing_channel_or_text") return "channel/thread/text不足";
+  return err;
+}
+
 /**
  * Slack Events API (hackathon demo)
  * TODO(security): verify Slack signing secret (X-Slack-Signature / X-Slack-Request-Timestamp).
@@ -1398,6 +1406,75 @@ const server = http.createServer(async (req, res) => {
       const approvalType = String(updated?.type || "").trim();
       const siNumber = String(updated?.metadata?.siNumber || "").trim().toUpperCase();
 
+      if (approvalType === "slack_clarification") {
+        const channel = String(updated?.metadata?.channel || "").trim();
+        const threadTs = String(updated?.metadata?.threadTs || "").trim();
+        const replyText = String(updated?.metadata?.replyText || "").trim();
+
+        console.log("[slack clarification approve]", {
+          approvalId: id,
+          channel,
+          threadTs,
+          hasToken: Boolean(String(process.env.SLACK_BOT_TOKEN || "").trim()),
+        });
+
+        const replyResult = await postSlackReply({ channel, threadTs, text: replyText }).catch((e) => {
+          console.warn("[slack clarification approve] postSlackReply threw:", String(e));
+          return { ok: false, error: "exception" };
+        });
+
+        const slackSendOk = Boolean(replyResult && replyResult.ok);
+        const slackSendError = slackSendOk ? "" : slackErrorJaFromSlackApiError(replyResult?.error || "unknown_error");
+
+        const nextApproval = {
+          ...updated,
+          metadata: {
+            ...(updated?.metadata && typeof updated.metadata === "object" ? updated.metadata : {}),
+            slackSendOk,
+            slackSendError,
+          },
+          updatedAt: new Date().toISOString(),
+        };
+        upsertDemoApproval(nextApproval);
+
+        pushActivityItem({
+          id: `slack:clarification_sent:${id}:${Date.now()}`,
+          type: "aiProcessed",
+          source: "ai",
+          title: slackSendOk ? "Slack返信送信済み：対象案件確認を送信しました" : `Slack返信失敗：${slackSendError || "unknown_error"}`,
+          actor: "trade-shelf-agent",
+          occurredAt: new Date().toISOString(),
+          summary: replyText,
+          details: [
+            channel ? `channel: ${channel}` : "",
+            threadTs ? `threadTs: ${threadTs}` : "",
+            slackSendOk ? "" : `reason: ${slackSendError}`,
+          ].filter(Boolean),
+          statusKey: slackSendOk ? "success" : "failed",
+          linked: [],
+          links: [],
+        });
+
+        if (slackSendOk) {
+          pushActivityItem({
+            id: `slack:clarification_waiting:${id}:${Date.now()}`,
+            type: "clarification_waiting",
+            source: "ai",
+            title: "Slack返答待ち",
+            actor: "trade-shelf-agent",
+            occurredAt: new Date().toISOString(),
+            summary: "Slack返答待ち",
+            details: [],
+            statusKey: "processing",
+            linked: [],
+            links: [],
+          });
+        }
+
+        sendJson(res, 200, { ok: slackSendOk, approval: nextApproval, tradeCase: null, slack: replyResult });
+        return;
+      }
+
       if (approvalType === "state_update") {
         const suggestedStatus = String(updated?.metadata?.suggestedStatus || "").trim();
         const list = Array.isArray(slackState.demoTradeCases) ? slackState.demoTradeCases : [];
@@ -1679,96 +1756,53 @@ const server = http.createServer(async (req, res) => {
               const now = new Date().toISOString();
               const thread = threadTs || ts;
 
-              const replyResult = await postSlackReply({
-                channel: channelId,
-                threadTs: thread,
-                text: clarificationText,
-              }).catch((e) => {
-                console.warn("[slack] postSlackReply threw:", String(e));
-                return { ok: false, error: "exception" };
-              });
-
-              const slackSendOk = Boolean(replyResult && replyResult.ok);
-              const slackSendErrorRaw = !slackSendOk ? String(replyResult?.error || "unknown_error") : "";
-              const slackSendError =
-                slackSendErrorRaw === "missing_token"
-                  ? "SLACK_BOT_TOKEN未設定"
-                  : slackSendErrorRaw === "missing_channel_or_text"
-                    ? "channel/thread/text不足"
-                    : slackSendErrorRaw;
-
-              // Keep a dedicated "確認待ち" item in server-backed demo approvals
-              // so the Approval Center does not stay at 0 when we asked for info.
+              // Keep a dedicated "確認待ち" item in server-backed demo approvals.
+              // Slack reply must be sent on server-side approve (NOT here).
               try {
                 const approval = {
                   id: `APR-DEMO-CLARIFY-${eventId || ts}-${Date.now()}`,
-                  type: "slack_clarification_waiting",
+                  type: "slack_clarification",
                   status: "pending",
                   createdAt: now,
                   updatedAt: now,
                   title: "営業確認待ち（Slack）",
-                  description: `Slack返答待ち：${clarificationText.replace(/\n/g, " ")}`,
+                  description: `Slack確認返信（承認待ち）：${clarificationText.replace(/\n/g, " ")}`,
                   metadata: {
                     source: "slack",
                     channel: channelId,
                     threadTs: thread,
+                    replyText: clarificationText,
                     requester: user,
                     originalMessage: text,
                     clarificationQuestion: clarificationText,
-                    slackSendOk,
-                    slackSendError,
+                    slackSendOk: false,
+                    slackSendError: "",
                   },
                 };
                 upsertDemoApproval(approval);
+
+                pushActivityItem({
+                  id: `slack:clarification_pending:${approval.id}:${Date.now()}`,
+                  type: "approval_required",
+                  source: "ai",
+                  title: "承認待ち：Slack確認返信の送信を承認してください",
+                  actor: "trade-shelf-agent",
+                  occurredAt: now,
+                  summary: clarificationText,
+                  details: [
+                    `approvalId: ${approval.id}`,
+                    channel ? `channel: ${channel}` : "",
+                    thread ? `threadTs: ${thread}` : "",
+                  ].filter(Boolean),
+                  statusKey: "awaitingApproval",
+                  linked: [],
+                  links: [],
+                });
               } catch (e) {
                 console.warn("[demo] failed to enqueue slack clarification waiting approval:", String(e));
               }
 
-              pushActivityItem({
-                id: `slack:clarification_required:${eventId || ts}:${Date.now()}`,
-                type: "clarification_required",
-                source: "ai",
-                title: slackSendOk ? "確認依頼送信：Slackへ確認返信を送信しました" : `Slack返信失敗：${slackSendError || "unknown_error"}`,
-                actor: "trade-shelf-agent",
-                occurredAt: now,
-                summary: clarificationText,
-                details: [
-                  clarificationText,
-                  channel ? `channel: ${channel}` : "",
-                  slackSendOk ? "" : `reason: ${slackSendError}`,
-                ].filter(Boolean),
-                statusKey: slackSendOk ? "processing" : "failed",
-                linked: [],
-                links: [],
-              });
-
-              pushActivityItem({
-                id: `slack:clarification_waiting:working:${eventId || ts}:${Date.now()}`,
-                type: "clarification_waiting",
-                source: "ai",
-                title: "営業確認中",
-                actor: "trade-shelf-agent",
-                occurredAt: now,
-                summary: "営業確認中",
-                details: [],
-                statusKey: "processing",
-                linked: [],
-                links: [],
-              });
-
-              pushActivityItem({
-                id: `slack:clarification_waiting:slack:${eventId || ts}:${Date.now()}`,
-                type: "clarification_waiting",
-                source: "ai",
-                title: "Slack返答待ち",
-                actor: "trade-shelf-agent",
-                occurredAt: now,
-                summary: "Slack返答待ち",
-                details: [],
-                statusKey: "processing",
-                linked: [],
-                links: [],
-              });
+              return;
             }
 
             const rawInput = {

@@ -775,6 +775,7 @@ function normalizeServerDemoApprovalItem(item) {
       threadTs: String(metadata.threadTs || "").trim(),
       requester: String(metadata.requester || "").trim(),
       clarificationQuestion: String(metadata.clarificationQuestion || "").trim(),
+      replyText: String(metadata.replyText || "").trim(),
       slackSendOk: Boolean(metadata.slackSendOk),
       slackSendError: String(metadata.slackSendError || "").trim(),
     },

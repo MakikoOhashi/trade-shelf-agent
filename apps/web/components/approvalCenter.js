@@ -236,12 +236,20 @@ export function createApprovalCenterRenderer(deps) {
           const status = String(meta.suggestedStatus || "").trim();
           const source = String(meta.source || "").trim();
           const reason = String(meta.reason || "").trim();
+          const channel = String(meta.channel || "").trim();
+          const threadTs = String(meta.threadTs || "").trim();
+          const clarificationQuestion = String(meta.clarificationQuestion || "").trim();
+          const replyText = String(meta.replyText || "").trim();
 
           const lines = [
             source ? `送信元: ${source}` : "",
+            channel ? `channel: ${channel}` : "",
+            threadTs ? `threadTs: ${threadTs}` : "",
             status ? `推定ステータス: ${statusLabelJa(status)}` : "",
             eta ? `推定ETA: ${eta}` : "",
             reason ? `理由: ${reason}` : "",
+            clarificationQuestion ? `確認内容: ${clarificationQuestion.replace(/\n/g, " ")}` : "",
+            replyText && replyText !== clarificationQuestion ? `返信文面: ${replyText.replace(/\n/g, " ")}` : "",
             type ? `種別: ${type}` : "",
           ]
             .filter(Boolean)
@@ -485,7 +493,7 @@ export function createApprovalCenterRenderer(deps) {
       const slackClarificationWaiting = (() => {
         const approvals = Array.isArray(state?.demoApprovals) ? state.demoApprovals.filter(Boolean) : [];
         const pending = approvals.filter(
-          (x) => String(x?.status || "") === "pending" && String(x?.type || "") === "slack_clarification_waiting",
+          (x) => String(x?.status || "") === "pending" && String(x?.type || "") === "slack_clarification",
         );
         return pending.map((ap) => {
           const meta = ap?.metadata && typeof ap.metadata === "object" ? ap.metadata : {};
@@ -493,18 +501,14 @@ export function createApprovalCenterRenderer(deps) {
           const question = String(meta.clarificationQuestion || "").trim() || "対象のSIまたはShipmentを教えてください。";
           const original = String(meta.originalMessage || "").trim();
           const updatedAt = String(ap?.updatedAt || ap?.createdAt || "") || nowIso();
-          const slackSendOk = Boolean(meta.slackSendOk);
-          const slackSendError = String(meta.slackSendError || "").trim();
           const status = "awaiting_clarification";
-          const lastMessageText = slackSendOk
-            ? question
-            : `Slack返信失敗：${slackSendError || "unknown_error"}`;
+          const lastMessageText = `承認待ち: ${question.replace(/\n/g, " ")}`;
 
           return {
             id: `demo-clarify:${String(ap?.id || shortId())}`,
             requesterName: requester,
             sourceChannel: "slack",
-            title: "不足情報の確認待ち（Slack）",
+            title: "不足情報の確認待ち（Slack / 承認必要）",
             status,
             updatedAt,
             messageCount: 1,
@@ -614,7 +618,7 @@ export function createApprovalCenterRenderer(deps) {
       const rawPreIssueItems = [
         ...replyCandidates.map((item) => ({ ...item, __source: "replyCandidates" })),
         ...intakeCandidates.map((item) => ({ ...item, __source: "intakeCandidates" })),
-        ...slackClarificationWaiting.map((item) => ({ ...item, __source: "demoApprovals(slack_clarification_waiting)" })),
+        ...slackClarificationWaiting.map((item) => ({ ...item, __source: "demoApprovals(slack_clarification)" })),
       ];
 
       if (DEBUG_PRE_ISSUE) {
