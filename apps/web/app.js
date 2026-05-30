@@ -397,6 +397,66 @@ function openSiWorkspace(tradeCaseId) {
   openDocumentWorkspace(tc.id, "si", siNo || "-", "si");
 }
 
+function findStateTransitionCandidateById(candidateId) {
+  const id = String(candidateId || "").trim();
+  if (!id) return null;
+  const list = Array.isArray(state.latestIngestResult?.stateTransitionCandidates)
+    ? state.latestIngestResult.stateTransitionCandidates.filter(Boolean)
+    : [];
+  return list.find((c) => c && String(c.id || "").trim() === id) || null;
+}
+
+function resolveTradeCaseForStateTransitionCandidate(candidate) {
+  const cand = candidate && typeof candidate === "object" ? candidate : null;
+  if (!cand) return null;
+  const entityType = String(cand.entityType || "").trim();
+  const entityId = String(cand.entityId || "").trim();
+  if (!entityType || !entityId) return null;
+
+  if (entityType === "TradeCase") return getTradeCaseById(entityId);
+
+  const list = Array.isArray(state.tradeCases) ? state.tradeCases.filter(Boolean) : [];
+  if (!list.length) return null;
+
+  if (entityType === "Shipment") {
+    return list.find((c) => String(c?.shipmentEntity?.id || "").trim() === entityId) || null;
+  }
+  if (entityType === "SI") {
+    return (
+      list.find((c) => String(c?.siEntity?.id || "").trim() === entityId) ||
+      list.find((c) => String(c?.siEntity?.siNo || "").trim() === entityId) ||
+      null
+    );
+  }
+
+  return (
+    list.find((c) => String(c?.shipmentEntity?.id || "").trim() === entityId) ||
+    list.find((c) => String(c?.siEntity?.id || "").trim() === entityId) ||
+    list.find((c) => String(c?.siEntity?.siNo || "").trim() === entityId) ||
+    null
+  );
+}
+
+function openWorkspaceForStateTransitionCandidate(candidateId) {
+  const cand = findStateTransitionCandidateById(candidateId);
+  if (!cand) return false;
+  const tc = resolveTradeCaseForStateTransitionCandidate(cand);
+  if (!tc || !tc.id) return false;
+
+  const entityType = String(cand.entityType || "").trim();
+  if (entityType === "Shipment") {
+    openShipmentWorkspace(tc.id);
+    return true;
+  }
+  if (entityType === "SI") {
+    openSiWorkspace(tc.id);
+    return true;
+  }
+
+  openDocumentWorkspace(tc.id, "case", tc.id, "shipment");
+  return true;
+}
+
 function normalizeInvoiceNo(input) {
   const s = String(input || "").trim();
   if (!s) return "";
@@ -2162,55 +2222,7 @@ function enqueueAgentStreamToastFromActivityEvent(ev) {
   const mapped = AGENT_STREAM_LABELS[rawType] || "処理を継続中...";
   const desc = clipSingleLine(e.description || e.summary || "", 64);
   const nextLine = desc || mapped;
-  const demoApprovalId = String(e.demoApprovalId || "").trim() || null;
   const prev = state.agentStreamToast && typeof state.agentStreamToast === "object" ? state.agentStreamToast : null;
-  const prevApprovalContext =
-    prev && prev.approvalContext && typeof prev.approvalContext === "object" ? prev.approvalContext : null;
-  const prevStatus = prev ? String(prev.status || "") : "";
-  const prevDebug = prev && prev.debug && typeof prev.debug === "object" ? prev.debug : null;
-
-  const approvalContextFromEvent = (() => {
-    // "latest 1 item only": when an approval-like event arrives, show a CTA in toast.
-    if (rawType === "approval_added") {
-      if (demoApprovalId) return { kind: "demoApproval", id: demoApprovalId };
-      const apId = String(e.threadId || "").trim();
-      if (apId) return { kind: "actionPlan", id: apId };
-      return null;
-    }
-
-    // Treat approval_required as a supplementary log; do not force a CTA unless we have a concrete demo approval id.
-    if (rawType === "approval_required") {
-      if (demoApprovalId) return { kind: "demoApproval", id: demoApprovalId };
-      return null;
-    }
-
-    // Prefer the attached candidate payload from state_transition_candidate_detected.
-    if (rawType === "state_transition_candidate_detected") {
-      const cand = e.stateTransitionCandidate && typeof e.stateTransitionCandidate === "object" ? e.stateTransitionCandidate : null;
-      const candId = cand && cand.id != null ? String(cand.id).trim() : "";
-      if (candId) return { kind: "state_transition", id: candId, candidate: cand };
-
-      // Backward compatible fallback: derive candidate id from event id.
-      const evId = String(e.id || "").trim();
-      const candidateId = evId.startsWith("ACT-") ? evId.slice(4) : evId;
-      if (candidateId) return { kind: "state_transition", id: candidateId };
-      return null;
-    }
-
-    return null;
-  })();
-
-  const approvalContext = (() => {
-    if (approvalContextFromEvent) return approvalContextFromEvent;
-
-    // Keep the state-transition CTA sticky so that a later approval_required does not downgrade the toast back to processing.
-    const prevKind = prevApprovalContext ? String(prevApprovalContext.kind || "") : "";
-    if (rawType === "approval_required" && prevStatus === "approval_pending" && prevKind === "state_transition" && prevApprovalContext?.id) {
-      return prevApprovalContext;
-    }
-
-    return null;
-  })();
   const prevLines = Array.isArray(prev?.lines) ? prev.lines.filter(Boolean).map((x) => String(x)) : [];
   const merged = [nextLine, ...prevLines].filter(Boolean);
   const deduped = [];
@@ -2221,17 +2233,14 @@ function enqueueAgentStreamToastFromActivityEvent(ev) {
   state.agentStreamToast = {
     id: "agent-status-panel",
     header: "Trade Shelf Agent",
-    status: approvalContext ? "approval_pending" : "processing",
+    status: "processing",
     lines: deduped,
-    approvalContext: approvalContext || null,
+    approvalContext: null,
     debug: {
-      rawType:
-        approvalContext && approvalContext === prevApprovalContext && prevDebug && prevDebug.rawType
-          ? String(prevDebug.rawType)
-          : rawType,
-      demoApprovalId,
-      approvalContextKind: approvalContext?.kind || null,
-      approvalContextId: approvalContext?.id || null,
+      rawType,
+      demoApprovalId: null,
+      approvalContextKind: null,
+      approvalContextId: null,
     },
     dismissed: false, // re-open on new activity
   };
@@ -3272,29 +3281,46 @@ function renderAgentStreamToast() {
   const t = state.agentStreamToast || null;
   if (!t || t.dismissed) return "";
   const header = String(t.header || "Trade Shelf Agent").trim() || "Trade Shelf Agent";
-  const statusKey = String(t.status || "idle");
+  const latestStateTransitionCandidate = (() => {
+    const list = Array.isArray(state.latestIngestResult?.stateTransitionCandidates)
+      ? state.latestIngestResult.stateTransitionCandidates.filter(Boolean)
+      : [];
+    return list.length ? list[0] : null;
+  })();
+  const statusKey = latestStateTransitionCandidate ? "approval_pending" : String(t.status || "idle");
   const statusLabel = statusKey === "approval_pending" ? "承認待ち" : statusKey === "processing" ? "処理中" : "待機中";
   const lines = Array.isArray(t.lines) ? t.lines.filter(Boolean).map((x) => String(x)) : [];
-  const bodyHtml =
-    statusKey === "idle"
-      ? `<div class="agent-stream-toast__body">Slack / Email / Teams の更新を監視しています</div>`
-      : `<div class="agent-stream-toast__body">${lines
-          .slice(0, 3)
-          .map((line) => `<div class="agent-stream-toast__line">${escapeHtml(line)}</div>`)
-          .join("")}</div>`;
+  const bodyHtml = (() => {
+    if (latestStateTransitionCandidate) {
+      const c = latestStateTransitionCandidate;
+      const candidateId = String(c?.id || "").trim();
+      const entityId = String(c?.entityId || "").trim();
+      const fromState = String(c?.fromState || "").trim();
+      const toState = String(c?.toState || "").trim();
+      const transition = `${fromState || "-"} → ${toState || "-"}`;
+      return `<div class="agent-stream-toast__body">
+        ${entityId ? `<div class="agent-stream-toast__line mono">${escapeHtml(entityId)}</div>` : ""}
+        <div class="agent-stream-toast__line">${escapeHtml(transition)}</div>
+        <div class="agent-stream-toast__line">棚の状態を更新しますか？</div>
+        ${candidateId ? `<div class="agent-stream-toast__line muted">candidate: <span class="mono">${escapeHtml(candidateId)}</span></div>` : ""}
+      </div>`;
+    }
+    if (statusKey === "idle") return `<div class="agent-stream-toast__body">Slack / Email / Teams の更新を監視しています</div>`;
+    return `<div class="agent-stream-toast__body">${lines
+      .slice(0, 3)
+      .map((line) => `<div class="agent-stream-toast__line">${escapeHtml(line)}</div>`)
+      .join("")}</div>`;
+  })();
 
-  const approvalContext = t.approvalContext && typeof t.approvalContext === "object" ? t.approvalContext : null;
-  const actionsHtml =
-    statusKey === "approval_pending" && approvalContext && approvalContext.id
-      ? `<div class="agent-stream-toast__actions" role="group" aria-label="Approval actions">
-          <button class="btn btn--primary btn--small" type="button" data-agent-stream-approve="1">承認する</button>
-          ${
-            approvalContext.kind === "state_transition" || approvalContext.kind === "stateTransitionCandidate"
-              ? `<button class="btn btn--ghost btn--small" type="button" data-agent-stream-open-approval-center="1">承認センターで確認</button>`
-              : `<button class="btn btn--ghost btn--small" type="button" data-agent-stream-later="1">後で確認</button>`
-          }
-        </div>`
-      : "";
+  const actionsHtml = (() => {
+    if (!latestStateTransitionCandidate) return "";
+    const candidateId = String(latestStateTransitionCandidate?.id || "").trim();
+    if (!candidateId) return "";
+    return `<div class="agent-stream-toast__actions" role="group" aria-label="State transition candidate actions">
+      <button class="btn btn--primary btn--small" type="button" data-agent-stream-approve-state-transition="${escapeHtml(candidateId)}">承認する</button>
+      <button class="btn btn--ghost btn--small" type="button" data-agent-stream-open-state-transition-details="${escapeHtml(candidateId)}">詳細を見る</button>
+    </div>`;
+  })();
 
   const debugHtml = (() => {
     // Temporary wiring debug (hideable): localStorage key `tradeShelfAgent:agentStreamToastDebug` set to "0" to disable.
@@ -3310,8 +3336,8 @@ function renderAgentStreamToast() {
     const d = t.debug && typeof t.debug === "object" ? t.debug : {};
     const rawType = String(d.rawType || "");
     const demoApprovalId = d.demoApprovalId == null ? "null" : String(d.demoApprovalId);
-    const hasApprovalContext = approvalContext && approvalContext.id ? "yes" : "no";
-    const approvalId = approvalContext && approvalContext.id ? String(approvalContext.id) : "null";
+    const hasApprovalContext = "no";
+    const approvalId = "null";
     return `<div class="agent-stream-toast__debug nt-muted nt-mono" style="font-size:11px;line-height:1.2;padding-top:6px;">
       <div>debug:</div>
       <div>type=${escapeHtml(rawType || "n/a")}</div>
@@ -9059,74 +9085,49 @@ function setupNewTop() {
       return;
     }
 
-    const agentStreamApproveEl = target.closest && target.closest("[data-agent-stream-approve]");
-    if (agentStreamApproveEl) {
+    const agentStreamApproveStateTransitionEl = target.closest && target.closest("[data-agent-stream-approve-state-transition]");
+    if (agentStreamApproveStateTransitionEl) {
       e.preventDefault();
       e.stopPropagation();
-      const toast = state.agentStreamToast && typeof state.agentStreamToast === "object" ? state.agentStreamToast : null;
-      const ctx = toast && toast.approvalContext && typeof toast.approvalContext === "object" ? toast.approvalContext : null;
-      const kind = ctx ? String(ctx.kind || "") : "";
-      const id = ctx ? String(ctx.id || "").trim() : "";
-      if (!id) return;
+      const candidateId = String(agentStreamApproveStateTransitionEl.getAttribute("data-agent-stream-approve-state-transition") || "").trim();
+      if (!candidateId) return;
 
       const setToastResult = ({ ok, message }) => {
         const prev = state.agentStreamToast && typeof state.agentStreamToast === "object" ? state.agentStreamToast : {};
         state.agentStreamToast = {
           ...prev,
           status: ok ? "processing" : "approval_pending",
-          approvalContext: ok ? null : prev.approvalContext || null,
+          approvalContext: null,
           lines: [message, ...(Array.isArray(prev.lines) ? prev.lines : [])].filter(Boolean).slice(0, 3),
           dismissed: false,
         };
       };
 
       try {
-        if (kind === "demoApproval") {
-          (async () => {
-            const res = await approveDemoApprovalItem(id);
-            if (res && res.ok) setToastResult({ ok: true, message: "承認しました" });
-            else setToastResult({ ok: false, message: "承認に失敗しました" });
-            renderApp();
-          })();
-          return;
-        }
-        if (kind === "state_transition" || kind === "stateTransitionCandidate") {
-          const res = applyStateTransitionCandidate(id);
-          if (res && res.ok) setToastResult({ ok: true, message: "承認しました" });
-          else setToastResult({ ok: false, message: "承認に失敗しました" });
-          renderApp();
-          return;
-        }
-        // default: ActionPlan approval flow (existing approvals pipeline)
-        const guardApprovalClick = (idLike, action, { description } = {}) => {
-          const apId = findActionPlanIdFromAnyId(idLike);
-          if (!apId) return { ok: false, ignored: true, reason: "missing_action_plan" };
-          const entry = state.approvalsByActionPlanId?.[apId] || null;
-          const fallbackPlan =
-            (Array.isArray(state.latestIngestResult?.actionPlans) ? state.latestIngestResult.actionPlans : []).find(
-              (p) => p && String(p.id || "") === apId,
-            ) || null;
-          const current = String((entry && entry.status) || (fallbackPlan && fallbackPlan.status) || "planned");
-          const available = getAvailableApprovalActions(current);
-          if (!available[String(action)])
-            return { ok: false, ignored: true, reason: `unavailable:${current}->${String(action)}` };
-          const res = applyApprovalAction(apId, action, { description });
-          return { ok: res.ok, ignored: false, res };
-        };
-
-        const attempt = guardApprovalClick(id, "approve");
-        if (!attempt.ok) {
-          setToastResult({ ok: false, message: "承認に失敗しました" });
-          renderApp();
-          return;
-        }
-        setToastResult({ ok: true, message: "承認しました" });
+        const res = applyStateTransitionCandidate(candidateId);
+        if (res && res.ok) setToastResult({ ok: true, message: "承認しました" });
+        else setToastResult({ ok: false, message: "承認に失敗しました" });
         renderApp();
       } catch {
         const prev = state.agentStreamToast && typeof state.agentStreamToast === "object" ? state.agentStreamToast : {};
         state.agentStreamToast = { ...prev, status: "approval_pending", lines: ["承認に失敗しました", ...(prev.lines || [])].slice(0, 3) };
         renderApp();
       }
+      return;
+    }
+
+    const agentStreamOpenStateTransitionDetailsEl =
+      target.closest && target.closest("[data-agent-stream-open-state-transition-details]");
+    if (agentStreamOpenStateTransitionDetailsEl) {
+      e.preventDefault();
+      e.stopPropagation();
+      const candidateId = String(
+        agentStreamOpenStateTransitionDetailsEl.getAttribute("data-agent-stream-open-state-transition-details") || "",
+      ).trim();
+      if (!candidateId) return;
+      openWorkspaceForStateTransitionCandidate(candidateId);
+      closeAgentStreamToast();
+      renderApp();
       return;
     }
 
