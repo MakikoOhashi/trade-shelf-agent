@@ -207,6 +207,47 @@ function sendJson(res, statusCode, payload) {
   res.end(body);
 }
 
+async function postSlackReply({ channel, threadTs, text }) {
+  const token = String(process.env.SLACK_BOT_TOKEN || "").trim();
+  const channelId = String(channel || "").trim();
+  const messageText = String(text || "").trim();
+  const thread_ts = threadTs == null ? "" : String(threadTs).trim();
+
+  if (!token) {
+    console.warn("[slack] SLACK_BOT_TOKEN is missing; skip chat.postMessage");
+    return { ok: false, skipped: true, error: "missing_token" };
+  }
+  if (!channelId || !messageText) {
+    console.warn("[slack] missing channel or text; skip chat.postMessage");
+    return { ok: false, skipped: true, error: "missing_channel_or_text" };
+  }
+
+  try {
+    const res = await fetch("https://slack.com/api/chat.postMessage", {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json; charset=utf-8",
+      },
+      body: JSON.stringify({
+        channel: channelId,
+        text: messageText,
+        ...(thread_ts ? { thread_ts } : {}),
+      }),
+    });
+    const json = await res.json().catch(() => null);
+    const ok = !!(json && json.ok);
+    if (!ok) {
+      console.warn("[slack] chat.postMessage failed:", JSON.stringify(json || { ok: false, status: res.status }));
+      return { ok: false, error: json?.error || `http_${res.status}` };
+    }
+    return { ok: true, ts: json.ts, channel: json.channel };
+  } catch (e) {
+    console.warn("[slack] chat.postMessage error:", String(e));
+    return { ok: false, error: "network_error" };
+  }
+}
+
 /**
  * Slack Events API (hackathon demo)
  * TODO(security): verify Slack signing secret (X-Slack-Signature / X-Slack-Request-Timestamp).
@@ -1509,11 +1550,13 @@ const server = http.createServer(async (req, res) => {
           sendJson(res, 200, { ok: true, ignored: true, subtype: String(ev.subtype) });
           return;
         }
+        const channelId = String(ev.channel || "").trim();
         const channelRaw = String(ev.channel || ev.channel_name || "").trim();
         const channel = channelRaw ? (channelRaw.startsWith("#") ? channelRaw : `#${channelRaw}`) : "#unknown";
         const user = String(ev.user || ev.username || "unknown").trim() || "unknown";
         const text = String(ev.text || "").trim();
         const ts = String(ev.ts || body.event_time || Date.now()).trim();
+        const threadTs = String(ev.thread_ts || ts || "").trim();
 
         const occurredAt = (() => {
           const n = Number(ts);
@@ -1618,6 +1661,66 @@ const server = http.createServer(async (req, res) => {
 
         Promise.resolve()
           .then(async () => {
+            // If no SHP/SI is present, ask the requester to specify which shipment they mean.
+            const hasSi = extractSiNumbersFromText(text).length > 0;
+            const hasShipment = /\bSHP-\d{4}-\d{3}\b/i.test(text);
+            const needsClarification = !hasSi && !hasShipment;
+
+            if (needsClarification) {
+              const clarificationText = "どの出荷の件でしょうか？\nSHP番号またはSI番号を教えてください。";
+
+              postSlackReply({
+                channel: channelId,
+                threadTs: threadTs || ts,
+                text: clarificationText,
+              }).catch(() => {
+                // warnings are already logged in helper
+              });
+
+              const now = new Date().toISOString();
+              pushActivityItem({
+                id: `slack:clarification_required:${eventId || ts}:${Date.now()}`,
+                type: "clarification_required",
+                source: "ai",
+                title: "確認依頼送信：対象案件確認をSlackへ返信",
+                actor: "trade-shelf-agent",
+                occurredAt: now,
+                summary: clarificationText,
+                details: [clarificationText, channel ? `channel: ${channel}` : ""].filter(Boolean),
+                statusKey: "processing",
+                linked: [],
+                links: [],
+              });
+
+              pushActivityItem({
+                id: `slack:clarification_waiting:working:${eventId || ts}:${Date.now()}`,
+                type: "clarification_waiting",
+                source: "ai",
+                title: "営業確認中",
+                actor: "trade-shelf-agent",
+                occurredAt: now,
+                summary: "営業確認中",
+                details: [],
+                statusKey: "processing",
+                linked: [],
+                links: [],
+              });
+
+              pushActivityItem({
+                id: `slack:clarification_waiting:slack:${eventId || ts}:${Date.now()}`,
+                type: "clarification_waiting",
+                source: "ai",
+                title: "Slack返答待ち",
+                actor: "trade-shelf-agent",
+                occurredAt: now,
+                summary: "Slack返答待ち",
+                details: [],
+                statusKey: "processing",
+                linked: [],
+                links: [],
+              });
+            }
+
             const rawInput = {
               id: `slack-${eventId || ts || Date.now()}`,
               source: "slack",
