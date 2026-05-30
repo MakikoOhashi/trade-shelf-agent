@@ -674,6 +674,7 @@ export type OperationalThread = {
   title: string;
   intent:
     | "missing_document_check"
+    | "document_status_inquiry"
     | "eta_change"
     | "quantity_mismatch"
     | "shipment_status_check"

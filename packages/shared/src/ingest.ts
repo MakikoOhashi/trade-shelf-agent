@@ -699,6 +699,8 @@ function intentLabel(intent: OperationalThread["intent"]) {
   switch (intent) {
     case "missing_document_check":
       return "書類未着確認";
+    case "document_status_inquiry":
+      return "書類状況問い合わせ";
     case "shipment_status_check":
       return "出荷ステータス確認";
     case "eta_change":
@@ -755,6 +757,9 @@ export function planNextActions(
         const types = thread.extractedEntities?.documentTypes ?? [];
         if (docHasCore(types)) return ["supplier_confirmation_required", "email_required"];
         return ["human_review_only"];
+      }
+      case "document_status_inquiry": {
+        return ["supplier_confirmation_required", "email_required"];
       }
       case "quantity_mismatch":
         return ["supplier_confirmation_required", "email_required"];
@@ -825,6 +830,7 @@ export function classifyRawInput(input: RawInput): OperationalThread[] {
     return v.startsWith("SI-") ? v : "";
   };
   const siIds = Array.from(new Set((text.match(/SI-\d{4}-\d{3}|SI-\d{3}/gi) || []).map(normalizeSi).filter(Boolean)));
+  const { invoiceIds } = extractEntityIdsFromText(text);
 
   const threads: OperationalThread[] = [];
 
@@ -849,15 +855,20 @@ export function classifyRawInput(input: RawInput): OperationalThread[] {
     });
   }
 
-  if (/PL|packing\s*list|パッキング/i.test(text)) {
+  const hasPlKeyword = /(?:\bPL\b|packing\s*list|パッキングリスト|パッキング)/i.test(text);
+  const hasInquiryExpression =
+    /(きましたか|来ましたか|届(?:い|き)た|届いて|未着|ありますか|確認|status|arrived|received|\?)/i.test(text);
+  if (hasPlKeyword) {
+    const intent = hasInquiryExpression ? ("document_status_inquiry" as const) : ("missing_document_check" as const);
     addThread({
       id: `${input.id}-thr-${String(threads.length + 1).padStart(3, "0")}`,
-      title: "PL未着確認",
-      intent: "missing_document_check",
-      summary: "PLの未着状況を確認する依頼",
+      title: hasInquiryExpression ? "PL状況確認" : "PL未着確認",
+      intent,
+      summary: hasInquiryExpression ? "PL到着/未着状況の問い合わせ" : "PLの未着状況を確認する依頼",
       extractedEntities: {
         shipmentIds,
         siIds: Array.from(siIds),
+        invoiceIds: Array.from(invoiceIds),
         documentTypes: ["PL"],
       },
       confidence: 0.82,
@@ -930,6 +941,10 @@ export function resolveIntake(
   const text = String(input.rawText || "");
 
   const containsStatusQueryWords = /状況|どうなってる|教えて|確認して|ステータス/i.test(text);
+  const containsPlStatusQueryWords =
+    /(?:\bPL\b|packing\s*list|パッキングリスト|パッキング).*(きましたか|来ましたか|届(?:い|き)た|届いて|未着|ありますか|確認|status|arrived|received)/i.test(
+      text,
+    );
   const informational = /共有|FYI|参考|念のため|取り急ぎ/i.test(text);
 
   const out: IntakeResolution[] = [];
@@ -937,6 +952,8 @@ export function resolveIntake(
   for (const thread of tList) {
     const threadLinks = allLinks.filter((l) => l.threadId === thread.id);
     const hasSiOrShipment = threadLinks.some((l) => l.entityType === "SI" || l.entityType === "Shipment");
+    const hasDocument = threadLinks.some((l) => l.entityType === "Document");
+    const firstDocument = threadLinks.find((l) => l.entityType === "Document" && l.entityId) || null;
     const primary = primaryEntityForThread(thread, threadLinks);
 
     if (thread.intent === "shipment_status_check" && hasSiOrShipment && containsStatusQueryWords) {
@@ -959,7 +976,38 @@ export function resolveIntake(
       continue;
     }
 
-    if (thread.intent === "missing_document_check" && !hasSiOrShipment) {
+    if (thread.intent === "document_status_inquiry" && !(hasSiOrShipment || hasDocument)) {
+      out.push({
+        id: intakeResolutionId(thread.id),
+        sourceRawInputId: input.id,
+        threadId: thread.id,
+        status: "needs_clarification",
+        shouldCreateIssue: false,
+        missingFields: ["SI or Shipment or Invoice"],
+        clarificationQuestion: "どのSI / Shipment / INV の件のPLでしょうか？対象番号を教えてください。",
+        reason: "PL状況の問い合わせだが対象が特定できないため",
+        confidence: typeof thread.confidence === "number" ? thread.confidence : 0.6,
+        sourceLabel,
+      } satisfies IntakeResolution);
+      continue;
+    }
+
+    if (thread.intent === "document_status_inquiry" && (hasSiOrShipment || hasDocument || containsPlStatusQueryWords)) {
+      out.push({
+        id: intakeResolutionId(thread.id),
+        sourceRawInputId: input.id,
+        threadId: thread.id,
+        status: "resolved",
+        shouldCreateIssue: false,
+        resolvedEntity: primary || (firstDocument ? { entityType: "Document", entityId: String(firstDocument.entityId) } : undefined),
+        reason: "書類状況問い合わせ（PL）として処理",
+        confidence: typeof thread.confidence === "number" ? thread.confidence : 0.6,
+        sourceLabel,
+      } satisfies IntakeResolution);
+      continue;
+    }
+
+    if (thread.intent === "missing_document_check" && !(hasSiOrShipment || hasDocument)) {
       out.push({
         id: intakeResolutionId(thread.id),
         sourceRawInputId: input.id,
@@ -1049,6 +1097,17 @@ export function linkThreadsToEntities(threads: OperationalThread[]): EntityLink[
         entityId: siId,
         confidence: thread.confidence,
         reason: "extracted SI id from classified operational thread",
+      });
+    }
+
+    for (const invoiceId of thread.extractedEntities.invoiceIds ?? []) {
+      links.push({
+        id: `link-${thread.id}-doc-${invoiceId}`,
+        threadId: thread.id,
+        entityType: "Document",
+        entityId: invoiceId,
+        confidence: thread.confidence,
+        reason: "extracted invoice id from classified operational thread",
       });
     }
 
@@ -1400,11 +1459,20 @@ export function buildDraftDocuments(
   };
 
   const emailTemplate = (intent: OperationalThread["intent"], thread: OperationalThread, threadLinks: EntityLink[]) => {
-    if (intent === "missing_document_check") {
+    const primaryInvoiceLabelForThread = () => {
+      const direct = Array.isArray(thread?.extractedEntities?.invoiceIds) ? thread.extractedEntities.invoiceIds.find(Boolean) : "";
+      if (direct) return String(direct);
+      const fromLinks = (threadLinks || []).find((l) => l?.entityType === "Document" && l?.entityId);
+      return fromLinks ? String(fromLinks.entityId) : "";
+    };
+
+    if (intent === "missing_document_check" || intent === "document_status_inquiry") {
       const si = primarySiLabelForThread(thread, threadLinks);
+      const inv = primaryInvoiceLabelForThread();
+      const targetLabel = inv || si;
       return {
-        subject: `Confirmation required: PL status for ${si}`,
-        body: `${si} の PL状況をご確認ください。\n未発行の場合は予定日をご共有ください。`,
+        subject: `Confirmation required: PL status for ${targetLabel}`,
+        body: `${targetLabel} の PL状況をご確認ください。\n未発行の場合は予定日をご共有ください。`,
       };
     }
     if (intent === "quantity_mismatch") {
@@ -1724,17 +1792,11 @@ export function runIngestPipeline(input: RawInput, options: IngestPipelineOption
 
   const links = dedupeEntityLinks([...baseLinks, ...injectedLinks]);
   let intakeResolutions = resolveIntake(effectiveInput, normalizedThreads, links, options);
-  if (isClarificationResolvedByReply) {
-    intakeResolutions = intakeResolutions.map((r) => ({
-      ...r,
-      status: "informational_only",
-      shouldCreateIssue: false,
-      missingFields: undefined,
-      clarificationQuestion: undefined,
-      statusAnswer: undefined,
-      reason: "補足返信で対象が特定できたため、確認待ちを解消しました。",
-    }));
-  }
+  const shouldAutoPlanOnClarificationReply = isClarificationResolvedByReply
+    ? normalizedThreads.some((t) => t.intent === "document_status_inquiry")
+    : false;
+  const suppressNewOutputs = isClarificationResolvedByReply && !shouldAutoPlanOnClarificationReply;
+
   const stateTransition = buildStateTransitionCandidates({
     rawInput: effectiveInput,
     threads: normalizedThreads,
@@ -1744,10 +1806,10 @@ export function runIngestPipeline(input: RawInput, options: IngestPipelineOption
   });
   const stateTransitionCandidates = stateTransition.candidates;
   const stateTransitionNotices = stateTransition.notices;
-  const issueMutations = isClarificationResolvedByReply
+  const issueMutations = suppressNewOutputs
     ? []
     : buildIssueMutations(effectiveInput, normalizedThreads, links, intakeResolutions, options);
-  const actionPlansBase = isClarificationResolvedByReply
+  const actionPlansBase = suppressNewOutputs
     ? []
     : planNextActions(effectiveInput, normalizedThreads, links, intakeResolutions, issueMutations, options);
 
@@ -1755,7 +1817,7 @@ export function runIngestPipeline(input: RawInput, options: IngestPipelineOption
   const isApprovalRequired = (thread: OperationalThread) =>
     approvalPolicy === "all" ? true : approvalPolicy === "low_confidence" ? thread.confidence < 0.7 : false;
 
-  const actionPlans: ActionPlan[] = isClarificationResolvedByReply
+  const actionPlans: ActionPlan[] = suppressNewOutputs
     ? []
     : actionPlansBase.map((ap) => {
         const thread = normalizedThreads.find((t) => t.id === ap.threadId);
@@ -1792,7 +1854,7 @@ export function runIngestPipeline(input: RawInput, options: IngestPipelineOption
     } satisfies ActivityEvent;
   });
 
-  const drafts = isClarificationResolvedByReply
+  const drafts = suppressNewOutputs
     ? []
     : buildDraftDocuments(effectiveInput, normalizedThreads, links, intakeResolutions, issueMutations, actionPlans, options);
   const activityEventsBase = buildActivityEvents(
@@ -1800,7 +1862,7 @@ export function runIngestPipeline(input: RawInput, options: IngestPipelineOption
     normalizedThreads,
     links,
     pipelineOccurredAt,
-    isClarificationResolvedByReply ? { ...options, approvalPolicy: "none" } : options,
+    suppressNewOutputs ? { ...options, approvalPolicy: "none" } : options,
     stateTransitionCandidates,
     stateTransitionNotices,
   );
