@@ -948,10 +948,15 @@ async function serveStatic(req, res) {
 async function ingestWithLlmOrMock({ rawInput, pendingClarifications }) {
   const pending = Array.isArray(pendingClarifications) ? pendingClarifications : [];
   if (!hasAzureLlmEnv()) {
-    return runMockIngest(rawInput, { pendingClarifications: pending, sourceLabel: "mock ingest" });
+    return runMockIngest(rawInput, { pendingClarifications: pending, sourceLabel: "mock ingest", tradeCases: mockTradeCases });
   }
 
-  const prelim = runIngestPipeline(rawInput, { sourceLabel: "Kimi AI分類", approvalPolicy: "all", pendingClarifications: pending });
+  const prelim = runIngestPipeline(rawInput, {
+    sourceLabel: "Kimi AI分類",
+    approvalPolicy: "all",
+    pendingClarifications: pending,
+    tradeCases: mockTradeCases,
+  });
   const contextResolution = prelim?.contextResolution || resolveContext(rawInput, { sourceLabel: "Kimi AI分類", approvalPolicy: "all" });
   if (contextResolution.status !== "resolved_enough") return prelim;
 
@@ -963,6 +968,7 @@ async function ingestWithLlmOrMock({ rawInput, pendingClarifications }) {
     sourceLabel: "Kimi AI分類",
     approvalPolicy: "all",
     pendingClarifications: pending,
+    tradeCases: mockTradeCases,
   });
 }
 

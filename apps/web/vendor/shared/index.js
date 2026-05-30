@@ -1381,6 +1381,7 @@ export function resolveCanonicalIssueLink(thread, threadLinks = [], mode = "exis
 }
 
 
+import { resolveOperationalContext } from "./relationshipResolver";
 function ingestStableId(prefix, seed) {
     let h = 2166136261;
     for (let i = 0; i < seed.length; i++) {
@@ -2690,6 +2691,31 @@ export function buildDraftDocuments(input, threads, links, intakeResolutions, is
             continue;
         const threadLinks = allLinks.filter((l) => l.threadId === ap.threadId);
         const issueId = ap.issueId || issueIdForThreadFromMutations(ap.threadId);
+        const tradeCases = Array.isArray(options.tradeCases) ? options.tradeCases.filter(Boolean) : [];
+        const primaryInvoiceLabelForThread = () => {
+            const direct = Array.isArray(thread?.extractedEntities?.invoiceIds) ? thread.extractedEntities.invoiceIds.find(Boolean) : "";
+            if (direct)
+                return String(direct);
+            const fromLinks = (threadLinks || []).find((l) => l?.entityType === "Document" && l?.entityId);
+            return fromLinks ? String(fromLinks.entityId) : "";
+        };
+        const operationalCtx = (() => {
+            const inv = primaryInvoiceLabelForThread();
+            if (!inv || !tradeCases.length)
+                return null;
+            return resolveOperationalContext({ entityType: "Document", entityId: inv, tradeCases });
+        })();
+        const plReplyDraftBody = (() => {
+            const inv = String(operationalCtx?.invoice || primaryInvoiceLabelForThread() || "").trim();
+            if (!inv)
+                return "";
+            const plSt = String(operationalCtx?.plStatus || "").trim();
+            if (plSt === "missing")
+                return `${inv} に紐づくPLは未着です。\n仕入先へ確認しますか？`;
+            if (plSt === "received")
+                return `${inv} に紐づくPLは登録済みです。`;
+            return `${inv} のPL状況を確認します。対象のShipment/SIが分かれば併せて教えてください。`;
+        })();
         if (types.includes("email_required")) {
             const t = emailTemplate(thread.intent, thread, threadLinks);
             drafts.push({
@@ -2702,6 +2728,21 @@ export function buildDraftDocuments(input, threads, links, intakeResolutions, is
                 to: "supplier@example.invalid",
                 subject: t.subject,
                 body: t.body,
+                status: "drafted",
+                generatedBy,
+                generatedAt,
+                confidence: typeof ap.confidence === "number" ? ap.confidence : 0.3,
+            });
+        }
+        if ((thread.intent === "missing_document_check" || thread.intent === "document_status_inquiry") && plReplyDraftBody) {
+            drafts.push({
+                id: `${draftIdFromActionPlan(ap.id)}-TEAMS-PL`,
+                sourceRawInputId: input.id,
+                threadId: ap.threadId,
+                issueId,
+                actionPlanId: ap.id,
+                channel: "teams",
+                body: plReplyDraftBody,
                 status: "drafted",
                 generatedBy,
                 generatedAt,
@@ -2934,20 +2975,63 @@ export function runIngestPipeline(input, options = {}) {
         const entities = matchedPendingClarification.resolvedEntities.filter(Boolean);
         if (!entities.length)
             return [];
-        const targetThread = normalizedThreads.find((t) => String(t?.intent || "") === "missing_document_check") || normalizedThreads[0] || null;
-        const threadId = targetThread ? String(targetThread.id || "") : "";
-        if (!threadId)
+        const targets = normalizedThreads.filter((t) => t && (t.intent === "missing_document_check" || t.intent === "document_status_inquiry"));
+        const threadIds = (targets.length ? targets : normalizedThreads.slice(0, 1)).map((t) => String(t?.id || "").trim()).filter(Boolean);
+        if (!threadIds.length)
             return [];
-        return entities.map((e) => ({
+        return threadIds.flatMap((threadId) => entities.map((e) => ({
             id: ingestStableId("LNK", `${threadId}:${e.entityType}:${e.entityId}:pending_clarification`),
             threadId,
             entityType: e.entityType,
             entityId: e.entityId,
             confidence: typeof e.confidence === "number" ? e.confidence : 0.75,
             reason: "resolved entity from pending clarification reply",
-        }));
+        })));
     })();
-    const links = dedupeEntityLinks([...baseLinks, ...injectedLinks]);
+    const linksBeforeResolver = dedupeEntityLinks([...baseLinks, ...injectedLinks]);
+    const resolverLinks = (() => {
+        const tradeCases = Array.isArray(options.tradeCases) ? options.tradeCases.filter(Boolean) : [];
+        if (!tradeCases.length)
+            return [];
+        const out = [];
+        for (const thread of normalizedThreads) {
+            const threadId = String(thread?.id || "").trim();
+            if (!threadId)
+                continue;
+            const threadLinks = linksBeforeResolver.filter((l) => l.threadId === threadId);
+            const hasSiOrShipment = threadLinks.some((l) => l.entityType === "SI" || l.entityType === "Shipment");
+            if (hasSiOrShipment)
+                continue;
+            const doc = threadLinks.find((l) => l.entityType === "Document" && l.entityId) || null;
+            if (!doc)
+                continue;
+            const ctx = resolveOperationalContext({ entityType: "Document", entityId: String(doc.entityId), tradeCases });
+            if (!ctx)
+                continue;
+            if (ctx.shipment) {
+                out.push({
+                    id: ingestStableId("LNK", `${threadId}:Shipment:${ctx.shipment}:relationship_resolver`),
+                    threadId,
+                    entityType: "Shipment",
+                    entityId: ctx.shipment,
+                    confidence: typeof doc.confidence === "number" ? doc.confidence : 0.7,
+                    reason: `relationship resolver: ${String(doc.entityId)} -> Shipment`,
+                });
+            }
+            if (ctx.si) {
+                out.push({
+                    id: ingestStableId("LNK", `${threadId}:SI:${ctx.si}:relationship_resolver`),
+                    threadId,
+                    entityType: "SI",
+                    entityId: ctx.si,
+                    confidence: typeof doc.confidence === "number" ? doc.confidence : 0.7,
+                    reason: `relationship resolver: ${String(doc.entityId)} -> SI`,
+                });
+            }
+        }
+        return out;
+    })();
+    const links = dedupeEntityLinks([...linksBeforeResolver, ...resolverLinks]);
     let intakeResolutions = resolveIntake(effectiveInput, normalizedThreads, links, options);
     const shouldAutoPlanOnClarificationReply = isClarificationResolvedByReply
         ? normalizedThreads.some((t) => t.intent === "document_status_inquiry")
