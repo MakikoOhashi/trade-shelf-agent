@@ -257,6 +257,11 @@ const slackState = {
    * @type {Array<any>}
    */
   demoTradeCases: [],
+  /**
+   * TradeCase state overrides (file-backed) keyed by tradeCaseId
+   * @type {Record<string, any>}
+   */
+  tradeCaseOverrides: {},
 };
 
 const TRADE_SHELF_DATA_DIR =
@@ -265,6 +270,7 @@ const ACTIVITY_EVENTS_FILE_PATH = path.join(TRADE_SHELF_DATA_DIR, "activity-even
 const DEMO_APPROVALS_FILE_PATH = path.join(TRADE_SHELF_DATA_DIR, "demo-approvals.json");
 const DEMO_TRADECASES_FILE_PATH = path.join(TRADE_SHELF_DATA_DIR, "demo-trade-cases.json");
 const LEGACY_DEMO_TRADECASES_FILE_PATH = path.join(TRADE_SHELF_DATA_DIR, "demo-tradecases.json");
+const TRADECASE_OVERRIDES_FILE_PATH = path.join(TRADE_SHELF_DATA_DIR, "demo-trade-case-overrides.json");
 
 function demoTradeCaseKeys(tc) {
   const id = String(tc?.id || "").trim();
@@ -333,6 +339,13 @@ function normalizePersistedJsonListSnapshot(snapshot) {
   return null;
 }
 
+function normalizePersistedTradeCaseOverridesSnapshot(snapshot) {
+  if (!snapshot || typeof snapshot !== "object") return null;
+  if (Array.isArray(snapshot)) return null;
+  if (snapshot.items && typeof snapshot.items === "object" && !Array.isArray(snapshot.items)) return snapshot.items;
+  return snapshot;
+}
+
 async function tryLoadPersistedJsonList(filePath) {
   try {
     await fs.mkdir(TRADE_SHELF_DATA_DIR, { recursive: true });
@@ -353,6 +366,26 @@ async function tryLoadPersistedJsonList(filePath) {
   }
 }
 
+async function tryLoadPersistedTradeCaseOverrides() {
+  try {
+    await fs.mkdir(TRADE_SHELF_DATA_DIR, { recursive: true });
+  } catch (error) {
+    console.warn("[demo-store] failed to create data dir:", String(error));
+  }
+
+  try {
+    const raw = await fs.readFile(TRADECASE_OVERRIDES_FILE_PATH, "utf8");
+    const parsed = JSON.parse(raw);
+    const normalized = normalizePersistedTradeCaseOverridesSnapshot(parsed);
+    if (!normalized) throw new Error("invalid persisted shape");
+    return normalized;
+  } catch (error) {
+    if (error && (error.code === "ENOENT" || error.code === "ENOTDIR")) return null;
+    console.warn("[demo-store] failed to load persisted tradeCase overrides; using defaults:", String(error));
+    return null;
+  }
+}
+
 let demoPersistChain = Promise.resolve();
 function schedulePersistDemoStores() {
   const approvalsSnapshot = Array.isArray(slackState.demoApprovals) ? slackState.demoApprovals : [];
@@ -364,6 +397,34 @@ function schedulePersistDemoStores() {
       await persistJsonListSnapshot(DEMO_TRADECASES_FILE_PATH, tradeCasesSnapshot);
     })
     .catch(() => {});
+}
+
+let overridesPersistChain = Promise.resolve();
+function schedulePersistTradeCaseOverrides() {
+  const snapshot = slackState.tradeCaseOverrides && typeof slackState.tradeCaseOverrides === "object" ? slackState.tradeCaseOverrides : {};
+  overridesPersistChain = overridesPersistChain.then(() => persistTradeCaseOverridesSnapshot(snapshot)).catch(() => {});
+}
+
+async function persistTradeCaseOverridesSnapshot(snapshot) {
+  try {
+    await fs.mkdir(TRADE_SHELF_DATA_DIR, { recursive: true });
+  } catch (error) {
+    console.warn("[demo-store] failed to create data dir:", String(error));
+  }
+
+  const tempPath = `${TRADECASE_OVERRIDES_FILE_PATH}.${process.pid}.${Date.now()}.tmp`;
+  try {
+    const json = JSON.stringify(snapshot && typeof snapshot === "object" ? snapshot : {}, null, 2);
+    await fs.writeFile(tempPath, json, "utf8");
+    await fs.rename(tempPath, TRADECASE_OVERRIDES_FILE_PATH);
+  } catch (error) {
+    console.warn("[demo-store] failed to persist tradeCase overrides snapshot:", String(error));
+    try {
+      await fs.unlink(tempPath);
+    } catch {
+      // ignore cleanup failures
+    }
+  }
 }
 
 async function persistJsonListSnapshot(filePath, items) {
@@ -889,6 +950,14 @@ if (persistedDemoTradeCases) {
   if (changed) persistJsonListSnapshot(DEMO_TRADECASES_FILE_PATH, normalizedPersisted);
 }
 
+const persistedTradeCaseOverrides = await tryLoadPersistedTradeCaseOverrides();
+if (persistedTradeCaseOverrides) {
+  slackState.tradeCaseOverrides =
+    persistedTradeCaseOverrides && typeof persistedTradeCaseOverrides === "object" && !Array.isArray(persistedTradeCaseOverrides)
+      ? persistedTradeCaseOverrides
+      : {};
+}
+
 function extractSiNumbersFromText(text) {
   const t = String(text || "");
   const now = new Date();
@@ -1204,6 +1273,53 @@ const server = http.createServer(async (req, res) => {
       items: Array.isArray(slackState.demoTradeCases) ? slackState.demoTradeCases : [],
     });
     return;
+  }
+
+  if (method === "GET" && reqUrl.pathname === "/api/demo/tradecase-overrides") {
+    sendJson(res, 200, {
+      ok: true,
+      items: slackState.tradeCaseOverrides && typeof slackState.tradeCaseOverrides === "object" ? slackState.tradeCaseOverrides : {},
+    });
+    return;
+  }
+
+  if (method === "POST" && reqUrl.pathname === "/api/demo/tradecase-overrides") {
+    try {
+      const body = await readJsonBody(req);
+      const tradeCaseId = String(body.tradeCaseId || body.id || "").trim();
+      if (!tradeCaseId) {
+        sendJson(res, 400, { ok: false, error: "tradeCaseId is required" });
+        return;
+      }
+
+      const overrideIn = body.override && typeof body.override === "object" ? body.override : body;
+      const shipmentState = typeof overrideIn.shipmentState === "string" ? overrideIn.shipmentState.trim() : "";
+      const shipmentEntityState = (() => {
+        const se = overrideIn.shipmentEntity && typeof overrideIn.shipmentEntity === "object" ? overrideIn.shipmentEntity : {};
+        return typeof se.shipmentState === "string" ? se.shipmentState.trim() : "";
+      })();
+
+      const updatedAt = new Date().toISOString();
+      const nextOverride = {
+        ...(slackState.tradeCaseOverrides && typeof slackState.tradeCaseOverrides === "object" ? slackState.tradeCaseOverrides[tradeCaseId] : null),
+        ...(shipmentState ? { shipmentState } : {}),
+        shipmentEntity: shipmentEntityState ? { shipmentState: shipmentEntityState } : undefined,
+        updatedAt,
+      };
+
+      if (!slackState.tradeCaseOverrides || typeof slackState.tradeCaseOverrides !== "object") slackState.tradeCaseOverrides = {};
+      slackState.tradeCaseOverrides[tradeCaseId] = nextOverride;
+
+      // Persist in background; never crash server on write failures.
+      schedulePersistTradeCaseOverrides();
+
+      sendJson(res, 200, { ok: true, tradeCaseId, override: nextOverride });
+      return;
+    } catch (e) {
+      console.warn("[demo] failed to update tradeCase overrides:", String(e));
+      sendJson(res, 200, { ok: false, error: "failed_to_update_override" });
+      return;
+    }
   }
 
   if (method === "POST" && reqUrl.pathname === "/api/demo/approvals/approve") {

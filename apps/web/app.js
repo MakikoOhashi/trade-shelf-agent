@@ -825,6 +825,64 @@ async function fetchServerDemoTradeCases() {
   }
 }
 
+async function fetchServerTradeCaseOverrides() {
+  try {
+    const response = await fetchWithTimeout(`${API_BASE_URL}/api/demo/tradecase-overrides`, { method: "GET" }, 12000);
+    if (!response.ok) return {};
+    const json = await response.json();
+    const items = json && typeof json.items === "object" && json.items && !Array.isArray(json.items) ? json.items : {};
+    return items;
+  } catch {
+    return {};
+  }
+}
+
+function applyTradeCaseOverride(tradeCase, override) {
+  if (!tradeCase || typeof tradeCase !== "object") return tradeCase;
+  if (!override || typeof override !== "object") return tradeCase;
+
+  const shipmentState = typeof override.shipmentState === "string" ? override.shipmentState.trim() : "";
+  const shipmentEntityState = (() => {
+    const se = override.shipmentEntity && typeof override.shipmentEntity === "object" ? override.shipmentEntity : null;
+    return se && typeof se.shipmentState === "string" ? se.shipmentState.trim() : "";
+  })();
+  const updatedAt = typeof override.updatedAt === "string" ? override.updatedAt.trim() : "";
+
+  const next = { ...tradeCase };
+  if (shipmentState) next.shipmentState = shipmentState;
+  if (next.shipmentEntity && typeof next.shipmentEntity === "object") {
+    const se = { ...next.shipmentEntity };
+    if (shipmentEntityState) se.shipmentState = shipmentEntityState;
+    if (updatedAt) se.updatedAt = updatedAt;
+    next.shipmentEntity = se;
+  }
+  if (updatedAt) next.updatedAt = updatedAt;
+  return next;
+}
+
+async function persistTradeCaseOverrideToServer({ tradeCaseId, shipmentState } = {}) {
+  const id = String(tradeCaseId || "").trim();
+  const nextState = String(shipmentState || "").trim();
+  if (!id || !nextState) return;
+  try {
+    await fetchWithTimeout(
+      `${API_BASE_URL}/api/demo/tradecase-overrides`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          tradeCaseId: id,
+          shipmentState: nextState,
+          shipmentEntity: { shipmentState: nextState },
+        }),
+      },
+      12000,
+    );
+  } catch {
+    // ignore (demo): persistence failures should not block UI flows
+  }
+}
+
 function scheduleDemoApprovalsPoll() {
   if (demoApprovalsPollTimer) {
     window.clearTimeout(demoApprovalsPollTimer);
@@ -1943,6 +2001,7 @@ function applyStateTransitionCandidate(candidateId, { tradeCaseId } = {}) {
   log(`Manual state transition applied: Shipment ${entityId || "-"} ${fromState || "-"} → ${toState || "-"} from ${candId}.`);
 
   state.appliedStateTransitionCandidateIds = [...state.appliedStateTransitionCandidateIds, candId];
+  persistTradeCaseOverrideToServer({ tradeCaseId: tc.id, shipmentState: toState });
   return { ok: true };
 }
 
@@ -8682,7 +8741,19 @@ function seed() {
   // Hackathon demo: re-hydrate demo-created TradeCases from server-side JSON store.
   fetchServerDemoTradeCases().then((tradeCases) => {
     for (const tc of tradeCases) mergeTradeCaseIntoState(tc);
-    renderApp();
+    fetchServerTradeCaseOverrides().then((overrides) => {
+      const ids = Object.keys(overrides && typeof overrides === "object" ? overrides : {});
+      if (ids.length) {
+        for (const tcId of ids) {
+          const ov = overrides[tcId];
+          const existing = getTradeCaseById(tcId);
+          if (!existing) continue;
+          const next = applyTradeCaseOverride(existing, ov);
+          mergeTradeCaseIntoState(next);
+        }
+      }
+      renderApp();
+    });
   });
 }
 
