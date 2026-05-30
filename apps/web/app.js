@@ -228,7 +228,7 @@ const state = {
   agentStreamQueue: [],
   /**
    * Active “AI独り言Toast” (reused as persistent Agent Status Panel)
-   * @type {null | { id: string, header: string, status: "idle" | "processing", lines: Array<string>, minimized: boolean, dismissed?: boolean }}
+   * @type {null | { id: string, header: string, status: "idle" | "processing" | "success" | "failed", lines: Array<string>, messages?: Array<string>, minimized: boolean, dismissed?: boolean }}
    */
   agentStreamToast: {
     id: "agent-status-panel",
@@ -3353,11 +3353,28 @@ function renderAgentStreamToast() {
     const list = Array.isArray(state.latestIngestResult?.stateTransitionCandidates)
       ? state.latestIngestResult.stateTransitionCandidates.filter(Boolean)
       : [];
-    return list.length ? list[0] : null;
+    const applied = Array.isArray(state.appliedStateTransitionCandidateIds)
+      ? state.appliedStateTransitionCandidateIds.filter(Boolean).map((x) => String(x))
+      : [];
+    const appliedSet = new Set(applied);
+    const next = list.find((c) => c && !appliedSet.has(String(c?.id || "").trim())) || null;
+    return next || null;
   })();
   const statusKey = latestStateTransitionCandidate ? "approval_pending" : String(t.status || "idle");
-  const statusLabel = statusKey === "approval_pending" ? "承認待ち" : statusKey === "processing" ? "処理中" : "待機中";
-  const lines = Array.isArray(t.lines) ? t.lines.filter(Boolean).map((x) => String(x)) : [];
+  const statusLabel =
+    statusKey === "approval_pending"
+      ? "承認待ち"
+      : statusKey === "processing"
+        ? "処理中"
+        : statusKey === "success"
+          ? "処理完了"
+          : statusKey === "failed"
+            ? "失敗"
+            : "待機中";
+  const lines = (() => {
+    const src = Array.isArray(t.messages) ? t.messages : Array.isArray(t.lines) ? t.lines : [];
+    return src.filter(Boolean).map((x) => String(x));
+  })();
   const isMinimized = !!t.minimized;
 
   if (isMinimized) {
@@ -3378,16 +3395,22 @@ function renderAgentStreamToast() {
       const fromState = String(c?.fromState || "").trim();
       const toState = String(c?.toState || "").trim();
       const transition = `${fromState || "-"} → ${toState || "-"}`;
+      const msgHtml = lines.length
+        ? `<div class="agent-stream-toast__body" style="padding-top:6px;">${lines
+            .slice(-5)
+            .map((line) => `<div class="agent-stream-toast__line">${escapeHtml(line)}</div>`)
+            .join("")}</div>`
+        : "";
       return `<div class="agent-stream-toast__body">
         ${entityId ? `<div class="agent-stream-toast__line mono">${escapeHtml(entityId)}</div>` : ""}
         <div class="agent-stream-toast__line">${escapeHtml(transition)}</div>
         <div class="agent-stream-toast__line">棚の状態を更新しますか？</div>
         ${candidateId ? `<div class="agent-stream-toast__line muted">candidate: <span class="mono">${escapeHtml(candidateId)}</span></div>` : ""}
-      </div>`;
+      </div>${msgHtml}`;
     }
     if (statusKey === "idle") return `<div class="agent-stream-toast__body">Slack / Email / Teams の更新を監視しています</div>`;
     return `<div class="agent-stream-toast__body">${lines
-      .slice(0, 3)
+      .slice(-5)
       .map((line) => `<div class="agent-stream-toast__line">${escapeHtml(line)}</div>`)
       .join("")}</div>`;
   })();
@@ -9193,13 +9216,22 @@ function setupNewTop() {
       const candidateId = String(agentStreamApproveStateTransitionEl.getAttribute("data-agent-stream-approve-state-transition") || "").trim();
       if (!candidateId) return;
 
-      const setToastResult = ({ ok, message }) => {
+      const setToastResult = ({ ok, messages }) => {
         const prev = state.agentStreamToast && typeof state.agentStreamToast === "object" ? state.agentStreamToast : {};
+        const prevMessages = (() => {
+          const src = Array.isArray(prev.messages) ? prev.messages : Array.isArray(prev.lines) ? prev.lines : [];
+          return src.filter(Boolean).map((x) => String(x));
+        })();
+        const nextMessages = [...prevMessages, ...(Array.isArray(messages) ? messages : [messages])]
+          .filter(Boolean)
+          .map((x) => String(x))
+          .slice(-5);
         state.agentStreamToast = {
           ...prev,
-          status: ok ? "processing" : "approval_pending",
-          approvalContext: null,
-          lines: [message, ...(Array.isArray(prev.lines) ? prev.lines : [])].filter(Boolean).slice(0, 3),
+          status: ok ? "success" : "failed",
+          approvalContext: ok ? null : prev.approvalContext || null,
+          messages: nextMessages,
+          lines: nextMessages,
           minimized: false,
           dismissed: false,
         };
@@ -9207,17 +9239,35 @@ function setupNewTop() {
 
       try {
         const res = applyStateTransitionCandidate(candidateId);
-        if (res && res.ok) setToastResult({ ok: true, message: "承認しました" });
-        else setToastResult({ ok: false, message: "承認に失敗しました" });
+        if (res && res.ok) {
+          const cand = (() => {
+            const list = Array.isArray(state.latestIngestResult?.stateTransitionCandidates)
+              ? state.latestIngestResult.stateTransitionCandidates.filter(Boolean)
+              : [];
+            return list.find((c) => String(c?.id || "").trim() === candidateId) || null;
+          })();
+          const entityId = cand ? String(cand?.entityId || "").trim() : "";
+          setToastResult({
+            ok: true,
+            messages: [
+              "承認しました",
+              entityId ? `${entityId} の状態を更新しました` : "棚の状態を更新しました",
+              "棚に反映しました",
+            ],
+          });
+        } else {
+          setToastResult({ ok: false, messages: ["承認に失敗しました", "状態候補を再取得してください"] });
+        }
         renderApp();
       } catch {
         const prev = state.agentStreamToast && typeof state.agentStreamToast === "object" ? state.agentStreamToast : {};
         state.agentStreamToast = {
           ...prev,
-          status: "approval_pending",
+          status: "failed",
           minimized: false,
           dismissed: false,
-          lines: ["承認に失敗しました", ...(prev.lines || [])].slice(0, 3),
+          messages: ["承認に失敗しました", "状態候補を再取得してください", ...((prev.messages || prev.lines) || [])].slice(0, 5),
+          lines: ["承認に失敗しました", "状態候補を再取得してください", ...(prev.lines || [])].slice(0, 5),
         };
         renderApp();
       }
