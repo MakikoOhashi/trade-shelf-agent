@@ -1381,7 +1381,7 @@ export function resolveCanonicalIssueLink(thread, threadLinks = [], mode = "exis
 }
 
 
-import { resolveOperationalContext } from "./relationshipResolver";
+import { resolveOperationalContext } from "./relationshipResolver.js";
 function ingestStableId(prefix, seed) {
     let h = 2166136261;
     for (let i = 0; i < seed.length; i++) {
