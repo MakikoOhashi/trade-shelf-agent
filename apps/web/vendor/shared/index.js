@@ -1277,8 +1277,8 @@ function satisfiesMissingFields(rawText, missingFields) {
     const hasShipment = entities.shipmentIds.length > 0;
     const hasInv = entities.invoiceIds.length > 0;
     const isOr = lower.includes(" or ");
-    if (isOr && needsSi && needsShipment)
-        return hasSi || hasShipment;
+    if (isOr)
+        return (needsSi && hasSi) || (needsShipment && hasShipment) || (needsInv && hasInv);
     if (needsSi && !hasSi)
         return false;
     if (needsShipment && !hasShipment)
@@ -1293,6 +1293,7 @@ export function matchPendingClarification(input, pendingClarifications) {
         return null;
     const requesterName = String(input?.senderName || "").trim();
     const sourceChannel = String(input?.channel || "").trim();
+    const threadTs = String(input?.threadTs || "").trim();
     const rawText = String(input?.rawText || "");
     const candidates = pending
         .filter((p) => String(p?.status || "") === "awaiting_clarification_reply")
@@ -1306,6 +1307,14 @@ export function matchPendingClarification(input, pendingClarifications) {
         const pc = String(p?.sourceChannel || "").trim();
         if (pc && sourceChannel && pc !== sourceChannel)
             return false;
+        return true;
+    })
+        .filter((p) => {
+        const pt = String(p?.sourceThreadTs || "").trim();
+        // If the pending clarification is thread-scoped, require an exact match to avoid
+        // cross-thread clarification leakage within a channel.
+        if (pt)
+            return Boolean(threadTs && pt === threadTs);
         return true;
     })
         .filter((p) => satisfiesMissingFields(rawText, p.missingFields));

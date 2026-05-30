@@ -317,6 +317,12 @@ const slackState = {
    * @type {Record<string, any>}
    */
   tradeCaseOverrides: {},
+  /**
+   * Pending clarification threads (in-memory; file-backed).
+   * Used to merge Slack clarification replies back into the original question.
+   * @type {Array<any>}
+   */
+  pendingClarifications: [],
 };
 
 const TRADE_SHELF_DATA_DIR =
@@ -326,6 +332,7 @@ const DEMO_APPROVALS_FILE_PATH = path.join(TRADE_SHELF_DATA_DIR, "demo-approvals
 const DEMO_TRADECASES_FILE_PATH = path.join(TRADE_SHELF_DATA_DIR, "demo-trade-cases.json");
 const LEGACY_DEMO_TRADECASES_FILE_PATH = path.join(TRADE_SHELF_DATA_DIR, "demo-tradecases.json");
 const TRADECASE_OVERRIDES_FILE_PATH = path.join(TRADE_SHELF_DATA_DIR, "demo-trade-case-overrides.json");
+const PENDING_CLARIFICATIONS_FILE_PATH = path.join(TRADE_SHELF_DATA_DIR, "pending-clarifications.json");
 
 function demoTradeCaseKeys(tc) {
   const id = String(tc?.id || "").trim();
@@ -387,6 +394,39 @@ function normalizePersistedActivitySnapshot(snapshot) {
   return { items, lastReceivedAt };
 }
 
+function normalizePendingClarificationItem(item) {
+  if (!item || typeof item !== "object") return null;
+  const id = String(item.id || "").trim();
+  if (!id) return null;
+  return {
+    ...item,
+    id,
+    sourceRawInputId: String(item.sourceRawInputId || "").trim(),
+    originalRawText: String(item.originalRawText || ""),
+    requesterName: String(item.requesterName || "").trim(),
+    sourceChannel: String(item.sourceChannel || "").trim(),
+    sourceThreadTs: String(item.sourceThreadTs || "").trim(),
+    status: String(item.status || "").trim(),
+    createdAt: String(item.createdAt || "").trim(),
+    clarificationQuestion: String(item.clarificationQuestion || "").trim(),
+    missingFields: Array.isArray(item.missingFields) ? item.missingFields.filter(Boolean) : [],
+  };
+}
+
+function upsertPendingClarification(clarification) {
+  const list = Array.isArray(slackState.pendingClarifications) ? slackState.pendingClarifications : [];
+  const id = String(clarification?.id || "").trim();
+  if (!id) return;
+  const idx = list.findIndex((x) => String(x?.id || "") === id);
+  if (idx === -1) {
+    slackState.pendingClarifications = [clarification, ...list].slice(0, 200);
+  } else {
+    const next = list.slice();
+    next[idx] = clarification;
+    slackState.pendingClarifications = next;
+  }
+}
+
 function normalizePersistedJsonListSnapshot(snapshot) {
   if (!snapshot) return null;
   if (Array.isArray(snapshot)) return snapshot;
@@ -445,11 +485,13 @@ let demoPersistChain = Promise.resolve();
 function schedulePersistDemoStores() {
   const approvalsSnapshot = Array.isArray(slackState.demoApprovals) ? slackState.demoApprovals : [];
   const tradeCasesSnapshot = Array.isArray(slackState.demoTradeCases) ? slackState.demoTradeCases : [];
+  const pendingClarificationsSnapshot = Array.isArray(slackState.pendingClarifications) ? slackState.pendingClarifications : [];
 
   demoPersistChain = demoPersistChain
     .then(async () => {
       await persistJsonListSnapshot(DEMO_APPROVALS_FILE_PATH, approvalsSnapshot);
       await persistJsonListSnapshot(DEMO_TRADECASES_FILE_PATH, tradeCasesSnapshot);
+      await persistJsonListSnapshot(PENDING_CLARIFICATIONS_FILE_PATH, pendingClarificationsSnapshot);
     })
     .catch(() => {});
 }
@@ -992,6 +1034,14 @@ if (persistedDemoApprovals) {
   if (changed) persistJsonListSnapshot(DEMO_APPROVALS_FILE_PATH, normalized);
 }
 
+const persistedPendingClarifications = await tryLoadPersistedJsonList(PENDING_CLARIFICATIONS_FILE_PATH);
+if (persistedPendingClarifications) {
+  const normalized = persistedPendingClarifications.map(normalizePendingClarificationItem).filter(Boolean);
+  const changed = JSON.stringify(normalized) !== JSON.stringify(persistedPendingClarifications);
+  slackState.pendingClarifications = normalized;
+  if (changed) persistJsonListSnapshot(PENDING_CLARIFICATIONS_FILE_PATH, normalized);
+}
+
 const persistedDemoTradeCases =
   (await tryLoadPersistedJsonList(DEMO_TRADECASES_FILE_PATH)) ||
   (await tryLoadPersistedJsonList(LEGACY_DEMO_TRADECASES_FILE_PATH));
@@ -1432,6 +1482,8 @@ const server = http.createServer(async (req, res) => {
             ...(updated?.metadata && typeof updated.metadata === "object" ? updated.metadata : {}),
             slackSendOk,
             slackSendError,
+            clarificationStatus: slackSendOk ? "awaiting_reply" : "send_failed",
+            clarificationSentAt: slackSendOk ? new Date().toISOString() : (updated?.metadata?.clarificationSentAt || ""),
           },
           updatedAt: new Date().toISOString(),
         };
@@ -1775,7 +1827,11 @@ const server = http.createServer(async (req, res) => {
                     replyText: clarificationText,
                     requester: user,
                     originalMessage: text,
+                    originalText: text,
                     clarificationQuestion: clarificationText,
+                    missingFields: ["SI or Shipment or INV"],
+                    expectedEntities: ["SHP", "SI", "INV"],
+                    clarificationStatus: "awaiting_send_approval",
                     slackSendOk: false,
                     slackSendError: "",
                   },
@@ -1799,6 +1855,23 @@ const server = http.createServer(async (req, res) => {
                   linked: [],
                   links: [],
                 });
+
+                // Track a PendingClarification so a later Slack reply like "INV-1122の件です"
+                // is merged into the original request instead of being treated as a new intake.
+                upsertPendingClarification({
+                  id: `PC-SLACK-${eventId || ts}-${Date.now()}`,
+                  sourceRawInputId: `slack-${eventId || ts || Date.now()}`,
+                  originalRawText: text,
+                  requesterName: user,
+                  sourceChannel: channel,
+                  sourceThreadTs: thread,
+                  missingFields: ["SI or Shipment or INV"],
+                  clarificationQuestion: clarificationText,
+                  status: "awaiting_clarification_reply",
+                  createdAt: now,
+                  confidence: 0.9,
+                });
+                schedulePersistDemoStores();
               } catch (e) {
                 console.warn("[demo] failed to enqueue slack clarification waiting approval:", String(e));
               }
@@ -1819,7 +1892,45 @@ const server = http.createServer(async (req, res) => {
               status: "received",
             };
 
-            const result = await ingestWithLlmOrMock({ rawInput, pendingClarifications: [] });
+            const pendingClarifications = Array.isArray(slackState.pendingClarifications)
+              ? slackState.pendingClarifications.filter(Boolean)
+              : [];
+            const result = await ingestWithLlmOrMock({ rawInput, pendingClarifications });
+            try {
+              const nextPending = Array.isArray(result?.pendingClarifications) ? result.pendingClarifications.filter(Boolean) : [];
+              slackState.pendingClarifications = nextPending.slice(0, 200);
+              // If a Slack clarification reply matched, close the corresponding slack_clarification approval
+              // (so it does not linger as "awaiting_reply" in demo state).
+              const matched = nextPending.find(
+                (p) => String(p?.status || "") === "matched" && String(p?.matchedRawInputId || "") === String(rawInput.id || ""),
+              );
+              if (matched) {
+                const approvals = Array.isArray(slackState.demoApprovals) ? slackState.demoApprovals : [];
+                const target = approvals.find((ap) => {
+                  if (String(ap?.type || "") !== "slack_clarification") return false;
+                  const meta = ap?.metadata && typeof ap.metadata === "object" ? ap.metadata : {};
+                  const apChannel = String(meta.channel || "").trim();
+                  const apThread = String(meta.threadTs || "").trim();
+                  const st = String(meta.clarificationStatus || "").trim();
+                  return apChannel === channelId && apThread === String(rawInput.threadTs || "").trim() && st === "awaiting_reply";
+                });
+                if (target) {
+                  upsertDemoApproval({
+                    ...target,
+                    metadata: {
+                      ...(target?.metadata && typeof target.metadata === "object" ? target.metadata : {}),
+                      clarificationStatus: "resolved",
+                      clarificationResolvedAt: new Date().toISOString(),
+                      clarificationReplyText: text,
+                    },
+                    updatedAt: new Date().toISOString(),
+                  });
+                }
+              }
+              schedulePersistDemoStores();
+            } catch {
+              // ignore persistence failures
+            }
             const events = Array.isArray(result?.activityEvents) ? result.activityEvents.filter(Boolean) : [];
             const stateTransitionCandidates = Array.isArray(result?.stateTransitionCandidates)
               ? result.stateTransitionCandidates.filter(Boolean)

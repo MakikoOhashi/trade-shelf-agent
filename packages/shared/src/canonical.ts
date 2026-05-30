@@ -100,7 +100,7 @@ function satisfiesMissingFields(rawText: string, missingFields: string[]) {
   const hasInv = entities.invoiceIds.length > 0;
 
   const isOr = lower.includes(" or ");
-  if (isOr && needsSi && needsShipment) return hasSi || hasShipment;
+  if (isOr) return (needsSi && hasSi) || (needsShipment && hasShipment) || (needsInv && hasInv);
   if (needsSi && !hasSi) return false;
   if (needsShipment && !hasShipment) return false;
   if (needsInv && !hasInv) return false;
