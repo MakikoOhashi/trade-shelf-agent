@@ -19,7 +19,7 @@ import type {
 } from "./domain";
 import type { ActivityEventType } from "./domain";
 import { matchPendingClarification, resolveCanonicalIssueLink, stateTransitionCandidateIdFromParts } from "./canonical";
-import { resolveOperationalContext } from "./relationshipResolver";
+import { resolveOperationalContext } from "./relationshipResolver.js";
 
 function ingestStableId(prefix: string, seed: string) {
   let h = 2166136261;
