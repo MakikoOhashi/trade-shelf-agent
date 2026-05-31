@@ -1303,6 +1303,22 @@ function pushActivityItem(item) {
   schedulePersistActivitySnapshot();
 }
 
+function pushOperationalResponderDebug({ title, details, occurredAt }) {
+  pushActivityItem({
+    id: `debug:operational_responder:${Date.now()}:${Math.random().toString(16).slice(2)}`,
+    type: "aiProcessed",
+    source: "ai",
+    title: String(title || "Operational responder debug"),
+    actor: "operational responder",
+    occurredAt: occurredAt || new Date().toISOString(),
+    summary: "",
+    details: Array.isArray(details) ? details.filter(Boolean) : [],
+    statusKey: "processing",
+    linked: [],
+    links: [],
+  });
+}
+
 function upsertDemoApproval(approval) {
   const list = Array.isArray(slackState.demoApprovals) ? slackState.demoApprovals : [];
   const id = String(approval?.id || "").trim();
@@ -2091,12 +2107,25 @@ const server = http.createServer(async (req, res) => {
                 slackThreadTs: threadTs || ts,
               });
               if (created && created.id) {
+                const startedAt = new Date().toISOString();
+                const createdMeta = created?.metadata && typeof created.metadata === "object" ? created.metadata : {};
+
+                pushOperationalResponderDebug({
+                  title: "Operational responder started",
+                  occurredAt: startedAt,
+                  details: [
+                    `eventId: ${String(eventId || "").trim() || "n/a"}`,
+                    `inputId: ${String(id || "").trim() || "n/a"}`,
+                    `originalText: ${String(text || "").trim()}`,
+                  ],
+                });
+
                 const meta = created?.metadata && typeof created.metadata === "object" ? created.metadata : {};
                 const invoiceId = String(meta?.invoiceId || "").trim();
                 const shipmentId = String(meta?.shipmentId || "").trim();
                 const siId = String(meta?.siId || "").trim();
                 const summary = created.description || created.title || "approval pending";
-                const now = new Date().toISOString();
+                const now = startedAt;
 
                 // Toast / Activity: PL未着検出〜社内返信〜外部送信承認待ち の導線を明示する
                 pushActivityItem({
@@ -2139,10 +2168,45 @@ const server = http.createServer(async (req, res) => {
                   : "PLはまだ届いていません。\n仕入先への督促メール案を作成しました。";
                 const slackChannel = String(channelId || "").trim();
                 const slackThread = String(threadTs || ts || "").trim();
+
+                pushOperationalResponderDebug({
+                  title: "Generated Slack reply",
+                  occurredAt: now,
+                  details: [`Generated Slack reply:\n${salesText}`],
+                });
+
+                pushOperationalResponderDebug({
+                  title: "Slack context",
+                  occurredAt: now,
+                  details: [`Slack context:\nchannel=${slackChannel || "n/a"}\nthreadTs=${slackThread || "n/a"}`],
+                });
+
+                pushOperationalResponderDebug({
+                  title: "Posting Slack reply",
+                  occurredAt: now,
+                  details: [`Posting Slack reply:\n${salesText}`],
+                });
+
                 const slackResult =
                   slackChannel && slackThread
                     ? await postSlackReply({ channel: slackChannel, threadTs: slackThread, text: salesText })
                     : { ok: false, error: "no_channel_or_thread" };
+
+                pushOperationalResponderDebug({
+                  title: slackResult.ok ? "Slack API ok" : "Slack API error",
+                  occurredAt: new Date().toISOString(),
+                  details: slackResult.ok ? [] : [`Slack API error:\n${String(slackResult.error || "unknown_error")}`],
+                });
+
+                // Also record the source draft text used to generate the follow-up (for debugging "clarification text" mixups).
+                const draftText = String(createdMeta?.draftText || "").trim();
+                if (draftText) {
+                  pushOperationalResponderDebug({
+                    title: "Supplier follow-up draft (source)",
+                    occurredAt: now,
+                    details: [`draftText:\n${draftText}`],
+                  });
+                }
 
                 pushActivityItem({
                   id: `demo:pl-missing:slack-replied:${created.id}:${Date.now()}`,
