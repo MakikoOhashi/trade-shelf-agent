@@ -1449,6 +1449,11 @@ function addHoursIso(baseIso, hours) {
     d.setHours(d.getHours() + hours);
     return d.toISOString();
 }
+export function buildMissingPlSupplierFollowupReplyText(invoiceId) {
+    const inv = String(invoiceId || "").trim();
+    const head = inv ? `${inv} に紐づくPLはまだ届いていません。` : "PLはまだ届いていません。";
+    return `${head}\n仕入先への督促メール案を作成しました。\n承認センターでメール案を確認してください。`;
+}
 function normalizeSiId(siId, now = new Date()) {
     const raw = String(siId || "").trim();
     if (!raw)
@@ -2488,13 +2493,27 @@ export function buildActivityEvents(input, threads, links, occurredAt, options =
             continue;
         const threadLinks = links.filter((l) => l.threadId === thread.id);
         const title = chooseThreadTitle(thread, threadLinks);
+        const description = (() => {
+            if (!forced)
+                return `${title} を承認待ちへ追加`;
+            const tradeCases = Array.isArray(options.tradeCases) ? options.tradeCases.filter(Boolean) : [];
+            if (!tradeCases.length)
+                return "PL未着を確認しました / 仕入先への確認返信案を生成";
+            const directInv = Array.isArray(thread?.extractedEntities?.invoiceIds) ? thread.extractedEntities.invoiceIds.find(Boolean) : "";
+            const invFromLinks = threadLinks.find((l) => l?.entityType === "Document" && l?.entityId) || null;
+            const invoiceId = String(directInv || (invFromLinks ? invFromLinks.entityId : "") || "").trim();
+            const ctx = invoiceId ? resolveOperationalContext({ entityType: "Document", entityId: invoiceId, tradeCases }) : null;
+            if (!ctx || ctx.plStatus !== "missing")
+                return "PL未着を確認しました / 仕入先への確認返信案を生成";
+            return buildMissingPlSupplierFollowupReplyText(invoiceId);
+        })();
         events.push({
             id: ingestStableId("ACT", `${input.id}:${thread.id}:approval_required`),
             type: "approval_required",
             occurredAt,
             sequence: ACTIVITY_SEQUENCE.approval_required,
             title: "承認待ちへ追加",
-            description: forced ? "PL未着を確認しました / 仕入先への確認返信案を生成" : `${title} を承認待ちへ追加`,
+            description,
             sourceRawInputId: input.id,
             threadId: thread.id,
             linkedEntities: threadLinks,
@@ -2932,7 +2951,7 @@ export function runIngestPipeline(input, options = {}) {
                 sequence: contextResolution.status === "ambiguous"
                     ? ACTIVITY_SEQUENCE.human_selection_required
                     : ACTIVITY_SEQUENCE.clarification_required,
-                title: contextResolution.status === "ambiguous" ? "候補確認" : "確認質問",
+                title: contextResolution.status === "ambiguous" ? "候補選択が必要" : "追加情報が必要です",
                 description: body,
                 sourceRawInputId: input.id,
                 threadId,
@@ -3255,7 +3274,7 @@ export function runIngestPipeline(input, options = {}) {
                 occurredAt: pipelineOccurredAt,
                 sequence: ACTIVITY_SEQUENCE.operational_responder,
                 title: "PL未着を確認",
-                description: "PL未着 確認返信案を生成しました",
+                description: buildMissingPlSupplierFollowupReplyText(invoiceId),
                 sourceRawInputId: input.id,
                 threadId,
                 linkedEntities: threadLinks,
@@ -3321,10 +3340,13 @@ export function runIngestPipeline(input, options = {}) {
         const replayResult = runIngestPipeline(replayRawInput, { ...options, pendingClarifications });
         return {
             ...baseResult,
+            // Use outputs from the replay run.
             issueMutations: replayResult.issueMutations,
             actionPlans: replayResult.actionPlans,
             drafts: replayResult.drafts,
+            // Keep the clarification-specific events and append the replay debug + replay events.
             activityEvents: [...baseResult.activityEvents, replayEvent, ...(replayResult.activityEvents || [])],
+            // Keep any thread/link updates from the replay run (it may add relationship-resolved links).
             threads: replayResult.threads,
             links: replayResult.links,
             intakeResolutions: replayResult.intakeResolutions,

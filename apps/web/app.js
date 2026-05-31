@@ -2973,9 +2973,10 @@ function openConversationThreadModal(thr) {
       }
 
       if (type === "operational_responder") {
-        const head = primaryInvoiceId ? `${primaryInvoiceId} に紐づくPLはまだ届いていません。` : "PLはまだ届いていません。";
-        const text = `${head}\n仕入先への督促メール案を作成しました。\n承認センターでメール案を確認してください。`;
-        out.push({ speaker: agentName, side: "ai", text, at: occurredAt, type });
+        const text =
+          description ||
+          `${primaryInvoiceId ? `${primaryInvoiceId} に紐づくPLはまだ届いていません。` : "PLはまだ届いていません。"}\n仕入先への督促メール案を作成しました。\n承認センターでメール案を確認してください。`;
+        if (text) out.push({ speaker: agentName, side: "ai", text, at: occurredAt, type });
         continue;
       }
 
@@ -2983,7 +2984,7 @@ function openConversationThreadModal(thr) {
         out.push({
           speaker: agentName,
           side: "ai",
-          text: "返信案を作成しました。承認センターで確認してください。",
+          text: description || "返信案を作成しました。承認センターで確認してください。",
           at: occurredAt,
           type,
         });
@@ -4925,26 +4926,27 @@ function extractNewSalesChatMessagesFromIngestResult(result, { salesName, agentN
     }
 
     if (type === "approval_required") {
+      if (!description) continue;
       out.push({
         id: `sales-chat:${id}`,
         speaker: agentName,
         side: "ai",
-        text: "返信案を作成しました。承認センターで確認してください。",
+        text: description,
         at: occurredAt,
-        priority: 10,
+        priority: 20,
       });
       continue;
     }
 
     if (type === "operational_responder") {
-      const invoiceId = resolvePrimaryInvoiceId();
+      if (!description) continue;
       out.push({
         id: `sales-chat:${id}`,
         speaker: agentName,
         side: "ai",
-        text: `${invoiceId} に紐づくPLはまだ届いていません。\n仕入先への督促メール案を作成しました。\n承認センターでメール案を確認してください。`,
+        text: description,
         at: occurredAt,
-        priority: 5,
+        priority: 10,
       });
       continue;
     }
