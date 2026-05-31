@@ -4376,38 +4376,26 @@ function renderNewTop() {
         </div>`
       : "";
 
-    const renderSalesChatDemo = () => {
+    const renderSalesChatLog = () => {
       const agentName = "Trade Shelf Agent";
       const salesName = "営業A";
       const messages = Array.isArray(state.salesChatMessages) ? state.salesChatMessages.filter(Boolean) : [];
 
-      const logHtml = messages
+      return messages
         .map((m) => {
           const side = m.side === "ai" ? "ai" : "human";
           const speaker = String(m.speaker || (side === "ai" ? agentName : salesName));
           const text = String(m.text || "");
           const at = m.at ? formatLocalTime(m.at) : "";
           const meta = `${escapeHtml(speaker)}${
-            at ? ` <span class="muted nt-mono sales-chat-demo__at">${escapeHtml(at)}</span>` : ""
-          }${side === "ai" ? ` <span class="pill pill--mini sales-chat-demo__badge">APP</span>` : ""}`;
+            at ? ` <span class="muted nt-mono sales-chat-shell__at">${escapeHtml(at)}</span>` : ""
+          }${side === "ai" ? ` <span class="pill pill--mini sales-chat-shell__badge">APP</span>` : ""}`;
           return `<div class="slack-thread__msg ${side}">
             <div class="slack-thread__meta">${meta}</div>
             <div class="slack-thread__bubble">${escapeHtml(text)}</div>
           </div>`;
         })
         .join("");
-
-      return `<section class="sales-chat-demo" aria-label="Sales chat thread">
-        <div class="sales-chat-demo__head">
-          <div class="sales-chat-demo__title">営業チャット</div>
-          <div class="sales-chat-demo__sub muted">入力した業務連絡とAIの返信を、Slack風スレッドとして表示します（Web UI単体）。</div>
-        </div>
-        <div class="sales-chat-demo__body">
-          <div class="slack-thread" aria-label="Thread">
-            <div class="slack-thread__log">${logHtml || `<div class="nt-muted">No messages</div>`}</div>
-          </div>
-        </div>
-      </section>`;
     };
 
     return `<section class="req-page requests-hub ${embedded ? "req-page--embedded" : ""}" aria-label="Change & Check Requests">
@@ -4420,15 +4408,12 @@ function renderNewTop() {
             </div>`
       }
 
-      <div class="requests-intake" aria-label="Intake">
-        <div class="requests-intake__head">
-          <div>
-            <div class="requests-intake__title">業務連絡を試す</div>
-            <div class="requests-intake__sub muted">Slack・Teams・Email の代わりに、業務メッセージを入力してAIエージェントの動作を試せます。</div>
-          </div>
+      <section class="sales-chat-shell" aria-label="Sales chat">
+        <div class="sales-chat-shell__head">
+          <div class="sales-chat-shell__title">営業チャット</div>
           ${
             embedded && rightPanelToggle
-              ? `<div class="requests-intake__head-right">
+              ? `<div class="sales-chat-shell__head-right">
                   <button class="right-panel-toggle right-panel-toggle--inside" type="button" data-toggle-approval-right-panel="1" aria-label="${escapeHtml(
                     rightPanelToggle.label,
                   )}">${escapeHtml(rightPanelToggle.icon)}</button>
@@ -4437,31 +4422,38 @@ function renderNewTop() {
           }
         </div>
 
-        <div class="requests-intake__form" aria-label="Mock ingest form">
-          <textarea class="ingest-textarea requests-intake__textarea" rows="2" placeholder="例: PLきましたか？" data-ingest-input="1">${escapeHtml(
+        <div class="sales-chat-shell__thread" aria-label="Thread">
+          <div class="slack-thread">
+            <div class="slack-thread__log" data-sales-chat-log="1">${
+              renderSalesChatLog() || `<div class="nt-muted">No messages</div>`
+            }</div>
+          </div>
+        </div>
+
+        <div class="sales-chat-shell__composer" aria-label="Composer">
+          <textarea class="ingest-textarea sales-chat-shell__textarea" rows="2" placeholder="例: PLきましたか？" data-ingest-input="1">${escapeHtml(
             String(state.ingestInputText || ""),
           )}</textarea>
-          <div class="requests-intake__actions">
-            <button class="btn btn--primary btn--small" type="button" data-ingest-submit="1" ${
-              state.ingestLoading ? "disabled" : ""
-            }>${effectiveClassifyMode === "mock" ? "モックを実行" : "AIエージェントを実行"}</button>
+          <div class="sales-chat-shell__actions">
             ${
               state.ingestLoading
                 ? effectiveClassifyMode === "llm"
                   ? `<span class="ingest-loading nt-muted"><span class="spinner" aria-hidden="true"></span>Kimiが分類中...</span>`
                   : `<span class="ingest-loading nt-muted">loading...</span>`
-                : ""
+                : `<span class="nt-muted sales-chat-shell__hint"></span>`
             }
+            <button class="btn btn--primary btn--small sales-chat-shell__send" type="button" data-ingest-submit="1" ${
+              state.ingestLoading ? "disabled" : ""
+            }>送信</button>
           </div>
           ${state.ingestError ? `<div class="ingest-error">${escapeHtml(String(state.ingestError))}</div>` : ""}
-          <details class="debug-collapsible" aria-label="Debug details">
-            <summary>詳細（debug）</summary>
-            ${ingestSummaryHtml || `<div class="nt-muted">No ingest result</div>`}
-          </details>
         </div>
-      </div>
 
-      ${renderSalesChatDemo()}
+        <details class="debug-collapsible sales-chat-shell__debug" aria-label="Debug details">
+          <summary>詳細（debug）</summary>
+          ${ingestSummaryHtml || `<div class="nt-muted">No ingest result</div>`}
+        </details>
+      </section>
 
       ${
         embedded
@@ -4556,6 +4548,8 @@ function renderApp() {
   if (!root) return;
   root.innerHTML = renderNewTop();
   syncOperationalThreadModal();
+  const chatLog = root.querySelector ? root.querySelector("[data-sales-chat-log]") : null;
+  if (chatLog) chatLog.scrollTop = chatLog.scrollHeight;
   ensureAgentStreamToastPosBootstrapped();
   const toast = root.querySelector ? root.querySelector(".agent-stream-toast[data-agent-stream-toast]") : null;
   if (toast) {

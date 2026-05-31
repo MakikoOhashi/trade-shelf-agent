@@ -6348,6 +6348,98 @@ body {
   padding: 14px 14px 10px;
 }
 
+#app .sales-chat-shell {
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 14px;
+  background: #fff;
+  padding: 12px;
+  display: grid;
+  gap: 10px;
+}
+
+#app .sales-chat-shell__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+#app .sales-chat-shell__title {
+  font-size: 13px;
+  font-weight: 900;
+  color: #24292f;
+}
+
+#app .sales-chat-shell__thread {
+  height: 420px;
+  overflow-y: auto;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 12px;
+  background: #fff;
+  padding: 8px 10px;
+}
+
+#app .sales-chat-shell .slack-thread__log {
+  display: block;
+}
+
+#app .sales-chat-shell .slack-thread__msg {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 4px;
+  padding: 10px 0;
+}
+
+#app .sales-chat-shell .slack-thread__msg + .slack-thread__msg {
+  border-top: 1px solid rgba(148, 163, 184, 0.12);
+}
+
+#app .sales-chat-shell .slack-thread__meta {
+  font-size: 12px;
+  font-weight: 800;
+  color: #64748b;
+}
+
+#app .sales-chat-shell .sales-chat-shell__badge {
+  margin-left: 6px;
+}
+
+#app .sales-chat-shell .slack-thread__bubble {
+  white-space: pre-wrap;
+  font-size: 14px;
+  line-height: 1.6;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  background: #fff;
+  color: #24292f;
+}
+
+#app .sales-chat-shell .slack-thread__msg.ai .slack-thread__bubble {
+  background: #f8fafc;
+}
+
+#app .sales-chat-shell__composer {
+  display: grid;
+  gap: 8px;
+}
+
+#app .sales-chat-shell__textarea {
+  font-size: 13px;
+  padding: 8px 10px;
+}
+
+#app .sales-chat-shell__actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+#app .sales-chat-shell__send {
+  min-width: 72px;
+}
+
 #app .sales-chat-demo__head {
   display: flex;
   flex-direction: column;
