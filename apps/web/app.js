@@ -4841,7 +4841,32 @@ function appendSalesChatMessages(nextMessages) {
   const list = Array.isArray(nextMessages) ? nextMessages.filter(Boolean) : [];
   if (!list.length) return;
   if (!Array.isArray(state.salesChatMessages)) state.salesChatMessages = [];
-  state.salesChatMessages = [...state.salesChatMessages, ...list];
+
+  const keyOf = (m) => {
+    const speaker = String(m?.speaker || "").trim();
+    const text = String(m?.text || "").trim();
+    if (!speaker || !text) return "";
+    return `${speaker}:${text}`;
+  };
+
+  const existingKeys = new Set((Array.isArray(state.salesChatMessages) ? state.salesChatMessages : []).map(keyOf));
+  const bestByKey = new Map();
+
+  for (let i = 0; i < list.length; i += 1) {
+    const m = list[i];
+    const k = keyOf(m);
+    if (!k || existingKeys.has(k)) continue;
+
+    const prev = bestByKey.get(k);
+    const prevPriority = Number(prev?.priority ?? 0);
+    const nextPriority = Number(m?.priority ?? 0);
+
+    if (!prev || nextPriority > prevPriority) bestByKey.set(k, m);
+  }
+
+  const deduped = Array.from(bestByKey.values());
+  if (!deduped.length) return;
+  state.salesChatMessages = [...state.salesChatMessages, ...deduped];
 }
 
 function extractNewSalesChatMessagesFromIngestResult(result, { salesName, agentName }) {
@@ -4886,7 +4911,16 @@ function extractNewSalesChatMessagesFromIngestResult(result, { salesName, agentN
 
     if (type === "clarification_required" || type === "human_selection_required" || type === "clarification_waiting") {
       if (!description) continue;
-      out.push({ id: `sales-chat:${id}`, speaker: agentName, side: "ai", text: description, at: occurredAt });
+      out.push({
+        id: `sales-chat:${id}`,
+        speaker: agentName,
+        side: "ai",
+        text: description,
+        at: occurredAt,
+        // Priority for display dedupe (higher wins):
+        // 1) Slack reply text (if any) > 2) Clarification question > 3) Operational responder.
+        priority: 50,
+      });
       continue;
     }
 
@@ -4897,6 +4931,7 @@ function extractNewSalesChatMessagesFromIngestResult(result, { salesName, agentN
         side: "ai",
         text: "返信案を作成しました。承認センターで確認してください。",
         at: occurredAt,
+        priority: 10,
       });
       continue;
     }
@@ -4909,6 +4944,7 @@ function extractNewSalesChatMessagesFromIngestResult(result, { salesName, agentN
         side: "ai",
         text: `${invoiceId} に紐づくPLはまだ届いていません。\n仕入先への督促メール案を作成しました。\n承認センターでメール案を確認してください。`,
         at: occurredAt,
+        priority: 5,
       });
       continue;
     }
