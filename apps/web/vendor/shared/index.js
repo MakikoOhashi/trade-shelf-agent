@@ -3265,7 +3265,7 @@ export function runIngestPipeline(input, options = {}) {
         }
         return out;
     })();
-    return {
+    const baseResult = {
         rawInput: { ...effectiveInput, status: "linked" },
         contextResolution,
         threads: normalizedThreads,
@@ -3288,6 +3288,51 @@ export function runIngestPipeline(input, options = {}) {
         pendingClarifications,
         matchedPendingClarification,
     };
+    // Clarification reply ingest should not produce new outputs (kept by design).
+    // Instead, once the clarification is resolved, replay the *original* request
+    // with resolved entities attached so downstream planners/drafters can run.
+    if (suppressNewOutputs && matchedPendingClarification && Array.isArray(matchedPendingClarification.resolvedEntities)) {
+        const originalText = String(matchedPendingClarification.originalRawText || "").trim();
+        const resolved = matchedPendingClarification.resolvedEntities.filter(Boolean);
+        const order = { Document: 0, Shipment: 1, SI: 2 };
+        const resolvedIds = resolved
+            .slice()
+            .sort((a, b) => (order[String(a?.entityType || "")] ?? 99) - (order[String(b?.entityType || "")] ?? 99))
+            .map((e) => String(e?.entityId || "").trim())
+            .filter(Boolean);
+        const replayedInput = `${originalText}\n対象: ${resolvedIds.join(" / ")}`.trim();
+        const replayEvent = {
+            id: ingestStableId("ACT", `${input.id}:${matchedPendingClarification.id}:replay_original_request_after_clarification_resolve`),
+            type: "context_resolved",
+            occurredAt: pipelineOccurredAt,
+            sequence: ACTIVITY_SEQUENCE.clarification_matched + 1,
+            title: "Replaying original request after clarification resolve",
+            description: [`originalText: ${originalText}`, `resolvedEntities: ${resolvedIds.join(" / ")}`, `replayedInput: ${replayedInput}`].join("\n"),
+            sourceRawInputId: input.id,
+            status: "ok",
+            actor,
+        };
+        const replayRawInput = {
+            ...input,
+            id: `${input.id}-replay`,
+            rawText: replayedInput,
+            receivedAt: pipelineOccurredAt,
+        };
+        const replayResult = runIngestPipeline(replayRawInput, { ...options, pendingClarifications });
+        return {
+            ...baseResult,
+            issueMutations: replayResult.issueMutations,
+            actionPlans: replayResult.actionPlans,
+            drafts: replayResult.drafts,
+            activityEvents: [...baseResult.activityEvents, replayEvent, ...(replayResult.activityEvents || [])],
+            threads: replayResult.threads,
+            links: replayResult.links,
+            intakeResolutions: replayResult.intakeResolutions,
+            stateTransitionCandidates: replayResult.stateTransitionCandidates,
+            pendingClarifications: replayResult.pendingClarifications,
+        };
+    }
+    return baseResult;
 }
 export function buildIngestResultFromThreads(input, threads, options = {}) {
     return runIngestPipeline(input, { ...options, threads });
