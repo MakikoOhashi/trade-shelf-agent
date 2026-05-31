@@ -2421,7 +2421,9 @@ const server = http.createServer(async (req, res) => {
         status: "received",
       };
 
-      const result = runMockIngest(rawInput, { pendingClarifications });
+      // Keep behavior aligned with Slack ingest: include demo TradeCases so the ingest pipeline can
+      // resolve PL/INV status and emit canonical operational responder / approval text.
+      const result = runMockIngest(rawInput, { pendingClarifications, tradeCases: mockTradeCases });
       sendJson(res, 200, { ok: true, result });
       return;
     } catch (e) {
@@ -2454,7 +2456,12 @@ const server = http.createServer(async (req, res) => {
       };
 
       // Resolve pending clarification first, then run context check on the effective input.
-      const prelim = runIngestPipeline(rawInput, { sourceLabel: "Kimi AI分類", approvalPolicy: "all", pendingClarifications });
+      const prelim = runIngestPipeline(rawInput, {
+        sourceLabel: "Kimi AI分類",
+        approvalPolicy: "all",
+        pendingClarifications,
+        tradeCases: mockTradeCases,
+      });
       const contextResolution = prelim?.contextResolution || resolveContext(rawInput, { sourceLabel: "Kimi AI分類", approvalPolicy: "all" });
       if (contextResolution.status !== "resolved_enough") {
         const result = prelim;
@@ -2502,6 +2509,7 @@ const server = http.createServer(async (req, res) => {
         // TODO: Switch to confidence-based approval (low_confidence) after we refine the policy.
         approvalPolicy: "all",
         pendingClarifications,
+        tradeCases: mockTradeCases,
       });
 
       sendJson(res, 200, { ok: true, result });
