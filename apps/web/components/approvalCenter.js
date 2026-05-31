@@ -303,7 +303,7 @@ export function createApprovalCenterRenderer(deps) {
           : "",
         others.length
           ? `<section class="demo-approvals" aria-label="Other demo approvals">
-              <div class="demo-approvals__title">承認待ち（その他）</div>
+              <div class="demo-approvals__title">承認待ち</div>
               <div class="demo-approvals__sub muted">デモ用の承認待ち項目です。</div>
               <div class="demo-approvals__list">${renderRows(others)}</div>
             </section>`
@@ -339,7 +339,15 @@ export function createApprovalCenterRenderer(deps) {
       const raw = String(statusLike || "").trim();
       const normalized = raw.toLowerCase().replace(/_/g, " ");
       if (!normalized) return "-";
-      if (normalized === "pending approval" || normalized === "requires approval" || normalized === "pending approval") return "確認待ち";
+      if (
+        normalized === "pending approval" ||
+        normalized === "pending_approval" ||
+        normalized === "pending approval (other)" ||
+        normalized === "pending approval other" ||
+        normalized === "requires approval" ||
+        normalized === "requires_approval"
+      )
+        return "承認待ち";
       if (normalized === "edited") return "編集済み";
       if (normalized === "on hold" || normalized === "held") return "保留中";
       if (normalized === "mock sent") return "完了";
@@ -1057,7 +1065,6 @@ export function createApprovalCenterRenderer(deps) {
 
       return `<div class="operations-main-column" aria-label="Operations main column">
         ${renderDemoApprovalsLane()}
-        ${renderPreIssueThreads()}
         ${renderIssueListLane()}
       </div>`;
     };
