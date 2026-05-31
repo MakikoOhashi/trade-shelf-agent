@@ -2249,6 +2249,85 @@ const server = http.createServer(async (req, res) => {
                   linked: [...(invoiceId ? [{ kind: "document", label: invoiceId }] : [])],
                   links: [],
                 });
+              } else {
+                const wantsOperationalResponder = (() => {
+                  const threads = Array.isArray(result?.threads) ? result.threads.filter(Boolean) : [];
+                  if (threads.some((t) => t.intent === "missing_document_check" || t.intent === "document_status_inquiry")) return true;
+                  return /\bPL\b|Packing\s*List|未着|missing|\bINV[-\s]?\d{1,8}\b/i.test(String(text || ""));
+                })();
+
+                if (wantsOperationalResponder) {
+                  const threads = Array.isArray(result?.threads) ? result.threads.filter(Boolean) : [];
+                  const links = Array.isArray(result?.links) ? result.links.filter(Boolean) : [];
+                  const actionPlans = Array.isArray(result?.actionPlans) ? result.actionPlans.filter(Boolean) : [];
+                  const drafts = Array.isArray(result?.drafts) ? result.drafts.filter(Boolean) : [];
+                  const pendingEmailDrafts = drafts.filter(
+                    (d) => String(d?.channel || "") === "email" && String(d?.status || "") === "pending_approval",
+                  );
+                  const anyEmailDrafts = drafts.filter((d) => String(d?.channel || "") === "email");
+                  const operationalEvents = Array.isArray(result?.activityEvents)
+                    ? result.activityEvents.filter((e) => String(e?.type || "") === "operational_responder")
+                    : [];
+
+                  const matched = result?.matchedPendingClarification && typeof result.matchedPendingClarification === "object"
+                    ? result.matchedPendingClarification
+                    : null;
+                  const matchedStatus = matched ? String(matched.status || "").trim() : "";
+                  const resolvedLabel = (() => {
+                    if (!matched) return "";
+                    const ents = Array.isArray(matched.resolvedEntities) ? matched.resolvedEntities.filter(Boolean) : [];
+                    if (!ents.length) return "";
+                    return ents
+                      .map((e) => `${String(e?.entityType || "").trim()}:${String(e?.entityId || "").trim()}`)
+                      .filter((s) => s !== ":")
+                      .join(", ");
+                  })();
+
+                  const actionPlanHints = actionPlans
+                    .filter((ap) => {
+                      const tid = String(ap?.threadId || "").trim();
+                      if (!tid) return false;
+                      const th = threads.find((t) => String(t?.id || "").trim() === tid);
+                      const intent = String(th?.intent || "");
+                      return intent === "missing_document_check" || intent === "document_status_inquiry";
+                    })
+                    .slice(0, 5)
+                    .map((ap) => {
+                      const tid = String(ap?.threadId || "").trim();
+                      const th = threads.find((t) => String(t?.id || "").trim() === tid) || null;
+                      const intent = th ? String(th.intent || "") : "unknown";
+                      const types = Array.isArray(ap?.actionTypes) ? ap.actionTypes.map((t) => String(t ?? "").trim()).filter(Boolean) : [];
+                      return `actionPlan: ${String(ap?.id || "").trim() || "n/a"} thread=${tid || "n/a"} intent=${intent} status=${String(ap?.status || "")} types=${types.join(",") || "-"}`;
+                    });
+
+                  const emailHints = [
+                    pendingEmailDrafts.length
+                      ? `pendingEmailDrafts: ${pendingEmailDrafts.length}`
+                      : `pendingEmailDrafts: 0 (emailDrafts=${anyEmailDrafts.length})`,
+                    ...anyEmailDrafts.slice(0, 3).map((d) => {
+                      const subject = String(d?.subject || "").trim();
+                      const body = String(d?.body || "").trim();
+                      const bodyHasMissing = /未着|missing/i.test(body);
+                      return `emailDraft: status=${String(d?.status || "")} subject=${subject ? JSON.stringify(subject.slice(0, 80)) : "n/a"} bodyHas(未着|missing)=${bodyHasMissing ? "yes" : "no"}`;
+                    }),
+                  ];
+
+                  pushOperationalResponderDebug({
+                    title: "Operational responder not triggered",
+                    occurredAt: new Date().toISOString(),
+                    details: [
+                      operationalEvents.length ? `operational_responder ActivityEvent: ${operationalEvents.length}` : "operational_responder ActivityEvent: 0",
+                      matched ? `matchedPendingClarification: ${matchedStatus || "n/a"}${resolvedLabel ? ` resolvedLabel=${resolvedLabel}` : ""}` : "matchedPendingClarification: none",
+                      `counts: threads=${threads.length} links=${links.length} actionPlans=${actionPlans.length} drafts=${drafts.length}`,
+                      ...actionPlanHints,
+                      ...emailHints,
+                      "Note: Operational Responder trigger requires a pending_approval email draft that explicitly indicates PL missing (e.g. contains '未着' or 'missing').",
+                      matched && matchedStatus && actionPlans.length === 0
+                        ? "Hint: actionPlans/drafts may be intentionally suppressed on clarification-reply ingests to avoid double-sending; if this reply is meant to resume the original request, consider re-ingesting the original text + resolved INV/SI/SHP together."
+                        : "",
+                    ].filter(Boolean),
+                  });
+                }
               }
             } catch (e) {
               console.warn("[demo] failed to enqueue supplier follow-up approval:", String(e));
