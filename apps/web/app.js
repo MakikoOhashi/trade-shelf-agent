@@ -2372,9 +2372,9 @@ function activityEventToFeedItem(ev) {
       case "clarification_matched":
         return "確認返信を紐付け";
       case "clarification_required":
-        return "追加情報が必要";
+        return "確認質問";
       case "human_selection_required":
-        return "候補選択が必要";
+        return "候補確認";
       case "reminder_planned":
         return "リマインド予定";
       case "classified":
@@ -2880,13 +2880,140 @@ function sortConversationMessagesOldestFirst(messages) {
 
 function openConversationThreadModal(thr) {
   if (!thr) return;
-  const title = String(thr.title || "会話");
   const who = String(thr.requesterName || "—");
   const src = formatRequestSourceLabel(thr.sourceChannel);
   const updated = String(thr.updatedAt || "");
   const statusKey = normalizeConversationStatusKey(thr.status);
   const siIds = Array.isArray(thr.relatedSiIds) ? thr.relatedSiIds.filter(Boolean) : [];
   const issueIds = Array.isArray(thr.relatedIssueIds) ? thr.relatedIssueIds.filter(Boolean) : [];
+  const agentName = "Trade Shelf Agent";
+
+  const extractDisplayName = (actorLike) => {
+    const raw = String(actorLike || "").trim();
+    if (!raw) return "";
+    // e.g. "Teams / 営業A" -> "営業A"
+    const parts = raw.split("/").map((s) => s.trim()).filter(Boolean);
+    return parts.length ? parts[parts.length - 1] : raw;
+  };
+
+  const relatedRawRequests = (() => {
+    const convId = String(thr?.id || "").trim();
+    const list = Array.isArray(state.rawRequests) ? state.rawRequests.filter(Boolean) : [];
+    return list.filter((r) => {
+      const rid = String(r?.conversationThreadId || "").trim() || resolveConversationThreadIdForRawRequest(r);
+      return rid && rid === convId;
+    });
+  })();
+
+  const relatedRawInputIds = Array.from(
+    new Set(
+      relatedRawRequests
+        .map((r) => String(r?.originalRawInputId || r?.sourceRawInputId || r?.id || "").trim())
+        .filter(Boolean),
+    ),
+  );
+
+  const rawEventsAll = Array.isArray(state.latestIngestResult?.activityEvents) ? state.latestIngestResult.activityEvents.filter(Boolean) : [];
+  const rawEvents = rawEventsAll.filter((ev) => {
+    const srcId = String(ev?.sourceRawInputId || "").trim();
+    const threadId = String(ev?.threadId || "").trim();
+    if (srcId && relatedRawInputIds.includes(srcId)) return true;
+    if (threadId && thr.representativeThreadId && threadId === String(thr.representativeThreadId)) return true;
+    return false;
+  });
+
+  const orderedEvents = rawEvents
+    .slice()
+    .sort(
+      (a, b) =>
+        String(a?.occurredAt || "").localeCompare(String(b?.occurredAt || "")) ||
+        (Number(a?.sequence ?? 0) - Number(b?.sequence ?? 0)) ||
+        String(a?.id || "").localeCompare(String(b?.id || "")),
+    );
+
+  const links = Array.isArray(state.latestIngestResult?.links) ? state.latestIngestResult.links.filter(Boolean) : [];
+  const threadLinks = thr.representativeThreadId
+    ? links.filter((l) => String(l?.threadId || "") === String(thr.representativeThreadId))
+    : [];
+  const primaryInvoiceId =
+    String(
+      (threadLinks.find((l) => String(l?.entityType || "") === "Document" && String(l?.entityId || "").trim()) || {}).entityId || "",
+    ).trim() || "";
+
+  const baseMessages = (() => {
+    const out = [];
+    for (const ev of orderedEvents) {
+      const type = String(ev?.type || "").trim();
+      const description = String(ev?.description || "").trim();
+      const occurredAt = String(ev?.occurredAt || "");
+      if (!type) continue;
+
+      if (type === "raw_input_received") {
+        const sender = extractDisplayName(ev?.actor) || who;
+        if (description) out.push({ speaker: sender, side: "human", text: description, at: occurredAt, type });
+        continue;
+      }
+
+      if (type === "context_resolved") {
+        // e.g. "確認回答を受信：INV-1122の件です"
+        const marker = "確認回答を受信：";
+        const text = description.includes(marker) ? description.split(marker).slice(1).join(marker).trim() : description;
+        if (text) out.push({ speaker: who, side: "human", text, at: occurredAt, type });
+        continue;
+      }
+
+      if (type === "clarification_required" || type === "human_selection_required" || type === "clarification_waiting") {
+        if (description) out.push({ speaker: agentName, side: "ai", text: description, at: occurredAt, type });
+        continue;
+      }
+
+      if (type === "operational_responder") {
+        const head = primaryInvoiceId ? `${primaryInvoiceId} に紐づくPLはまだ届いていません。` : "PLはまだ届いていません。";
+        const text = `${head}\n仕入先への督促メール案を作成しました。\n承認センターでメール案を確認してください。`;
+        out.push({ speaker: agentName, side: "ai", text, at: occurredAt, type });
+        continue;
+      }
+
+      if (type === "approval_required") {
+        out.push({
+          speaker: agentName,
+          side: "ai",
+          text: "返信案を作成しました。承認センターで確認してください。",
+          at: occurredAt,
+          type,
+        });
+        continue;
+      }
+    }
+
+    if (!out.length) {
+      const normalizedMessages = withStableMessageSequence(Array.isArray(thr.messages) ? thr.messages : []);
+      for (const m of normalizedMessages) {
+        const role = String(m?.role || "") === "ai" ? "ai" : "human";
+        const speaker = role === "ai" ? agentName : who;
+        const at = String(m?.createdAt || "");
+        const text = String(m?.text || "");
+        if (!text) continue;
+        out.push({ speaker, side: role, text, at, type: "message" });
+      }
+    }
+    return out;
+  })();
+
+  const chatHtml = baseMessages
+    .map((m) => {
+      const side = m.side === "ai" ? "ai" : "human";
+      const speaker = String(m.speaker || (side === "ai" ? agentName : who));
+      const text = String(m.text || "");
+      const at = m.at ? formatLocalTime(m.at) : "";
+      const meta = `${escapeHtml(speaker)}${at ? ` <span class="muted nt-mono">${escapeHtml(at)}</span>` : ""}`;
+      return `<div class="slack-thread__msg ${side}">
+        <div class="slack-thread__meta">${meta}</div>
+        <div class="slack-thread__bubble">${escapeHtml(text)}</div>
+      </div>`;
+    })
+    .join("");
+
   const metaChips = [
     `<span class="mini-chip">${escapeHtml(who)}</span>`,
     `<span class="mini-chip">${escapeHtml(src)}</span>`,
@@ -2898,27 +3025,32 @@ function openConversationThreadModal(thr) {
     .filter(Boolean)
     .join("");
 
-  const normalizedMessages = withStableMessageSequence(Array.isArray(thr.messages) ? thr.messages : []);
-  const logHtml = normalizedMessages
-    .map((m) => {
-      const role = String(m?.role || "") === "ai" ? "ai" : "human";
-      const sender = role === "ai" ? "AI" : who;
-      const at = String(m?.createdAt || "");
-      const text = String(m?.text || "");
-      const meta = `${escapeHtml(sender)}${at ? ` <span class="muted nt-mono">${escapeHtml(at)}</span>` : ""}`;
-      return `<div class="conversation-message ${role}">
-        <div class="conversation-message__meta">${meta}</div>
-        <div class="conversation-message__body">${escapeHtml(text)}</div>
-      </div>`;
-    })
-    .join("");
-
   openModal({
-    title,
+    title: "会話",
     variant: "conversation_thread",
     bodyHtml: `<div class="conversation-thread-modal">
-      <div class="conversation-thread-modal__meta">${metaChips}</div>
-      <div class="conversation-thread-modal__log">${logHtml || `<div class="nt-muted">No messages</div>`}</div>
+      <div class="slack-thread" aria-label="Conversation thread">
+        <div class="slack-thread__head">
+          <div class="slack-thread__title">${escapeHtml(who)} / ${escapeHtml(agentName)}</div>
+          <div class="slack-thread__sub muted">${escapeHtml(String(thr.title || ""))}</div>
+        </div>
+        <div class="slack-thread__log">${chatHtml || `<div class="nt-muted">No messages</div>`}</div>
+      </div>
+      <details class="debug-collapsible" aria-label="Debug details">
+        <summary>詳細（debug）</summary>
+        <div class="conversation-thread-modal__meta">${metaChips}</div>
+        <div class="conversation-thread-modal__debug">
+          <div class="nt-muted">Activity events</div>
+          <ul class="nt-list nt-mono">${orderedEvents
+            .map((ev) => {
+              const t = String(ev?.type || "");
+              const at = ev?.occurredAt ? formatLocalTime(String(ev.occurredAt)) : "";
+              const desc = clipSingleLine(String(ev?.description || ""), 140);
+              return `<li>${escapeHtml(t)}${at ? ` <span class="muted">${escapeHtml(at)}</span>` : ""}${desc ? ` — ${escapeHtml(desc)}` : ""}</li>`;
+            })
+            .join("")}</ul>
+        </div>
+      </details>
     </div>`,
   });
 }
@@ -9772,9 +9904,9 @@ function setupNewTop() {
             if (ctx && String(ctx.status || "") !== "resolved_enough") {
               const st = String(ctx.status || "");
               const q = String(ctx.clarificationQuestion || "").trim();
-              const prefix = st === "ambiguous" ? "候補選択が必要です" : "追加情報が必要です";
-              const tail = "承認センターの確認返信候補に追加しました。";
-              return `${prefix}${q ? `: ${q}` : ""} ${tail}`;
+              // UI: show only the actual question (avoid internal workflow wording).
+              if (q) return `Trade Shelf Agent: ${q}`;
+              return "Trade Shelf Agent: 対象を教えてください。";
             }
             const muts = Array.isArray(result?.issueMutations) ? result.issueMutations.filter(Boolean) : [];
             const plans = Array.isArray(result?.actionPlans) ? result.actionPlans.filter(Boolean) : [];
@@ -9786,13 +9918,13 @@ function setupNewTop() {
             );
             const label = mode === "llm" ? "AI分類" : "モック";
             if (!hasApprovalItems) {
-              if (result?.matchedPendingClarification?.id) return `(${label}) 補足情報を反映しました。`;
+              if (result?.matchedPendingClarification?.id) return `(${label}) 追加情報を反映しました。`;
               if (Array.isArray(result?.stateTransitionCandidates) && result.stateTransitionCandidates.length)
                 return `(${label}) 状態遷移候補を検出しました。`;
               return `(${label}) 解析結果を更新しました。`;
             }
             const count = muts.length || plans.length || 0;
-            return `(${label}) 承認センターに反映しました${count ? `（${count}件）` : ""}。`;
+            return `(${label}) 返信案・更新を用意しました${count ? `（${count}件）` : ""}。`;
           })();
 
           // Reflect ingest into the Requests inbox (mock Conversation Hub)

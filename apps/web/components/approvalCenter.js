@@ -783,7 +783,7 @@ export function createApprovalCenterRenderer(deps) {
                 <span class="request-inbox-badge is-pending">不足情報の確認待ち</span>
               </div>
             </div>
-            <div class="conversation-thread-card__title">${escapeHtml("確認返信候補")}</div>
+            <div class="conversation-thread-card__title">${escapeHtml("返信案")}</div>
             <div class="conversation-thread-card__preview">${escapeHtml(preview)}</div>
             <div class="conversation-thread-card__foot">
               <span class="conversation-thread-card__chips">${metaChips}</span>
@@ -858,7 +858,7 @@ export function createApprovalCenterRenderer(deps) {
           return `<div class="pending-mutations__item">
             <div class="pending-mutations__top">
               <div class="pending-mutations__title-row">
-                <div class="pending-mutations__title">${escapeHtml("確認返信候補（確認待ち）")}</div>
+                <div class="pending-mutations__title">${escapeHtml("返信案（確認待ち）")}</div>
                 ${pill}
               </div>
               <div class="pending-mutations__sub">
@@ -888,8 +888,8 @@ export function createApprovalCenterRenderer(deps) {
           return `<div class="pending-mutations__item" role="button" tabindex="0" data-reply-candidate-open="${escapeHtml(apId)}">
             <div class="pending-mutations__top">
               <div class="pending-mutations__title-row">
-                <div class="pending-mutations__title">${escapeHtml(String(plan.title || "確認返信候補"))}</div>
-                <span class="issue-pill is-approval">確認返信候補</span>
+                <div class="pending-mutations__title">${escapeHtml(String(plan.title || "返信案"))}</div>
+                <span class="issue-pill is-approval">返信案</span>
               </div>
               <div class="pending-mutations__sub">
                 <span class="issue-pill">${escapeHtml(approvalStatusLabelJa(approvalStatus))}</span>
@@ -902,7 +902,7 @@ export function createApprovalCenterRenderer(deps) {
         .join("");
 
       return `<section class="pending-mutations" aria-label="Reply candidates">
-        <div class="pending-mutations__h">確認返信候補</div>
+        <div class="pending-mutations__h">返信案</div>
         ${pendingRows}
         ${rows}
       </section>`;
@@ -918,7 +918,7 @@ export function createApprovalCenterRenderer(deps) {
       const links = Array.isArray(state.latestIngestResult?.links) ? state.latestIngestResult.links.filter(Boolean) : [];
 
       const plan = plans.find((p) => p && String(p.id || "") === apId) || null;
-      if (!plan) return `<div class="nt-muted">確認返信候補が見つかりませんでした。</div>`;
+      if (!plan) return `<div class="nt-muted">返信案が見つかりませんでした。</div>`;
 
       const threadId = String(plan.threadId || "");
       const resolution = resolutions.find((r) => r && String(r.threadId || "") === threadId) || null;
@@ -947,10 +947,10 @@ export function createApprovalCenterRenderer(deps) {
         <div class="issue-history-header">
           <button class="btn btn--small btn--ghost" type="button" data-reply-back="1">← 戻る</button>
           <div class="issue-history-header__title">
-            <div class="issue-history-header__h">${escapeHtml(String(plan.title || "確認返信候補"))}</div>
+            <div class="issue-history-header__h">${escapeHtml(String(plan.title || "返信案"))}</div>
             <div class="issue-history-header__badges">
               <span class="issue-pill">${escapeHtml(approvalStatusLabelJa(approvalStatus))}</span>
-              <span class="issue-pill">確認返信候補</span>
+              <span class="issue-pill">返信案</span>
             </div>
           </div>
         </div>

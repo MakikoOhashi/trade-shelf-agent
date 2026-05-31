@@ -2932,7 +2932,7 @@ export function runIngestPipeline(input, options = {}) {
                 sequence: contextResolution.status === "ambiguous"
                     ? ACTIVITY_SEQUENCE.human_selection_required
                     : ACTIVITY_SEQUENCE.clarification_required,
-                title: contextResolution.status === "ambiguous" ? "候補選択が必要" : "追加情報が必要です",
+                title: contextResolution.status === "ambiguous" ? "候補確認" : "確認質問",
                 description: body,
                 sourceRawInputId: input.id,
                 threadId,
