@@ -4251,8 +4251,8 @@ function renderNewTop() {
       <div class="requests-intake" aria-label="Intake">
         <div class="requests-intake__head">
           <div>
-            <div class="requests-intake__title">変更・確認依頼を取り込む</div>
-            <div class="requests-intake__sub muted">貼り付けた依頼をAIが整理し、受信ボックスへ反映します。</div>
+            <div class="requests-intake__title">業務連絡を試す</div>
+            <div class="requests-intake__sub muted">Slack・Teams・Email の代わりに、業務メッセージを入力してAIエージェントの動作を試せます。</div>
           </div>
           ${
             embedded && rightPanelToggle
@@ -4272,7 +4272,7 @@ function renderNewTop() {
           <div class="requests-intake__actions">
             <button class="btn btn--primary btn--small" type="button" data-ingest-submit="1" ${
               state.ingestLoading ? "disabled" : ""
-            }>${effectiveClassifyMode === "mock" ? "モックを実行" : "AI分類を実行"}</button>
+            }>${effectiveClassifyMode === "mock" ? "モックを実行" : "AIエージェントを実行"}</button>
             <button class="btn btn--ghost btn--small" type="button" data-ingest-sample="1" ${state.ingestLoading ? "disabled" : ""}>サンプル</button>
             ${
               state.ingestLoading

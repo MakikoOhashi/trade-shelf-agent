@@ -2164,8 +2164,8 @@ const server = http.createServer(async (req, res) => {
 
                 // Slack返信（営業向け）
                 const salesText = invoiceId
-                  ? `${invoiceId} に紐づくPLはまだ届いていません。\n仕入先への督促メール案を作成しました。`
-                  : "PLはまだ届いていません。\n仕入先への督促メール案を作成しました。";
+                  ? `${invoiceId} に紐づくPLはまだ届いていません。\n仕入先への督促メール案を作成しました。\n承認センターでメール案を確認してください。`
+                  : "PLはまだ届いていません。\n仕入先への督促メール案を作成しました。\n承認センターでメール案を確認してください。";
                 const slackChannel = String(channelId || "").trim();
                 const slackThread = String(threadTs || ts || "").trim();
 
