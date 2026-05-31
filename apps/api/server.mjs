@@ -2137,18 +2137,23 @@ const server = http.createServer(async (req, res) => {
                 const salesText = invoiceId
                   ? `${invoiceId} に紐づくPLはまだ届いていません。\n仕入先への督促メール案を作成しました。`
                   : "PLはまだ届いていません。\n仕入先への督促メール案を作成しました。";
-                await postSlackReply({ channel: channelId, threadTs: threadTs || ts, text: salesText }).catch(() => null);
+                const slackChannel = String(channelId || "").trim();
+                const slackThread = String(threadTs || ts || "").trim();
+                const slackResult =
+                  slackChannel && slackThread
+                    ? await postSlackReply({ channel: slackChannel, threadTs: slackThread, text: salesText })
+                    : { ok: false, error: "no_channel_or_thread" };
 
                 pushActivityItem({
                   id: `demo:pl-missing:slack-replied:${created.id}:${Date.now()}`,
                   type: "aiProcessed",
                   source: "ai",
-                  title: "Slack返信送信済み",
+                  title: slackResult.ok ? "Slack返信送信済み：PL未着を営業へ通知" : `Slack返信失敗：${slackResult.error || "unknown_error"}`,
                   actor: "operational responder",
                   occurredAt: new Date().toISOString(),
-                  summary: "営業へSlack返信しました",
+                  summary: slackResult.ok ? "PL未着を営業へSlack返信しました" : "営業向けSlack返信に失敗しました",
                   details: [salesText],
-                  statusKey: "success",
+                  statusKey: slackResult.ok ? "success" : "error",
                   linked: [...(invoiceId ? [{ kind: "document", label: invoiceId }] : [])],
                   links: [],
                 });
