@@ -4370,6 +4370,158 @@ function renderNewTop() {
         </div>`
       : "";
 
+    const renderSalesChatDemo = () => {
+      const agentName = "Trade Shelf Agent";
+      const salesName = "営業A";
+
+      const resolvePrimaryInvoiceId = () => {
+        const memos = Array.isArray(state.humanMemos) ? state.humanMemos.filter(Boolean) : [];
+        for (const memo of memos) {
+          const entities = Array.isArray(memo?.linkedEntities) ? memo.linkedEntities.filter(Boolean) : [];
+          for (const e of entities) {
+            if (String(e?.type || "").toLowerCase() !== "invoice") continue;
+            const id = String(e?.id || "").trim();
+            if (id) return id;
+          }
+        }
+        return "INV-1122";
+      };
+
+      const normalizeChatTextFromContextResolved = (description) => {
+        const marker = "確認回答を受信：";
+        const txt = String(description || "").trim();
+        if (!txt) return "";
+        return txt.includes(marker) ? txt.split(marker).slice(1).join(marker).trim() : txt;
+      };
+
+      const buildMessagesFromLatestIngestResult = () => {
+        const eventsRaw = Array.isArray(state.latestIngestResult?.activityEvents) ? state.latestIngestResult.activityEvents.filter(Boolean) : [];
+        if (!eventsRaw.length) return [];
+        const ordered = eventsRaw
+          .slice()
+          .sort(
+            (a, b) =>
+              String(a?.occurredAt || "").localeCompare(String(b?.occurredAt || "")) ||
+              (Number(a?.sequence ?? 0) - Number(b?.sequence ?? 0)) ||
+              String(a?.id || "").localeCompare(String(b?.id || "")),
+          );
+
+        const invoiceId = resolvePrimaryInvoiceId();
+        const out = [];
+        for (const ev of ordered) {
+          const type = String(ev?.type || "").trim();
+          const description = String(ev?.description || "").trim();
+          const occurredAt = String(ev?.occurredAt || "");
+          if (!type) continue;
+
+          if (type === "raw_input_received") {
+            if (!description) continue;
+            out.push({ speaker: salesName, side: "human", text: description, at: occurredAt });
+            continue;
+          }
+
+          if (type === "context_resolved") {
+            const text = normalizeChatTextFromContextResolved(description);
+            if (!text) continue;
+            out.push({ speaker: salesName, side: "human", text, at: occurredAt });
+            continue;
+          }
+
+          if (type === "clarification_required" || type === "human_selection_required" || type === "clarification_waiting") {
+            if (!description) continue;
+            out.push({ speaker: agentName, side: "ai", text: description, at: occurredAt });
+            continue;
+          }
+
+          if (type === "operational_responder") {
+            const text = `${invoiceId} に紐づくPLはまだ届いていません。\n仕入先への督促メール案を作成しました。\n承認センターでメール案を確認してください。`;
+            out.push({ speaker: agentName, side: "ai", text, at: occurredAt });
+            continue;
+          }
+
+          if (type === "approval_required") {
+            out.push({
+              speaker: agentName,
+              side: "ai",
+              text: "返信案を作成しました。承認センターで確認してください。",
+              at: occurredAt,
+            });
+            continue;
+          }
+        }
+        return out;
+      };
+
+      const buildMessagesFromSeededRawRequests = () => {
+        const list = Array.isArray(state.rawRequests) ? state.rawRequests.filter(Boolean) : [];
+        const first = list[0] || null;
+        const thr = first && Array.isArray(first.aiThreads) ? first.aiThreads.find(Boolean) : null;
+        const msgs = thr && Array.isArray(thr.messages) ? thr.messages.filter(Boolean) : [];
+        if (!msgs.length) return [];
+        return msgs
+          .map((m) => {
+            const role = String(m?.role || "");
+            const side = role === "agent" ? "ai" : "human";
+            const speaker = side === "ai" ? agentName : salesName;
+            const at = String(m?.createdAt || "");
+            const text = String(m?.text || "");
+            if (!text) return null;
+            return { speaker, side, at, text };
+          })
+          .filter(Boolean);
+      };
+
+      const fallbackDemoScriptMessages = () => {
+        return [
+          { speaker: salesName, side: "human", text: "PLきましたか？", at: "" },
+          { speaker: agentName, side: "ai", text: "どの出荷の件でしょうか？\nSHP番号 / SI番号 / INV番号 を教えてください。", at: "" },
+          { speaker: salesName, side: "human", text: "INV-1122の件です", at: "" },
+          {
+            speaker: agentName,
+            side: "ai",
+            text: "INV-1122 に紐づくPLはまだ届いていません。\n仕入先への督促メール案を作成しました。\n承認センターでメール案を確認してください。",
+            at: "",
+          },
+        ];
+      };
+
+      const messages = (() => {
+        const fromIngest = buildMessagesFromLatestIngestResult();
+        if (fromIngest.length) return fromIngest;
+        const fromSeed = buildMessagesFromSeededRawRequests();
+        if (fromSeed.length) return fromSeed;
+        return fallbackDemoScriptMessages();
+      })();
+
+      const logHtml = messages
+        .map((m) => {
+          const side = m.side === "ai" ? "ai" : "human";
+          const speaker = String(m.speaker || (side === "ai" ? agentName : salesName));
+          const text = String(m.text || "");
+          const at = m.at ? formatLocalTime(m.at) : "";
+          const meta = `${escapeHtml(speaker)}${
+            at ? ` <span class="muted nt-mono sales-chat-demo__at">${escapeHtml(at)}</span>` : ""
+          }${side === "ai" ? ` <span class="pill pill--mini sales-chat-demo__badge">APP</span>` : ""}`;
+          return `<div class="slack-thread__msg ${side}">
+            <div class="slack-thread__meta">${meta}</div>
+            <div class="slack-thread__bubble">${escapeHtml(text)}</div>
+          </div>`;
+        })
+        .join("");
+
+      return `<section class="sales-chat-demo" aria-label="Sales chat demo">
+        <div class="sales-chat-demo__head">
+          <div class="sales-chat-demo__title">営業チャット（デモ）</div>
+          <div class="sales-chat-demo__sub muted">Slackの代わりに、営業とのやり取りをこの画面で再現します。</div>
+        </div>
+        <div class="sales-chat-demo__body">
+          <div class="slack-thread" aria-label="Demo thread">
+            <div class="slack-thread__log">${logHtml || `<div class="nt-muted">No messages</div>`}</div>
+          </div>
+        </div>
+      </section>`;
+    };
+
     return `<section class="req-page requests-hub ${embedded ? "req-page--embedded" : ""}" aria-label="Change & Check Requests">
       ${
         embedded
@@ -4398,7 +4550,7 @@ function renderNewTop() {
         </div>
 
         <div class="requests-intake__form" aria-label="Mock ingest form">
-          <textarea class="ingest-textarea requests-intake__textarea" rows="2" placeholder="例: PLまだ？あとSI-224も確認して" data-ingest-input="1">${escapeHtml(
+          <textarea class="ingest-textarea requests-intake__textarea" rows="2" placeholder="例: PLきましたか？" data-ingest-input="1">${escapeHtml(
             String(state.ingestInputText || ""),
           )}</textarea>
           <div class="requests-intake__actions">
@@ -4422,6 +4574,8 @@ function renderNewTop() {
           </details>
         </div>
       </div>
+
+      ${renderSalesChatDemo()}
 
       ${
         embedded
@@ -9860,7 +10014,7 @@ function setupNewTop() {
 
     const ingestSampleEl = target.closest && target.closest("[data-ingest-sample]");
     if (ingestSampleEl) {
-      state.ingestInputText = "PLまだ？あとSI-224も確認して";
+      state.ingestInputText = "PLきましたか？";
       state.ingestError = "";
       renderApp();
       return;
