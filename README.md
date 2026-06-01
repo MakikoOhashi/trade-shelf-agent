@@ -74,7 +74,7 @@ Processor / agent 設計:
 ## Main Components
 
 機能・ページ一覧:
-[docs/feacures.md](docs/features.md)
+[docs/features.md](docs/features.md)
 
 ### Shelf
 Shipment / Invoice / Issue の状態を管理する operational shelf。
