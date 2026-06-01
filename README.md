@@ -71,6 +71,29 @@ Processor / agent 設計:
 - Operational Responder: PL未着など、デモで重要なケースに絞って返信/承認ブリッジを行う
 - Human Approval: 外部送信・状態変更は必ず承認を通す
 
+## Main Components
+
+機能・ページ一覧:
+[docs/feacures.md](docs/features.md)
+
+### Shelf
+Shipment / Invoice / Issue の状態を管理する operational shelf。
+
+### Agent Toast
+AI が現在行っている分類・確認・判断をリアルタイム表示。
+
+### Document Workspace
+書類・関連情報・Issue を横断して確認する workspace。
+
+### Approvals
+外部送信・状態変更など Human-in-the-loop の承認センター。
+
+### Activity
+classification / resolver / approval などの AI action log。
+
+### Settings
+Slack の設定。
+
 ## Tech Stack (current)
 
 - Node.js (`apps/api/server.mjs`): API + SPA static hosting
