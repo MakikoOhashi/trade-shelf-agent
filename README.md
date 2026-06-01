@@ -4,6 +4,7 @@ Shipment・Invoice・通関書類・Issue状態を整理・把握しながら、
 営業からの曖昧な問い合わせへ対応する
 貿易・物流業務向けAIオペレーションアシスタント。
 
+- Demo: https://trade-shelf-agent-web-eng2hrd9cnbadsck.japanwest-01.azurewebsites.net/
 - Demo video: ([Youtube](https://www.youtube.com/watch?v=f34dxzyMoKc))
 - Zenn article: ([Zenn](https://zenn.dev/kimadev/articles/557c4ba398a5e2))
 - Hackathon: Microsoft Agent Hackathon 2026 ([Zenn](https://zenn.dev/hackathons/microsoft-agent-hackathon-2026))
