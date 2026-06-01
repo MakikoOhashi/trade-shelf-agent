@@ -1,770 +1,320 @@
-# Agent Processors
+# Agent Processors（現状実装ベース）
 
-## 基本思想
+Trade Shelf Agent は「単一の人格AI」ではなく、**業務処理単位の processor（処理器）** を連結して動かす設計を取っています。
 
-Trade Shelf Agent は、「なんでも答える貿易AI」を作るものではない。
+このドキュメントは、理想の multi-agent 構想ではなく、`README.md` / `docs/current-architecture.md` / `apps/api/server.mjs` / `packages/shared/src/*.ts` / `apps/web/app.js` の **現状実装** に即して整理します。
 
-代わりに、小さな Processor（処理器）を連結した構造を採用する。
+## 前提：デモの入口と基本データ
 
-各 Processor は:
+- 入力（入口）
+  - Web: `POST /ingest/mock` / `POST /ingest/llm`（`apps/api/server.mjs`）
+  - Slack: `/slack/events`（`apps/api/server.mjs`）
+- 永続化（デモ）
+  - file-backed store（`/home/data/*.json`。詳細は `docs/current-architecture.md`）
+- 共有ドメイン（入出力の型）
+  - `RawInput` / `OperationalThread` / `EntityLink` / `PendingClarification` / `ActionPlan` / `DraftDocument` / `ActivityEvent` など（`packages/shared/src/domain.ts`）
 
-- 明確な責務
-- 構造化された入力 / 出力
-- failure handling
-- 次処理への明示的トリガー
+## Processor一覧（現状）
 
-を持つ。
+現状デモで動いている processor 群は、概ね以下です。
 
-目的は:
+1. Intake / Classification Processor
+2. Clarification Processor（pending clarification queue）
+3. Relationship Resolver
+4. Intake Resolver
+5. Issue Planner
+6. Action Planner
+7. Draft Writer
+8. Operational Responder（PL未着などの業務返信/承認ブリッジ）
+9. Human Approval Layer
+10. Activity Logger
 
-- AI挙動を観測可能にする
-- 処理状態を追跡可能にする
-- 人間が途中介入できるようにする
-- JSON出力を小さく保つ
-- 「分類」と「文章生成」を分離する
-
-ことである。
-
-AIの主用途は:
-
-- 分類
-- 分解
-- 抽出
-- 紐付け
-- 行動計画
-- 下書き生成
-
-であり、「自由意思を持つ業務AI」ではない。
+以降、各 processor について **Responsibility / Input / Output / Current implementation / Demo behavior** を記載します。
 
 ---
 
-## Pending Clarification Queue（文脈接続）
+## 1) Intake / Classification Processor
 
-Teams thread / replyToId があれば使う。ただし実務では営業が別投稿する可能性が高いので、必須にしない。
+### 1. Responsibility
+- 入力テキストを **業務スレッド（OperationalThread）** に分解・分類する
+- 文中の番号（SI / SHP / INV など）を抽出し、後続の紐付けの起点を作る
+- Azure OpenAI / Foundry が利用できる場合は LLM、無い場合は mock / rule ベースにフォールバックする
 
-代わりに「pending clarification queue」を持つ。
+分類する業務意図（ドメイン表現としての例）：
+- **PL到着確認**（「PLまだ？」「PL届いた？」など）
+- **状態更新**（「出荷済みにして」「通関に進んだ」など）
+- **出荷状況確認**（「いつ出る？」「今どこ？」など）
+- **ETA変更**（「ETAが前倒し/遅れた」など）
+- **情報不足**（対象番号が無い、複数候補があり確定できない）
 
-例:
+ただし現状実装の intent 値は、`apps/api/server.mjs` の `CLASSIFY_SYSTEM_PROMPT` / `CLASSIFY_INTENTS` に定義された以下へ正規化されます（デモ都合で最小集合）：
+- `missing_document_check`（PL到着確認はここに寄ることが多い）
+- `shipment_status_check`（出荷状況確認）
+- `eta_change`（ETA変更）
+- `quantity_mismatch`（数量差異）
+- `air_change_check`（Air/便変更の確認）
+- `unknown`（情報不足など）
 
-1. Human Input: `PLまだ？`
-2. Context Resolver: `missing_context`
-3. Clarification Draft: `どのSIまたはShipmentのPLでしょうか？`
-4. Pending Clarification Queue に追加: `CLR-xxxx`（status: `awaiting_clarification_reply`）
-5. Human Input: `SI-224だよ`
-6. Pending Matcher: requester + channel + 直近 + missingFields を満たす pending をマッチ
-7. Context Resolver: `resolved_enough`
-8. 先ほどの質問への返信として処理: `PLまだ？ 対象: SI-2026-224`
+「状態更新」は intent というより、後段の **状態遷移候補検出 → 承認**（`packages/shared/src/ingest.ts` の `buildStateTransitionCandidates()` など）として扱います。
 
----
+### 2. Input
+- `RawInput`（`rawText`, `senderName`, `source`, `channel`, `threadTs` など）
 
-# Processor Pipeline
+### 3. Output
+- `OperationalThread[]`
+  - `intent`（現状: `missing_document_check` / `shipment_status_check` / `eta_change` / `quantity_mismatch` / `air_change_check` / `unknown`）
+  - `extractedEntities`（例: `siIds`, `shipmentIds`, `invoiceIds`, `documentTypes`）
 
-```mermaid
-flowchart TD
+### 4. Current implementation
+- rule / mock
+  - `packages/shared/src/ingest.ts` の `classifyRawInput()`
+- LLM classification（利用可能な場合）
+  - `apps/api/server.mjs` の `classifyThreadsWithLlm()`（system prompt: `CLASSIFY_SYSTEM_PROMPT`）
+  - `apps/api/server.mjs` の `linkEntitiesByRules()`（LLM結果へ entity を補強）
+- 共通のパイプライン入口
+  - `packages/shared/src/ingest.ts` の `runIngestPipeline()` / `buildIngestResultFromThreads()`
 
-A[Human Input / Agent Observation]
-
-A --> B[Context Resolver]
-
-B -->|missing_context| C[Clarification Draft]
-C --> D[Human Reply Waiting]
-D --> E[Reminder Planner]
-E --> F[Human Reply]
-F --> A
-
-B -->|ambiguous| G[Candidate Suggestions]
-G --> H[Awaiting Human Selection]
-H --> I[Reminder Planner (selection)]
-I --> J[Human Selection]
-J --> A
-
-B -->|resolved_enough| ExecutionTimelineAgent[Execution Timeline Agent]
-ExecutionTimelineAgent --> AgentObservation[Agent Observation: timeline_deviation]
-AgentObservation --> K[Tagger]
-
-K --> L[Thread Splitter]
-
-L --> M[Entity Linker]
-
-M --> N[Intake Resolver]
-
-N -->|status_query| O[Reply Action]
-
-N -->|informational_only| P[Timeline Event Only]
-
-N -->|issue_candidate_required| Q[Issue Planner]
-
-Q --> R[Action Planner]
-
-R --> S[Draft Writer]
-
-S --> T[Approval Handler]
-
-T --> U[Event Logger]
-```
-
-Context Resolver について:
-
-- Context Resolver は「Taggerできるだけの文脈があるか」を判定する
-- `missing_context` / `ambiguous` は Issue化しない（pipeline を停止）
-- clarification / selection への返信は conversation context を持った新しい Human Input として再投入される
-
-各 Processor は、処理結果を Orchestrator / Router に返す。
-
-Orchestrator は:
-
-- 処理成功判定
-- 次に動かす Processor
-- Human Review が必要か
-- 処理停止すべきか
-
-を判断する。
-
-Processor 同士は直接呼び出さない。
+### 5. Demo behavior
+- Web の「Requests」からテキストを投げると、スレッド（タイトル/要約/intent）が結果として表示される
+- Slack のメッセージでも同様に classification が走り、Activity に処理の痕跡が残る（表示は UI 側で整形）
 
 ---
 
-# Processor Definitions
+## 2) Clarification Processor（不足情報の確認）
 
----
+### 1. Responsibility
+- 対象（SI / Shipment / INV）が特定できない入力に対して、**確認質問を生成**し、返信待ち状態を作る
+- 後から来た返信を、元の問い合わせに **再接続** して ingest を継続する
 
-## Execution Timeline Agent（納期逆算・逸脱検出）
-
-役割:
-
-- 顧客納期・ETD/ETA・Booking・工場出荷・書類準備などから「理想実行シナリオ（逆算タイムライン）」を組み立てる
-- 現在状態と比較し、遅延・逸脱・納期リスク（timeline deviation）を検出する
-
-入力（例）:
-
-- Human Input（顧客納期 / 希望納期の更新）
-- Teams / Email（フォワーダー・仕入先からの進捗）
-- Document arrival（PL/BL/INVなどの到着）
-- Shipment state（Booking/ETD/ETA/通関/配送）
-- Customer delivery date（顧客納期）
-- Supplier / forwarder updates（出荷予定・確定・変更）
-
-出力（例）:
-
-- `timeline_deviation` observation（遅延/逸脱の構造化情報）
-- risk summary（納期・物流リスク要約）
-- recommended next action（次にやるべきアクション候補）
-- issue candidate signal（必要なら Issue化候補シグナル）
-
-既存 flow との接続:
-
-- Execution Timeline Agent は Issue を直接作らない
-- `timeline_deviation` を Agent Observation として出力する
-- その後は既存の `Tagger → Intake Resolver → Issue Planner → Action Planner → Draft Writer → Approval Handler` に乗せる
-- 遅延・逸脱が業務対応を必要とする閾値を超えた場合、`timeline_deviation` に `issue_candidate_required` の signal を付与できる
-- Issue Planner は internal Issue Candidate を自動作成してよい（外部送信はしない）
-- 仕入先・顧客・フォワーダーなど外部関係者への送信は Approval Handler による人間承認を必須とする
-
-## State Transition Agent
-
-State Transition Agent evaluates whether an external event or document evidence should move an internal entity from one operational state to another.
-It emits `StateTransitionCandidate`.
-A candidate is not automatically an Issue or Approval.
-
-Phase 6-1 (current implementation):
-- State Transition Agent emits `StateTransitionCandidate[]` as `stateTransitionCandidates` in `runIngestPipeline` result
-- Candidates are not applied yet
-- Candidates are not shown in UI yet
-- Candidates are not converted to IssueMutation yet
-
-Future intent (not implemented yet):
-- High confidence + no contradiction: auto-apply candidate and log activity
-- Low confidence / contradiction / high impact: convert to Issue Candidate
-- External action: requires Approval
-
-## Processor I/O shape（最小）
-
-各 Processor は「最小の I/O shape（入力/出力）」を持つ。ここで示す shape は、Orchestrator が Processor を差し替え可能に保つための契約である。
-
-### RawInput（最小）
-
-- `id`
-- `source`
-- `rawText`
-- `receivedAt`
-- `senderName`
-- `channel`
-
-### Tagger / Thread Splitter
-
-input:
-
+### 2. Input
 - `RawInput`
+- 既存の `PendingClarification[]`（キュー）
 
-output:
+### 3. Output
+- `PendingClarification`（新規作成 or 更新）
+- `ActivityEvent[]`（`clarification_required` / `clarification_waiting` / `clarification_matched` / `reminder_planned` など）
+- （デモ上）返信文の下書き：`DraftDocument`（`channel: "teams"` 相当の文面）
 
-- `OperationalThread[]`
+### 4. Current implementation
+- context判定（「後続へ進めるか / 不足か」）
+  - `packages/shared/src/ingest.ts` の `resolveContext()`
+- pending clarification の生成・マッチ・replay
+  - `packages/shared/src/ingest.ts` の `runIngestPipeline()`（`matchPendingClarification()` を使い、必要に応じて元依頼を replay）
+- pending queue の永続化（デモ）
+  - `apps/api/server.mjs`（`pending-clarifications.json`）
 
-### Entity Linker
+### 5. Demo behavior
+- 例: `PLまだ？` のように対象が無い場合、確認質問が Activity / Draft として見える
+- 返信で `SI-2026-001` や `INV-1234` を送ると、`clarification_matched` が記録され、元依頼へ対象が付与されて ingest が再実行される
 
-input:
+---
 
-- `OperationalThread[]`
+## 3) Relationship Resolver
 
-output:
+### 1. Responsibility
+- 貿易実務の「番号の相互関係（INV / SI / Shipment / PL…）」を解決し、
+  - `INV → Shipment → SI` のような連鎖を **TradeCase** へ寄せる
+  - **PL status（missing / received / unknown）** を解決する
 
-- `EntityLink[]`
+### 2. Input
+- `EntityLink[]`（特に `Document` = INV）
+- `TradeCase[]`（デモでは mock data）
 
-### Intake Resolver
+### 3. Output
+- 追加の `EntityLink[]`（例: Document しか無い thread に SI / Shipment を補う）
+- Operational context（PL status など）の解決結果（内部的に利用）
 
-input:
+### 4. Current implementation
+- `packages/shared/src/relationshipResolver.ts` の `resolveOperationalContext()`
+- `packages/shared/src/ingest.ts` の `runIngestPipeline()` 内で、
+  - Document（INV）から `resolveOperationalContext()` を呼び、SI / Shipment リンクを追加する処理
 
+### 5. Demo behavior
+- INVだけ書いた問い合わせでも、Shelf 上の対象案件へ寄せられ、PL未着などが判定できるようになる
+
+---
+
+## 4) Intake Resolver
+
+### 1. Responsibility
+- classification 結果を「業務としてどう扱うか」に落とし込む
+  - `status_query`（状況返信）
+  - `needs_clarification`（不足情報）
+  - `issue_candidate_required`（対応が必要そう）
+  - `informational_only`（記録のみ）
+
+### 2. Input
 - `RawInput`
 - `OperationalThread[]`
 - `EntityLink[]`
 
-output:
-
+### 3. Output
 - `IntakeResolution[]`
 
-### Issue Planner
+### 4. Current implementation
+- `packages/shared/src/ingest.ts` の `resolveIntake()`
 
-input:
+### 5. Demo behavior
+- Activity に `intake_resolved` が積まれ、「状況照会として処理」「不足情報が必要」等の説明が表示される
 
+---
+
+## 5) Issue Planner
+
+### 1. Responsibility
+- thread を Issue として扱う必要がある場合に、**Issue候補（mutation）** を生成する
+- 承認ポリシーに応じて `mark_approval_required` を追加する（現状はデモ用の単純なポリシー）
+
+### 2. Input
 - `RawInput`
 - `OperationalThread[]`
 - `EntityLink[]`
- - `IntakeResolution[]`
+- `IntakeResolution[]`
 
-output:
-
+### 3. Output
 - `IssueMutation[]`
 
-### Action Planner
+### 4. Current implementation
+- `packages/shared/src/ingest.ts` の `buildIssueMutations()`
 
-input:
+### 5. Demo behavior
+- 承認センター（Approvals）に Issue/承認候補として表示される（表示の粒度はデモ仕様）
 
+---
+
+## 6) Action Planner
+
+### 1. Responsibility
+- thread の intent / intake 状態から「次に何をするべきか」を `ActionPlan` として列挙する
+- `approvalPolicy`（例: `all` / `low_confidence`）や、Relationship Resolver の PL未着判定により `pending_approval` を付与する
+
+### 2. Input
 - `RawInput`
 - `OperationalThread[]`
 - `EntityLink[]`
- - `IntakeResolution[]`
+- `IntakeResolution[]`
 - `IssueMutation[]`
 
-output:
-
+### 3. Output
 - `ActionPlan[]`
 
-### Draft Writer
+### 4. Current implementation
+- `packages/shared/src/ingest.ts` の `planNextActions()`
+- `packages/shared/src/ingest.ts` の `runIngestPipeline()` 内で `pending_approval` 判定を付与
 
-input:
+### 5. Demo behavior
+- 承認が必要なアクションは「承認待ち」として UI に現れる
 
+---
+
+## 7) Draft Writer
+
+### 1. Responsibility
+- `ActionPlan` を元に、外部送信の前段階として **下書き（DraftDocument）** を生成する
+- PL状況など relationship 解決結果を反映して文面を切り替える
+
+### 2. Input
 - `RawInput`
 - `OperationalThread[]`
 - `EntityLink[]`
-- `IssueMutation[]`
 - `ActionPlan[]`
+- `TradeCase[]`（PL status 判定に利用）
 
-output:
+### 3. Output
+- `DraftDocument[]`（`channel: "email"` / `"teams"` など）
 
-- `DraftDocument[]`
+### 4. Current implementation
+- `packages/shared/src/ingest.ts` の `buildDraftDocuments()`
 
-### Approval Handler
-
-input:
-
-- `ActionPlan[]`
-- `DraftDocument[]`
-
-output:
-
-- `ActionPlan[]`（status updated）
-- `DraftDocument[]`（status updated）
-
-### Event Logger
-
-input:
-
-- `RawInput`
-- `OperationalThread[]`
-- `EntityLink[]`
-- `IssueMutation[]`
-- `ActionPlan[]`
-
-output:
-
-- `ActivityEvent[]`
+### 5. Demo behavior
+- PL未着の場合、仕入先督促メール案（`email`）が `pending_approval` で生成される
+- 営業への返信候補（`teams`）も併せて生成される
 
 ---
 
-# State Machines（最小）
+## 8) Operational Responder
 
-## ActionPlan
+### 1. Responsibility
+- Relationship Resolver の結果（例: PL未着）を踏まえて、「今この問い合わせにどう返すか」を **canonical text** として組み立てる
+- その結果を、承認センターのアイテム（例: 仕入先督促）へブリッジする
 
-- `planned`
-  - → `pending_approval`（承認が必要な場合）
-  - → `skipped`（human_review_only などでスキップ扱いにする場合）
-- `pending_approval`
-  - → `approved`
-  - → `held`
-  - → `edited`
-- `approved`
-  - → `mock_sent`
+### 2. Input
+- `DraftDocument[]`（特に `email` の `pending_approval`）
+- `EntityLink[]` と `TradeCase[]`（PL status 判定）
 
-## Draft
+### 3. Output
+- `ActivityEvent`（`operational_responder`）
+- （デモ上）承認センターに登録される `supplier_followup` approval item
 
-- `drafted`
-  - → `pending_approval`（必要なら）
-- `pending_approval`
-  - → `approved`
-  - → `held`
-  - → `edited`
-- `approved`
-  - → `mock_sent`
+### 4. Current implementation
+- canonical reply text（PL未着の返信文）
+  - `packages/shared/src/ingest.ts` の `buildMissingPlSupplierFollowupReplyText()`
+- operational responder event の生成
+  - `packages/shared/src/ingest.ts` の `runIngestPipeline()`（`operational_responder` event を積む）
+- 承認センターへの enqueue（デモ）
+  - `apps/api/server.mjs` の `maybeEnqueueDemoApprovalFromSupplierFollowupDraft()`
 
-## 1. Tagger
-
-### 役割
-
-受信した入力が「何の話か」を分類する。
-
-### Input
-
-- RawInput
-
-### Output
-
-- tags
-- intent candidates
-- confidence
-
-### 例
-
-- missing_document
-- si_check
-- quantity_mismatch
-- eta_change
-- air_change_check
-- supplier_reply
-- unknown
-
-### やらないこと
-
-- Issue作成
-- メール作成
-- 承認
-- 外部送信
-
-### Failure
-
-- failed_processing event
-- manual_review_required tag
+### 5. Demo behavior
+- 「PLまだ？」→ 対象が解決できると、PL未着の説明＋「承認センターを見てください」が Activity に出る
+- 承認センターには「仕入先督促メール」が pending で現れる
 
 ---
 
-## 2. Thread Splitter
+## 9) Human Approval Layer
 
-### 役割
+### 1. Responsibility
+- 外部送信や状態変更を **自動実行しない**（デモでも人間承認を必須にする）
+- 承認後に、必要なら Slack へ返信送信、またはデモデータ更新（状態更新）を行う
 
-1つの RawInput を複数の業務スレッドへ分解する。
+### 2. Input
+- `approval_required` / `DraftDocument(status=pending_approval)` / `operational_responder` などの signals
+- 人間の承認操作（UI 経由の API 呼び出し）
 
-### 例
+### 3. Output
+- approval item の `status` 更新（`pending` → `approved` など）
+- （デモ上）Slack 送信 / TradeCase 状態更新 / Activity 記録
 
-入力:
+### 4. Current implementation
+- 承認アイテムの生成（デモ）
+  - `apps/api/server.mjs` の
+    - `maybeEnqueueDemoApprovalFromApprovalRequiredEvent()`（状態更新候補）
+    - `maybeEnqueueDemoApprovalFromSupplierFollowupDraft()`（仕入先督促）
+- 承認 API
+  - `apps/api/server.mjs` の `POST /api/demo/approvals/approve`
 
-```text
-PLまだ？あとSI-224も確認して
-```
-
-出力:
-
-- THR-1: PL確認
-- THR-2: SI-224確認
-
-### Output
-
-- OperationalThread[]
-
-### やらないこと
-
-- 最終行動決定
-- draft作成
-- approval判定
-
-### Failure
-
-- split_failed
-- ambiguous_threading
+### 5. Demo behavior
+- Approval Center で「承認」すると、承認済みになり、必要に応じて Slack 送信や状態更新が走る
 
 ---
 
-## 3. Entity Linker
+## 10) Activity Logger
 
-### 役割
+### 1. Responsibility
+- 「AIが何を判断し、何を作り、どこで止めたか」を時系列で残す
+- Clarification / classification / entity linking / approval required 等を同一 timeline 上に並べられるようにする
 
-各 OperationalThread が、どの Entity に関係するか紐付ける。
+### 2. Input
+- ingest pipeline の各段階の結果（Context / Links / Plans / Drafts / Approvals など）
 
-### Entity Types
+### 3. Output
+- `ActivityEvent[]`（shared layer）
+- UI表示用の feed item（server側で整形）
 
-- SI
-- Shipment
-- Document
-- Supplier
-- Issue
+### 4. Current implementation
+- activity event の生成
+  - `packages/shared/src/ingest.ts` の `runIngestPipeline()`（`activityEvents` を返す）
+- UI向け整形＋永続化（デモ）
+  - `apps/api/server.mjs` の `activityEventToFeedItem()` / `pushActivityItem()` / `activity-events.json`
 
-### Output
-
-- EntityLink[]
-
-### 例
-
-```json
-{
-  "entityType": "SI",
-  "entityId": "SI-2026-224"
-}
-```
-
-### やらないこと
-
-- draft作成
-- approval
-- action決定
-
-### Failure
-
-- entity_not_found
-- ambiguous_entity_match
+### 5. Demo behavior
+- Activity タブで「依頼受信 → Context判定 → 分類/紐付け → 下書き生成 → 承認待ち」などが時系列に表示される
 
 ---
 
-## 4. Intake Resolver
+## Design Note
 
-### 役割
+Trade Shelf Agent は、単一のチャットAIとしてではなく、業務フローを処理する processor 群として設計しています。
 
-営業・Teams・メール由来の雑な入力を、すぐ Issue 化せずに「業務的に解決可能な形」へ整理する。
+営業は Slack / Web から問い合わせるだけでよく、AI側が分類・紐付け・状態判断・次アクション生成を行います。
 
-- 既存 SI / Shipment / Document / Issue に紐付けられるか判定する
-- 情報不足なら `needs_clarification` にする
-- ただの状況照会なら `status_query` にする
-- 本当に業務上の異常・対応が必要な場合だけ `issue_candidate_required` にして Issue Planner に渡す
-
-### 例
-
-- 「SI-224の状況を教えて」→ `status_query`（Issue化しない、状況返信候補を作る）
-- 「PLまだ？」→ `needs_clarification`（Issue化しない、「どのSI/ShipmentのPLか」を返す）
-- 「INVがSIと数量違う」→ `issue_candidate_required`（Issue Planner へ進む）
-
-### Output
-
-- IntakeResolution[]
-
----
-
-## 5. Issue Planner
-
-### 役割
-
-各 thread が:
-
-- 既存Issue更新か
-- 新規Issue候補作成か
-
-を決定する。
-
-### Output
-
-- IssueMutation
-- IssueCandidate
-- issueId
-- candidateId
-- status
-
-### 例
-
-- pending_approval
-- review_required
-- resolved_candidate
-
-### やらないこと
-
-- メール生成
-- Teams返信生成
-
-### Failure
-
-- issue_match_failed
-- duplicate_issue_candidate
-
----
-
-## 6. Action Planner
-
-### 役割
-
-「次に何をすべきか」を決める。
-
-### Action Tags
-
-- human_review_only
-- email_required
-- teams_reply_required
-- supplier_confirmation_required
-- forwarder_confirmation_required
-- no_action
-
-### Output
-
-- action tags
-- next action candidates
-
-### やらないこと
-
-- draft生成
-- 外部送信
-
-### Failure
-
-- no_clear_action
-- conflicting_actions
-
----
-
-## 7. Draft Writer
-
-### 役割
-
-必要時のみ、外部送信用の文案を生成する。
-
-### Trigger
-
-Action Planner が:
-
-- email_required
-- teams_reply_required
-
-などを付与した場合のみ動作。
-
-### Output
-
-- Email draft
-- Teams reply draft
-
-### やらないこと
-
-- 承認
-- 自動送信
-
-### Failure
-
-- draft_generation_failed
-- unsafe_draft_detected
-
----
-
-## 8. Approval Handler
-
-### 役割
-
-AI提案に対し、人間が:
-
-- approve
-- edit
-- hold
-- reject
-
-を行う。
-
-### Human Actions
-
-- Approve
-- Edit
-- Hold
-- Reject
-
-### Output
-
-- approval status
-- approval event
-- edited draft
-- execution permission
-
-### やらないこと
-
-- 無承認送信
-
-### Failure
-
-- approval_timeout
-- rejected_by_human
-
----
-
-## 9. Event Logger
-
-### 役割
-
-全処理を Activity Feed に記録する。
-
-### Event Examples
-
-- raw_input_received
-- classified
-- entity_linked
-- issue_updated
-- approval_required
-- email_draft_created
-- approved
-- failed_processing
-
-### 目的
-
-システム状態を:
-
-- traceable
-- auditable
-- debuggable
-
-にする。
-
----
-
-# Orchestrator / Router
-
-## 役割
-
-Processor 実行フローを管理する。
-
-Processor 同士は直接次を呼ばない。
-
-代わりに:
-
-```text
-Processor
-↓
-構造化結果を返す
-↓
-Orchestrator が状態確認
-↓
-次Processorを決定
-```
-
-という流れを取る。
-
-### 例
-
-```text
-Action Planner
-↓
-email_required tag
-↓
-Orchestrator が Draft Writer を起動
-```
-
-もし:
-
-```text
-failed_processing
-```
-
-なら:
-
-```text
-Human Review queue
-```
-
-へルーティングする。
-
----
-
-# Activity Feed の思想
-
-Activity Feed は単なるログではない。
-
-「処理状態の可視化」である。
-
-Activity Feed では:
-
-- 今どの Processor が処理したか
-- どこまで進んだか
-- どこで止まったか
-- 人間確認が必要か
-
-を把握できる必要がある。
-
----
-
-# 設計思想
-
-Trade Shelf Agent は:
-
-- chatbot
-- 自律AI秘書
-- 曖昧な貿易AI
-
-を作るものではない。
-
-作っているのは:
-
-- operational decomposition system
-- event-driven workflow layer
-- human-in-the-loop operational intelligence system
-
-である。
-
-AIの主役割は:
-
-- classify
-- split
-- link
-- plan
-- draft
-
-であり、自律実行ではない。
-
-# Agent Processors (Orchestrator / Processor 分離)
-
-Azure Hackathon - Shelf の「入力→整理→Issue→承認→ログ」を壊れにくくするための設計メモ。
-
-## 目的
-- 単一LLMの“なんでも屋”化を避け、責務を固定して品質と再現性を上げる
-- Human approval を前提に、判断材料の整理とログ可視化を主戦場にする
-
-## 全体像
-- **Orchestrator LLM**
-  - 入力を受け取り、必要な Processor を選び、結果を統合して Issue を作る
-  - Human 承認ステップを挟み、最終適用（または却下）までの状態遷移を統制する
-  - 活動ログ（何を受け取り、どのProcessorを呼び、何が出て、どう判断されたか）を出力する
-- **Processor LLMs（役割別）**
-  - 1つの Processor は 1つの責務に集中し、入出力を固定する
-
-## Processor の責務（最小セット）
-1. **分類（Classifier）**
-   - 入力を「どのドメイン/ワークスペース/論点か」に分類する
-   - 例: shipment / SI / docs / issue-type（質問/変更依頼/確認依頼/エスカレーション）
-2. **抽出（Extractor）**
-   - 入力から事実・要件・制約・期限・関係者を抽出する
-   - “解釈”ではなく“拾う”を優先し、抜けの質問（clarifying questions）も列挙する
-3. **紐付け（Linker）**
-   - 既存の Shelf / Issues / Documents / 過去ログ へ関連付け候補を出す
-   - 例: 既存Issueの重複検知、関連ドキュメント候補、影響範囲候補
-4. **提案（Proposer）**
-   - 具体的な次アクション案を複数提示する（案A/B/C）
-   - それぞれに: 期待効果 / リスク / 必要な確認 / 最小実行手順 を付ける
-
-## データフロー（状態遷移）
-1. Input 受信
-2. Orchestrator が Processor を選択して順次実行
-3. 統合して Issue（判断単位）を作成
-4. Human approval（承認/差し戻し/却下）
-5. Apply（反映）または Close
-6. 活動ログに出力（再現可能な履歴）
-
-## ログ（最低限ほしい項目）
-- `event_id`（連番/一意ID）
-- `received_at`（受信時刻）
-- `input_source`（メール/フォーム/Slack等）
-- `orchestrator_decision`（どのProcessorを呼んだか、順序）
-- `processor_outputs`（要約＋主要フィールド）
-- `issue_id`（作成/紐付け先）
-- `human_decision`（承認/差し戻し/却下）
-- `applied_changes`（実際に反映した内容）
-
-## 守るルール（運用のための制約）
-- Processor は「文章をうまくする」より「構造を揃える」を優先
-- Orchestrator は “勝手に確定” しない（Human approval を通す）
-- 迷ったら Processor を増やすより、入出力スキーマを締める
+一方で、外部送信や状態変更は Human-in-the-loop として人間承認を残します（現状実装でもこの方針を優先しています）。
